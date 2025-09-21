@@ -1,6 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 
+# Usage check
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <snapshot_name>" >&2
+  echo "Example: $0 replica-snapshot-20250921-041339" >&2
+  exit 1
+fi
+
+SNAPSHOT_NAME="$1"
+
 # Load .env from repo root if present
 ENV_FILE=${ENV_FILE:-"$(cd "$(dirname "$0")/.." && pwd)/.env"}
 if [ -f "$ENV_FILE" ]; then
@@ -39,30 +48,34 @@ if [ ! -d "$SNAP_PARENT_DIR" ]; then
 fi
 mkdir -p "$CLONE_PARENT_DIR"
 
-# Find the most recent subvolume whose directory name starts with ${MAIN_DATA_DIR}-snap*
-echo "Searching for latest snapshot under $SNAP_PARENT_DIR (pattern: ${MAIN_DATA_DIR}-snap*)"
-declare -a _candidates=()
-mapfile -t _candidates < <(find "$SNAP_PARENT_DIR" -maxdepth 1 -mindepth 1 -type d -name "${MAIN_DATA_DIR}-snap*" -printf "%f\n" | sort)
-SOURCE_SUBVOL=""
-if [ "${#_candidates[@]}" -eq 0 ]; then
-  echo "No snapshots matching ${MAIN_DATA_DIR}-snap* found in $SNAP_PARENT_DIR" >&2
-  exit 1
-fi
-for (( idx=${#_candidates[@]}-1 ; idx>=0 ; idx-- )); do
-  name="${_candidates[$idx]}"
-  path="$SNAP_PARENT_DIR/$name"
-  if sudo btrfs subvolume show "$path" >/dev/null 2>&1; then
-    SOURCE_SUBVOL="$path"
-    break
-  fi
-done
+# Validate specified snapshot
+SOURCE_SUBVOL="$SNAP_PARENT_DIR/$SNAPSHOT_NAME"
+echo "Validating specified snapshot: $SOURCE_SUBVOL"
 
-if [ -z "$SOURCE_SUBVOL" ]; then
-  echo "No valid btrfs subvolume among candidates in $SNAP_PARENT_DIR" >&2
+# Check if path exists
+if [ ! -d "$SOURCE_SUBVOL" ]; then
+  echo "Snapshot path not found: $SOURCE_SUBVOL" >&2
   exit 1
 fi
 
-echo "Selected latest snapshot: $SOURCE_SUBVOL"
+# Check if it's a btrfs subvolume
+if ! sudo btrfs subvolume show "$SOURCE_SUBVOL" >/dev/null 2>&1; then
+  echo "Path is not a btrfs subvolume: $SOURCE_SUBVOL" >&2
+  exit 1
+fi
+
+# Check if it's readonly
+SUBVOL_INFO=$(sudo btrfs subvolume show "$SOURCE_SUBVOL" 2>/dev/null || true)
+if ! echo "$SUBVOL_INFO" | grep -q "Flags:.*readonly"; then
+  echo "Warning: Subvolume is not readonly: $SOURCE_SUBVOL" >&2
+  read -r -p "Continue with writable subvolume? [y/N] " ans
+  case "${ans,,}" in
+    y|yes) echo "Proceeding with writable subvolume." ;;
+    *) echo "Aborting."; exit 1 ;;
+  esac
+fi
+
+echo "Selected snapshot: $SOURCE_SUBVOL"
 
 # Create a new writable snapshot subvolume
 TARGET_SUBVOL="$CLONE_PARENT_DIR/${CLONE_PREFIX}-$TS"
