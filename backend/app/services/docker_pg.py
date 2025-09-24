@@ -120,7 +120,7 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     container_name = f"{opts.container_name}-{ts}"
 
     # Remove existing container with same name if any
-    subprocess.run(["docker", "rm", "-f", container_name], check=False)
+    subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
 
     # Find available host port starting from opts.host_port
     selected_port = _find_free_port(int(opts.host_port))
@@ -152,7 +152,7 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     ]
     subprocess.run(cmd, check=True)
 
-    # Wait for readiness up to 60s
+    # Wait for readiness up to 60s (pg_isready)
     for _ in range(60):
         ready = subprocess.run(
             [
@@ -162,6 +162,15 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
             capture_output=True, text=True,
         )
         if ready.returncode == 0:
+            break
+        time.sleep(1)
+
+    # Extra guard: ensure container is running and exec works (up to 10s)
+    for _ in range(10):
+        st = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", container_name], capture_output=True, text=True)
+        ok = st.returncode == 0 and st.stdout.strip() == "true"
+        ex = subprocess.run(["docker", "exec", container_name, "sh", "-c", "true"], capture_output=True, text=True)
+        if ok and ex.returncode == 0:
             break
         time.sleep(1)
 
@@ -189,6 +198,55 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
                 check=False,
             )
 
+    # Run anonymization SQL from project root if present (retry for reliability)
+    repo_root = str(Path(__file__).resolve().parents[3])
+    anon_file = Path(repo_root) / "configs/anonymize.sql"
+    anonymize_ran = False
+    anonymize_output = None
+    if anon_file.exists():
+        # Copy into container temp path and execute with ON_ERROR_STOP
+        print(f"Running anonymization SQL from {anon_file}")
+        try:
+            copy_ok = False
+            for _ in range(5):
+                cp = subprocess.run(["docker", "cp", str(anon_file), f"{container_name}:/tmp/anonymize.sql"], capture_output=True, text=True)
+                if cp.returncode == 0:
+                    copy_ok = True
+                    break
+                time.sleep(1)
+            if not copy_ok:
+                subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+                raise RuntimeError("Anonymization setup failed: unable to copy anonymize.sql into container")
+
+            exec_ok = False
+            last_err = ""
+            last_out = ""
+            for _ in range(5):
+                run_anon = subprocess.run(
+                    [
+                        "docker", "exec", container_name,
+                        "psql", "-v", "ON_ERROR_STOP=1", "-U", opts.postgres_user, "-d", opts.postgres_db,
+                        "-f", "/tmp/anonymize.sql",
+                    ],
+                    capture_output=True, text=True,
+                )
+                if run_anon.returncode == 0:
+                    exec_ok = True
+                    anonymize_ran = True
+                    last_out = (run_anon.stdout or "").strip()
+                    break
+                last_err = (run_anon.stderr or run_anon.stdout or "").strip()
+                time.sleep(1)
+            if not exec_ok:
+                subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+                raise RuntimeError(f"Anonymization failed: {last_err}")
+            else:
+                anonymize_output = last_out
+        except Exception:
+            # Ensure container is removed on any failure here
+            subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+            raise
+
     return {
         "snapshot": str(snap_path),
         "clone_subvolume": str(clone_path),
@@ -196,6 +254,184 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
         "host_port": selected_port,
         "pgdata": container_pgdata,
         "metadata_path": str(meta_path),
+        "anonymize_ran": anonymize_ran,
+        "anonymize_output": anonymize_output,
+    }
+
+
+def clone_from_main_and_run(opts: CloneOptions) -> Dict:
+    root = Path(opts.root_data_dir)
+    src_main = root / opts.main_data_dir
+    if not src_main.exists() or not _is_btrfs_subvolume(src_main):
+        raise FileNotFoundError(f"Main replica not found or not a subvolume: {src_main}")
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    clone_name = f"{opts.main_data_dir}-clone-{ts}"
+    clone_path = root / clone_name
+
+    # Create writable snapshot from main
+    _run(["sudo", "btrfs", "subvolume", "snapshot", str(src_main), str(clone_path)])
+
+    # Permissions
+    _run(["sudo", "chown", "-R", "999:999", str(clone_path)])
+    _run(["sudo", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
+
+    # Write clone metadata
+    meta = {
+        "name": clone_name,
+        "path": str(clone_path),
+        "source_main_path": str(src_main),
+        "root_data_dir": str(root),
+        "main_data_dir": opts.main_data_dir,
+        "created_at": datetime.now().isoformat(),
+        "created_by": "snaplicator-api",
+        "description": opts.description,
+    }
+    meta_json = json.dumps(meta, ensure_ascii=False)
+    meta_path = clone_path / ".snaplicator.json"
+    try:
+        _run(["sudo", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
+    except subprocess.CalledProcessError:
+        pass
+    try:
+        _run(["sudo", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(clone_path)])
+    except subprocess.CalledProcessError:
+        pass
+
+    # Determine PGDATA inside the clone
+    container_pgdata = _pgdata_env_for_clone_path(clone_path)
+
+    # Prepare docker network
+    try:
+        out = subprocess.run(["docker", "network", "ls", "--format", "{{.Name}}"], check=True, text=True, capture_output=True).stdout
+        nets = set(line.strip() for line in out.splitlines())
+        if opts.network_name not in nets:
+            subprocess.run(["docker", "network", "create", opts.network_name], check=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to ensure docker network: {e}")
+
+    # Container name with timestamp suffix
+    container_name = f"{opts.container_name}-{ts}"
+
+    # Remove existing container with same name if any
+    subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+
+    # Find available host port starting from opts.host_port
+    selected_port = _find_free_port(int(opts.host_port))
+
+    # Run the container (add labels for identification)
+    labels = [
+        "--label", "snaplicator=1",
+        "--label", f"snaplicator.role=clone",
+        "--label", f"snaplicator.main={opts.main_data_dir}",
+    ]
+
+    envs = [
+        "-e", f"POSTGRES_USER={opts.postgres_user}",
+        "-e", f"POSTGRES_PASSWORD={opts.postgres_password}",
+        "-e", f"POSTGRES_DB={opts.postgres_db}",
+        "-e", f"PGDATA={container_pgdata}",
+    ]
+
+    cmd = [
+        "docker", "run", "-d",
+        "--name", container_name,
+        "--network", opts.network_name,
+        "-p", f"{selected_port}:5432",
+        *labels,
+        *envs,
+        "-v", f"{str(clone_path)}:/var/lib/postgresql/data",
+        opts.postgres_image,
+        "-c", "max_logical_replication_workers=0",
+    ]
+    subprocess.run(cmd, check=True)
+
+    # Wait for readiness and extra guard
+    for _ in range(60):
+        ready = subprocess.run([
+            "docker", "exec", container_name, "pg_isready", "-U", opts.postgres_user, "-d", opts.postgres_db,
+        ], capture_output=True, text=True)
+        if ready.returncode == 0:
+            break
+        time.sleep(1)
+    for _ in range(10):
+        st = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", container_name], capture_output=True, text=True)
+        ok = st.returncode == 0 and st.stdout.strip() == "true"
+        ex = subprocess.run(["docker", "exec", container_name, "sh", "-c", "true"], capture_output=True, text=True)
+        if ok and ex.returncode == 0:
+            break
+        time.sleep(1)
+
+    # Disable subscriptions
+    subs_proc = subprocess.run([
+        "docker", "exec", container_name,
+        "psql", "-U", opts.postgres_user, "-d", opts.postgres_db, "-tAc",
+        "SELECT subname FROM pg_subscription",
+    ], capture_output=True, text=True)
+    subs_out = subs_proc.stdout.strip()
+    if subs_out:
+        for sub in subs_out.splitlines():
+            sub = sub.strip()
+            if not sub:
+                continue
+            subprocess.run([
+                "docker", "exec", container_name,
+                "psql", "-v", "ON_ERROR_STOP=1", "-U", opts.postgres_user, "-d", opts.postgres_db,
+                "-c", f"ALTER SUBSCRIPTION \"{sub}\" DISABLE;",
+            ], check=False)
+
+    # Anonymize (same as above)
+    repo_root = str(Path(__file__).resolve().parents[3])
+    anon_file = Path(repo_root) / "configs/anonymize.sql"
+    anonymize_ran = False
+    anonymize_output = None
+    if anon_file.exists():
+        try:
+            copy_ok = False
+            for _ in range(5):
+                cp = subprocess.run(["docker", "cp", str(anon_file), f"{container_name}:/tmp/anonymize.sql"], capture_output=True, text=True)
+                if cp.returncode == 0:
+                    copy_ok = True
+                    break
+                time.sleep(1)
+            if not copy_ok:
+                subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+                raise RuntimeError("Anonymization setup failed: unable to copy anonymize.sql into container")
+
+            exec_ok = False
+            last_err = ""
+            last_out = ""
+            for _ in range(5):
+                run_anon = subprocess.run([
+                    "docker", "exec", container_name,
+                    "psql", "-v", "ON_ERROR_STOP=1", "-U", opts.postgres_user, "-d", opts.postgres_db,
+                    "-f", "/tmp/anonymize.sql",
+                ], capture_output=True, text=True)
+                if run_anon.returncode == 0:
+                    exec_ok = True
+                    anonymize_ran = True
+                    last_out = (run_anon.stdout or "").strip()
+                    break
+                last_err = (run_anon.stderr or run_anon.stdout or "").strip()
+                time.sleep(1)
+            if not exec_ok:
+                subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+                raise RuntimeError(f"Anonymization failed: {last_err}")
+            else:
+                anonymize_output = last_out
+        except Exception:
+            subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+            raise
+
+    return {
+        "source_main": str(src_main),
+        "clone_subvolume": str(clone_path),
+        "container_name": container_name,
+        "host_port": selected_port,
+        "pgdata": container_pgdata,
+        "metadata_path": str(meta_path),
+        "anonymize_ran": anonymize_ran,
+        "anonymize_output": anonymize_output,
     }
 
 

@@ -1,0 +1,27 @@
+# Replication selection config (exact name matches only)
+#
+# Rules
+# - Only schemas listed under the `schemas` key are considered (schemas not listed are excluded).
+# - For each schema, use either `include: []` or `exclude: []` (not both).
+#   * If both are present, `include` takes precedence and `exclude` is ignored.
+# - If `include: []` is an empty list, include all tables in that schema.
+# - If `exclude: []` is provided (and `include` is not), include all tables in that schema except the ones listed.
+# - Schema and table names must match exactly (no wildcards/regex).
+#
+# Examples
+# schemas:
+#   public:
+#     include: []            # include all tables in public.*
+#   sales:
+#     include:               # include only these tables in sales schema
+#       - orders
+#       - order_items
+#   audit:
+#     exclude:               # include all except these tables in audit schema
+#       - logs
+#       - events_tmp
+
+version: 1
+schemas:
+  public:
+    include: [posts] 

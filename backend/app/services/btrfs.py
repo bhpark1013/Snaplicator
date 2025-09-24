@@ -155,6 +155,41 @@ def create_snapshot(root_data_dir: str, main_data_dir: str, description: Optiona
     }
 
 
+def delete_snapshot(root_data_dir: str, main_data_dir: str, snapshot_name: str) -> Dict:
+    root = Path(root_data_dir).resolve()
+    target = (root / snapshot_name).resolve()
+    # Safety checks
+    if not str(target).startswith(str(root)):
+        raise PermissionError(f"Refusing to delete outside ROOT_DATA_DIR. path={target} root={root}")
+    if not target.exists() or not target.is_dir():
+        raise FileNotFoundError(f"Snapshot path not found: {target}")
+    prefix = f"{main_data_dir}-snapshot-"
+    if not snapshot_name.startswith(prefix):
+        raise PermissionError(f"Name does not match snapshot prefix: expected '{prefix}*', got '{snapshot_name}'")
+    if not _is_btrfs_subvolume(target):
+        # Include fstype for diagnostics
+        try:
+            fstype = subprocess.run(["findmnt", "-no", "FSTYPE", "-T", str(target)], text=True, capture_output=True, check=True).stdout.strip()
+        except subprocess.CalledProcessError:
+            fstype = "unknown"
+        raise RuntimeError(f"Target is not a btrfs subvolume: {target} (fstype={fstype})")
+    # If mounted separately, refuse
+    try:
+        mnt = subprocess.run(["findmnt", "-T", str(target)], text=True, capture_output=True, check=True).stdout
+        if mnt and str(target) in mnt and "subvol=" in mnt:
+            # Appears mounted; ask user to unmount
+            raise RuntimeError(f"Snapshot appears mounted; unmount before delete. details=\n{mnt}")
+    except subprocess.CalledProcessError:
+        pass
+    # Delete subvolume
+    try:
+        _run(["sudo", "btrfs", "subvolume", "delete", str(target)])
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or e.stdout or "").strip()
+        raise RuntimeError(f"btrfs subvolume delete failed for {target}: {stderr}")
+    return {"subvolume_deleted": str(target)}
+
+
 def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str) -> List[Dict]:
     """List clones based on btrfs subvolumes only (name starts with {MAIN_DATA_DIR}-clone-),
     and annotate if a docker container is mounting each clone path.
