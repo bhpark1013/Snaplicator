@@ -5,6 +5,7 @@ from .core.config import settings
 from .api.routes.health import router as health_router
 from .api.routes.snapshots import router as snapshots_router
 from .api.routes.clones import router as clones_router
+from .api.routes.replication import router as replication_router
 
 app = FastAPI(title="Snaplicator API", version="0.1.0")
 
@@ -19,3 +20,4 @@ app.add_middleware(
 app.include_router(health_router, prefix="/health", tags=["health"]) 
 app.include_router(snapshots_router, prefix="/snapshots", tags=["snapshots"]) 
 app.include_router(clones_router, prefix="/clones", tags=["clones"]) 
+app.include_router(replication_router, prefix="/replication", tags=["replication"]) 
