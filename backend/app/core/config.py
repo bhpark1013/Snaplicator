@@ -5,9 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional, List
 from dotenv import load_dotenv
 
-# Load .env from repository root (Snaplicator/.env)
+# Load .env from repository root (Snaplicator/configs/.env)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-load_dotenv(_REPO_ROOT / ".env", override=False)
+load_dotenv(_REPO_ROOT / "configs/.env", override=False)
 
 class Settings(BaseSettings):
 	root_data_dir: str

@@ -47,6 +47,8 @@ export function App() {
     const [deletingBusy, setDeletingBusy] = useState(false)
 
     const [snapshotDesc, setSnapshotDesc] = useState('')
+    const [mainCloneDesc, setMainCloneDesc] = useState('')
+    const [mainCloning, setMainCloning] = useState(false)
 
     const api = import.meta.env.VITE_API_BASE_URL || ''
     const base = api ? api : '/api'
@@ -160,6 +162,28 @@ export function App() {
         }
     }
 
+    const onCloneFromMain = async () => {
+        setMainCloning(true)
+        setMessage(null)
+        setError(null)
+        try {
+            const r = await fetch(`${base}/snapshots/from-main/clone`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description: mainCloneDesc || null }),
+            })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            const res = await r.json()
+            setMessage(`Cloned from main: ${res.clone_subvolume} -> container ${res.container_name} (port ${res.host_port})`)
+            setMainCloneDesc('')
+            loadClones()
+        } catch (e: any) {
+            setError(String(e?.message || e))
+        } finally {
+            setMainCloning(false)
+        }
+    }
+
     const onDelete = (containerName: string) => {
         setDeleting(containerName)
         setMessage(null)
@@ -180,6 +204,21 @@ export function App() {
             setError(String(e?.message || e))
         } finally {
             setDeletingBusy(false)
+        }
+    }
+
+    const confirmDeleteSnapshot = async (name: string) => {
+        if (!window.confirm(`Delete snapshot ${name}?`)) return
+        setError(null)
+        setMessage(null)
+        try {
+            const r = await fetch(`${base}/snapshots/${encodeURIComponent(name)}`, { method: 'DELETE' })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            const res = await r.json()
+            setMessage(`Deleted snapshot subvolume: ${res.subvolume_deleted}`)
+            loadSnapshots()
+        } catch (e: any) {
+            setError(String(e?.message || e))
         }
     }
 
@@ -208,6 +247,15 @@ export function App() {
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '8px 0' }}>
                     <button onClick={loadClones} disabled={clonesLoading}>
                         {clonesLoading ? 'Refreshing...' : 'Refresh'}
+                    </button>
+                    <input
+                        value={mainCloneDesc}
+                        onChange={(e) => setMainCloneDesc(e.target.value)}
+                        placeholder="Clone from main: description (optional)"
+                        style={{ padding: 6, border: '1px solid #ccc', borderRadius: 4, minWidth: 260 }}
+                    />
+                    <button onClick={onCloneFromMain} disabled={mainCloning}>
+                        {mainCloning ? 'Cloning...' : 'Clone from Main'}
                     </button>
                 </div>
                 {clonesError && <p style={{ color: 'red' }}>{clonesError}</p>}
@@ -274,6 +322,9 @@ export function App() {
                                 onClone(it.name, desc)
                             }} disabled={cloning === it.name}>
                                 {cloning === it.name ? 'Cloning...' : 'Clone'}
+                            </button>
+                            <button onClick={() => confirmDeleteSnapshot(it.name)} style={{ marginLeft: 8 }}>
+                                Delete
                             </button>
                         </li>
                     ))}
