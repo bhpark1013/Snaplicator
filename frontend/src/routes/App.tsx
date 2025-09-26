@@ -167,7 +167,7 @@ export function App() {
         setMessage(null)
         setError(null)
         try {
-            const r = await fetch(`${base}/snapshots/from-main/clone`, {
+            const r = await fetch(`${base}/clones`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ description: mainCloneDesc || null }),
