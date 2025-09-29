@@ -26,6 +26,15 @@ interface ReplicationLag {
     apply_lag_seconds: number
 }
 
+interface CopyProgress {
+    status: 'idle' | 'copying' | 'complete'
+    total_tables: number
+    finished_tables: number
+    percent: number
+    active?: { schema: string; table: string; bytes_processed?: number; bytes_total?: number; percent?: number | null }[] | null
+    details?: { state: string; schema: string; table: string }[] | null
+}
+
 export function App() {
     const [health, setHealth] = useState<string>('unknown')
     const [items, setItems] = useState<SnapshotItem[]>([])
@@ -42,6 +51,9 @@ export function App() {
     const [lag, setLag] = useState<ReplicationLag | null>(null)
     const [lagLoading, setLagLoading] = useState(false)
     const [lagError, setLagError] = useState<string | null>(null)
+
+    const [copy, setCopy] = useState<CopyProgress | null>(null)
+    const [copyError, setCopyError] = useState<string | null>(null)
 
     const [deleting, setDeleting] = useState<string | null>(null)
     const [deletingBusy, setDeletingBusy] = useState(false)
@@ -103,11 +115,22 @@ export function App() {
             .finally(() => setLagLoading(false))
     }
 
+    const loadCopy = () => {
+        fetch(`${base}/replication/copy-progress`)
+            .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+            .then((data: CopyProgress) => setCopy(data))
+            .catch(async (e) => {
+                const text = e?.status ? `${e.status} ${await e.text()}` : String(e)
+                setCopyError(text)
+            })
+    }
+
     useEffect(() => {
         loadHealth()
         loadClones()
         loadSnapshots()
         loadLag()
+        loadCopy()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
@@ -115,6 +138,7 @@ export function App() {
     useEffect(() => {
         const id = setInterval(() => {
             loadLag()
+            loadCopy()
         }, 5000)
         return () => clearInterval(id)
     }, [])
@@ -238,6 +262,27 @@ export function App() {
                     <div style={{ display: 'flex', gap: 16 }}>
                         <div>Network lag: <strong>{lag.network_lag_seconds.toFixed(3)}</strong> s</div>
                         <div>Apply lag: <strong>{lag.apply_lag_seconds.toFixed(3)}</strong> s</div>
+                    </div>
+                )}
+                {copy && (
+                    <div style={{ marginTop: 8 }}>
+                        <div>Initial copy status: <strong>{copy.status}</strong></div>
+                        {copy.total_tables > 0 && (
+                            <div style={{ marginTop: 4 }}>
+                                <div>{copy.finished_tables} / {copy.total_tables} tables ({copy.percent.toFixed(1)}%)</div>
+                                {copy.active && copy.active.length > 0 && (
+                                    <ul style={{ marginTop: 4 }}>
+                                        {copy.active.slice(0, 3).map((a, i) => (
+                                            <li key={i} style={{ opacity: 0.8 }}>
+                                                {a.schema}.{a.table}
+                                                {typeof a.percent === 'number' ? ` – ${a.percent.toFixed(1)}%` : ''}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        )}
+                        {copyError && <p style={{ color: 'red' }}>{copyError}</p>}
                     </div>
                 )}
             </section>

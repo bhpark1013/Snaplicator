@@ -14,7 +14,7 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 def _is_btrfs_subvolume(path: Path) -> bool:
     try:
-        _run(["sudo", "btrfs", "subvolume", "show", str(path)])
+        _run(["sudo", "-n", "btrfs", "subvolume", "show", str(path)])
         return True
     except subprocess.CalledProcessError:
         return False
@@ -22,7 +22,7 @@ def _is_btrfs_subvolume(path: Path) -> bool:
 
 def _is_readonly_subvolume(path: Path) -> bool:
     try:
-        out = _run(["sudo", "btrfs", "subvolume", "show", str(path)]).stdout
+        out = _run(["sudo", "-n", "btrfs", "subvolume", "show", str(path)]).stdout
         for line in out.splitlines():
             if line.strip().startswith("Flags:") and "readonly" in line:
                 return True
@@ -35,7 +35,7 @@ def _read_snapshot_description(path: Path) -> Optional[str]:
     # 1) Try metadata file
     meta_path = path / ".snaplicator.json"
     try:
-        out = subprocess.run(["sudo", "cat", str(meta_path)], text=True, capture_output=True, check=True).stdout
+        out = subprocess.run(["sudo", "-n", "cat", str(meta_path)], text=True, capture_output=True, check=True).stdout
         if out:
             data = json.loads(out)
             desc = data.get("description")
@@ -54,7 +54,7 @@ def _read_snapshot_description(path: Path) -> Optional[str]:
             pass
     # 2) Try xattr user.snaplicator
     try:
-        out = subprocess.run(["sudo", "getfattr", "-n", "user.snaplicator", "--only-values", str(path)], text=True, capture_output=True, check=True).stdout
+        out = subprocess.run(["sudo", "-n", "getfattr", "-n", "user.snaplicator", "--only-values", str(path)], text=True, capture_output=True, check=True).stdout
         if out:
             data = json.loads(out)
             desc = data.get("description")
@@ -114,7 +114,7 @@ def create_snapshot(root_data_dir: str, main_data_dir: str, description: Optiona
         raise FileExistsError(f"Target snapshot already exists: {target}")
 
     # 1) Create writable snapshot
-    _run(["sudo", "btrfs", "subvolume", "snapshot", str(src), str(target)])
+    _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(src), str(target)])
 
     # 2) Write metadata file and xattr on the snapshot root
     meta = {
@@ -131,21 +131,21 @@ def create_snapshot(root_data_dir: str, main_data_dir: str, description: Optiona
     meta_path = target / ".snaplicator.json"
     try:
         # Use sudo to ensure we can write even if owner is uid 999
-        _run(["sudo", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
+        _run(["sudo", "-n", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
     except subprocess.CalledProcessError:
         pass
     try:
         # Extended attribute (may fail if user_xattr is not enabled)
-        _run(["sudo", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(target)])
+        _run(["sudo", "-n", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(target)])
     except subprocess.CalledProcessError:
         pass
 
     # 3) Toggle snapshot to readonly
     try:
-        _run(["sudo", "btrfs", "property", "set", "-ts", str(target), "ro", "true"])
+        _run(["sudo", "-n", "btrfs", "property", "set", "-ts", str(target), "ro", "true"])
     except subprocess.CalledProcessError:
         # Fallback if property subcommand not available with -ts (older btrfs-progs)
-        _run(["sudo", "btrfs", "property", "set", str(target), "ro", "true"])
+        _run(["sudo", "-n", "btrfs", "property", "set", str(target), "ro", "true"])
 
     return {
         "name": target.name,
@@ -183,7 +183,7 @@ def delete_snapshot(root_data_dir: str, main_data_dir: str, snapshot_name: str) 
         pass
     # Delete subvolume
     try:
-        _run(["sudo", "btrfs", "subvolume", "delete", str(target)])
+        _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(target)])
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or e.stdout or "").strip()
         raise RuntimeError(f"btrfs subvolume delete failed for {target}: {stderr}")
