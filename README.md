@@ -3,6 +3,13 @@
 ### Prerequisites
 - Linux host with Docker and btrfs (for snapshots) recommended
 - configs/.env populated (ROOT_DATA_DIR, MAIN_DATA_DIR, CONTAINER_NAME, NETWORK_NAME, HOST_PORT, POSTGRES_*)
+- A publication must already exist on the publisher database (used by the replica's subscription)
+
+Minimal example (run on publisher as a superuser/owner):
+```sql
+-- create a publication that includes all tables in public schema
+CREATE PUBLICATION snaplicator_pub FOR TABLES IN SCHEMA public;
+```
 
 ### IMPORTANT: Start the replica DB first
 All workflows in this project assume the replica Postgres container is running. Always bring it up first.
