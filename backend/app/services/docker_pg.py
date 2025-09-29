@@ -16,7 +16,7 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 def _is_btrfs_subvolume(path: Path) -> bool:
     try:
-        _run(["sudo", "btrfs", "subvolume", "show", str(path)])
+        _run(["sudo", "-n", "btrfs", "subvolume", "show", str(path)])
         return True
     except subprocess.CalledProcessError:
         return False
@@ -76,11 +76,11 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     clone_path = root / clone_name
 
     # Create writable snapshot
-    _run(["sudo", "btrfs", "subvolume", "snapshot", str(snap_path), str(clone_path)])
+    _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(snap_path), str(clone_path)])
 
     # Permissions for postgres uid/gid 999
-    _run(["sudo", "chown", "-R", "999:999", str(clone_path)])
-    _run(["sudo", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
+    _run(["sudo", "-n", "chown", "-R", "999:999", str(clone_path)])
+    _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
 
     # Write clone metadata (.snaplicator.json and xattr)
     meta = {
@@ -96,11 +96,11 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     meta_json = json.dumps(meta, ensure_ascii=False)
     meta_path = clone_path / ".snaplicator.json"
     try:
-        _run(["sudo", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
+        _run(["sudo", "-n", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
     except subprocess.CalledProcessError:
         pass
     try:
-        _run(["sudo", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(clone_path)])
+        _run(["sudo", "-n", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(clone_path)])
     except subprocess.CalledProcessError:
         pass
 
@@ -270,11 +270,11 @@ def clone_from_main_and_run(opts: CloneOptions) -> Dict:
     clone_path = root / clone_name
 
     # Create writable snapshot from main
-    _run(["sudo", "btrfs", "subvolume", "snapshot", str(src_main), str(clone_path)])
+    _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(src_main), str(clone_path)])
 
     # Permissions
-    _run(["sudo", "chown", "-R", "999:999", str(clone_path)])
-    _run(["sudo", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
+    _run(["sudo", "-n", "chown", "-R", "999:999", str(clone_path)])
+    _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
 
     # Write clone metadata
     meta = {
@@ -290,11 +290,11 @@ def clone_from_main_and_run(opts: CloneOptions) -> Dict:
     meta_json = json.dumps(meta, ensure_ascii=False)
     meta_path = clone_path / ".snaplicator.json"
     try:
-        _run(["sudo", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
+        _run(["sudo", "-n", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
     except subprocess.CalledProcessError:
         pass
     try:
-        _run(["sudo", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(clone_path)])
+        _run(["sudo", "-n", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(clone_path)])
     except subprocess.CalledProcessError:
         pass
 
@@ -581,7 +581,7 @@ def delete_clone(root_data_dir: str, main_data_dir: Optional[str], container_nam
 
     # Delete subvolume with error forwarding
     try:
-        _run(["sudo", "btrfs", "subvolume", "delete", str(host_path)])
+        _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(host_path)])
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or e.stdout or "").strip()
         raise RuntimeError(f"btrfs subvolume delete failed for {host_path}: {stderr}")
