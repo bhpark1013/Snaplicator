@@ -16,11 +16,29 @@ LOG_PREFIX="[$SCRIPT_NAME]"
 log() { echo "$(date -Is) $LOG_PREFIX $*" | tee -a "$LOG_FILE" >&2; }
 trap 'rc=$?; log "ERROR at line ${LINENO}: ${BASH_COMMAND}"; exit $rc' ERR
 
+# Safe dotenv loader (no 'source')
+_load_dotenv() {
+  local file="$1"
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%[$'\r\n']*}"
+    case "$line" in
+      ''|'#'*) continue;;
+    esac
+    local key value
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key%%[[:space:]]*}"; key="${key##[[:space:]]*}"
+    value="${value##[[:space:]]}"; value="${value%%[[:space:]]}"
+    if [[ "$value" == '"'*'"' || "$value" == "'"*"'" ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  done < "$file"
+}
+
 if [ -f "$ENV_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  _load_dotenv "$ENV_FILE"
   log "Loaded env: $ENV_FILE"
 else
   log "ENV file not found: $ENV_FILE (continuing; ROOT_DATA_DIR may be required)"

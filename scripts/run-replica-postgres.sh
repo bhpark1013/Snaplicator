@@ -8,14 +8,38 @@ if [[ "${TRACE:-0}" == "1" ]]; then
   set -x
 fi
 
-# .env 파일 로드 (있으면 값 주입)
+# .env 파일 로드 (있으면 값 주입) — 안전한 dotenv 파서 사용 (source 사용 안 함)
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
 ENV_FILE=${ENV_FILE:-"$ROOT_DIR/configs/.env"}
+
+_load_dotenv() {
+  local file="$1"
+  while IFS= read -r line || [ -n "$line" ]; do
+    # trim leading/trailing spaces
+    line="${line%%[$'\r\n']*}"
+    case "$line" in
+      ''|'#'*) continue;;
+    esac
+    # key=value (first '=')
+    local key value
+    key="${line%%=*}"
+    value="${line#*=}"
+    # trim spaces around key and value
+    key="${key%%[[:space:]]*}"; key="${key##[[:space:]]*}"
+    value="${value##[[:space:]]}"; value="${value%%[[:space:]]}"
+    # strip surrounding quotes if present
+    if [[ "$value" == '"'*'"' || "$value" == "'"*"'" ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    # literal assign without expansion, then export
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  done < "$file"
+}
+
 if [ -f "$ENV_FILE" ]; then
-  set -a  # 모든 변수를 자동으로 export
-  source "$ENV_FILE"
-  set +a  # export 자동화 해제
+  _load_dotenv "$ENV_FILE"
   echo "Loaded config from $ENV_FILE"
 fi
 
@@ -351,6 +375,17 @@ for i in {1..60}; do
     # 아직 기동 중이거나 실패했을 수 있음
     status=$(docker inspect -f '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || true)
     echo "Container state: ${status:-unknown} (attempt $i/60)"
+    if [ "$status" = "exited" ]; then
+      echo "Container exited. Collecting logs and failing..."
+      docker logs "${CONTAINER_NAME}" --tail 200 || true
+      docker inspect -f '{{.State.Status}} {{.State.ExitCode}} {{.State.Error}}' "${CONTAINER_NAME}" 2>/dev/null || true
+      # 초기화 로그가 있으면 복사 및 일부 출력
+      if docker cp "${CONTAINER_NAME}:/var/lib/postgresql/replica-init.log" "$ROOT_DIR/replica-init.log" >/dev/null 2>&1; then
+        echo "Saved replica-init log to $ROOT_DIR/replica-init.log"
+        tail -n 100 "$ROOT_DIR/replica-init.log" 2>/dev/null || true
+      fi
+      exit 1
+    fi
   else
     if docker exec "${CONTAINER_NAME}" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
       echo "Replica ready on port ${HOST_PORT}"
