@@ -1,7 +1,22 @@
 #!/bin/bash
 set -euo pipefail
 
+# Trace & logging setup
+SCRIPT_NAME=$(basename "$0")
+LOG_PREFIX="[$SCRIPT_NAME]"
+LOG_FILE=${LOG_FILE:-/var/lib/postgresql/replica-init.log}
+
+if [[ "${TRACE:-0}" == "1" ]]; then
+  PS4='+ ['"$SCRIPT_NAME"':${LINENO}] '
+  set -x
+fi
+
+log() { echo "$(date -Is) $LOG_PREFIX $*" | tee -a "$LOG_FILE" >&2; }
+trap 'rc=$?; log "ERROR at line ${LINENO}: ${BASH_COMMAND}"; exit $rc' ERR
+log "START"
+
 echo "Creating logical replication subscription..."
+log "Creating subscription: ${SUBSCRIPTION_NAME} to publication ${PUBLICATION_NAME} on ${PRIMARY_HOST}:${PRIMARY_PORT}/${PRIMARY_DB}"
 
 # 필수 환경변수 검증
 : "${POSTGRES_USER:?POSTGRES_USER is required}"
@@ -50,6 +65,7 @@ set -e
 
 if [ $rc -ne 0 ]; then
   echo "First attempt failed, retrying with create_slot=false (slot may already exist on publisher)"
+  log "First attempt failed; retrying with create_slot=false"
   psql -v ON_ERROR_STOP=1 \
        -U "$POSTGRES_USER" \
        -d "$POSTGRES_DB" \
@@ -65,3 +81,4 @@ if [ $rc -ne 0 ]; then
 fi
 
 echo "Subscription setup completed"
+log "DONE"
