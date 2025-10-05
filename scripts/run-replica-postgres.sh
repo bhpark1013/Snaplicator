@@ -1,6 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
+# Basic error tracing
+trap 'rc=$?; echo "[run-replica-postgres] ERROR at line ${LINENO}: ${BASH_COMMAND}" >&2; exit $rc' ERR
+if [[ "${TRACE:-0}" == "1" ]]; then
+  PS4='+ [run-replica-postgres:${LINENO}] '
+  set -x
+fi
+
 # .env 파일 로드 (있으면 값 주입)
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
@@ -163,20 +170,42 @@ if [ "$FSTYPE" != "btrfs" ]; then
         ''|*[!0-9]*) echo "Invalid size: '$LV_SIZE' (must be an integer GiB)"; exit 1;;
       esac
 
-      VG_FREE_INT="0"
-      if [ -n "$VG_FREE_RAW" ]; then
-        VG_FREE_INT="${VG_FREE_RAW%.*}"
-        [ -z "$VG_FREE_INT" ] && VG_FREE_INT="0"
-      fi
-      if [ "$LV_SIZE" -gt "$VG_FREE_INT" ]; then
-        echo "Not enough free space in VG '$VG_NAME': request ${LV_SIZE}G, free ${VG_FREE_RAW:-0G}"
-        exit 1
-      fi
+      # LV 존재 시 사용할지 여부 확인 루프
+      USE_EXISTING_LV=0
+      while true; do
+        if sudo lvs --noheadings -o lv_name,vg_name --separator '|' 2>/dev/null \
+          | awk -F'|' '{gsub(/^ +| +$/, "", $1); gsub(/^ +| +$/, "", $2); print $1"|"$2}' \
+          | grep -Fxq "$LV_NAME|$VG_NAME"; then
+          read -r -p "Logical Volume $VG_NAME/$LV_NAME already exists. Use existing? [Y/n] " use_ans
+          use_ans="${use_ans:-y}"
+          case "${use_ans,,}" in
+            y|yes)
+              echo "Using existing LV: $VG_NAME/$LV_NAME"
+              USE_EXISTING_LV=1
+              break
+              ;;
+            *)
+              read -r -p "Enter a new LV name [$LV_NAME_DEFAULT]: " lv_in2
+              LV_NAME="${lv_in2:-$LV_NAME_DEFAULT}"
+              ;;
+          esac
+        else
+          break
+        fi
+      done
 
-      # LV 존재 확인/생성
-      if sudo lvs --noheadings -o lv_name,vg_name 2>/dev/null | awk '{gsub(/^ +| +$/,"",$0); print}' | grep -Fxq "$LV_NAME $VG_NAME"; then
-        echo "Using existing LV: $VG_NAME/$LV_NAME"
-      else
+      # 새로 생성이 필요한 경우에만 여유공간 검증 및 생성
+      if [ "$USE_EXISTING_LV" -eq 0 ]; then
+        VG_FREE_INT="0"
+        if [ -n "$VG_FREE_RAW" ]; then
+          VG_FREE_INT="${VG_FREE_RAW%.*}"
+          [ -z "$VG_FREE_INT" ] && VG_FREE_INT="0"
+        fi
+        if [ "$LV_SIZE" -gt "$VG_FREE_INT" ]; then
+          echo "Not enough free space in VG '$VG_NAME': request ${LV_SIZE}G, free ${VG_FREE_RAW:-0G}"
+          exit 1
+        fi
+
         echo "Creating LV: $VG_NAME/$LV_NAME (${LV_SIZE}G)"
         sudo lvcreate -n "$LV_NAME" -L "${LV_SIZE}G" "$VG_NAME"
       fi
@@ -304,28 +333,37 @@ VOLUME_ARGS=( -v "$BASE_DIR/replication/replica-init:/docker-entrypoint-initdb.d
 DATA_MOUNT_ARGS=( -v "$MAIN_PATH:/var/lib/postgresql/data" -e PGDATA=/var/lib/postgresql/data/pgdata )
 
 # 컨테이너 실행 (postgres:17)
-docker run -d \
+CONTAINER_ID=$(docker run -d \
   --name "${CONTAINER_NAME}" \
   --network "${NETWORK_NAME}" \
   -p "${HOST_PORT}:5432" \
   --env-file "${ENV_FILE}" \
   "${DATA_MOUNT_ARGS[@]}" \
   "${VOLUME_ARGS[@]}" \
-  postgres:17
+  postgres:17)
+echo "$CONTAINER_ID"
 
 # 준비 대기 및 상태 출력
 echo "Waiting for PostgreSQL to become ready..."
 for i in {1..60}; do
-  if docker exec "${CONTAINER_NAME}" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
-    echo "Replica ready on port ${HOST_PORT}"
-    docker logs "${CONTAINER_NAME}" --tail 50
-    exit 0
+  # 컨테이너 상태 확인
+  if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    # 아직 기동 중이거나 실패했을 수 있음
+    status=$(docker inspect -f '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || true)
+    echo "Container state: ${status:-unknown} (attempt $i/60)"
   else
-    echo "Waiting... attempt $i/60"
+    if docker exec "${CONTAINER_NAME}" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
+      echo "Replica ready on port ${HOST_PORT}"
+      docker logs "${CONTAINER_NAME}" --tail 50 || true
+      exit 0
+    else
+      echo "Waiting... attempt $i/60"
+    fi
   fi
   sleep 1
 done
 
 echo "Timeout waiting for replica container to be ready"
-docker logs "${CONTAINER_NAME}" --tail 200
+docker logs "${CONTAINER_NAME}" --tail 200 || true
+docker inspect -f '{{.State.Status}} {{.State.ExitCode}} {{.State.Error}}' "${CONTAINER_NAME}" 2>/dev/null || true
 exit 1
