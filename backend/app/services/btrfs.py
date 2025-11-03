@@ -259,8 +259,9 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
                     except Exception:
                         host_src = src
                     break
-            # Build ports summary (optional)
+            # Build ports summary (optional) and extract host_port for 5432/tcp if present
             ports_text = None
+            host_port_int: Optional[int] = None
             try:
                 ports = __import__('json').loads(ports_json)
                 pairs = []
@@ -270,7 +271,26 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
                             continue
                         for entry in arr:
                             pairs.append(f"{entry.get('HostIp','')}:{entry.get('HostPort','')}->{key}")
+                            # Prefer exact mapping for postgres container port 5432/tcp
+                            if key.startswith("5432/") and not host_port_int:
+                                try:
+                                    hp = entry.get('HostPort')
+                                    if hp:
+                                        host_port_int = int(hp)
+                                except Exception:
+                                    pass
                     ports_text = ", ".join(pairs) if pairs else None
+                # Fallback: if 5432 not found, pick the first tcp mapping
+                if host_port_int is None and isinstance(ports, dict):
+                    for key, arr in ports.items():
+                        if key.endswith('/tcp') and arr:
+                            try:
+                                hp = arr[0].get('HostPort') if isinstance(arr, list) else None
+                                if hp:
+                                    host_port_int = int(hp)
+                                    break
+                            except Exception:
+                                continue
             except Exception:
                 ports_text = None
             container_infos.append({
@@ -278,6 +298,7 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
                 "host_src": host_src,
                 "status": state_status,  # 'running' | 'exited' | ...
                 "ports": ports_text,
+                "host_port": host_port_int,
                 "started_at": started_at,
             })
         except subprocess.CalledProcessError:
@@ -299,6 +320,7 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
             c["is_running"] = (info.get("status") == "running")
             c["container_ports"] = info.get("ports")
             c["container_started_at"] = info.get("started_at")
+            c["host_port"] = info.get("host_port")
 
     clones.sort(key=lambda x: x["name"])
     return clones 
