@@ -22,6 +22,28 @@ def _is_btrfs_subvolume(path: Path) -> bool:
         return False
 
 
+def _detect_postgres_uid_gid(image: str) -> tuple[int, int]:
+    """Detect numeric uid:gid of the postgres user inside the given image.
+
+    Fallback to 999:999 if detection fails.
+    """
+    try:
+        # Try using sh with id; compatible with most distros (alpine/debian)
+        proc = subprocess.run(
+            [
+                "docker", "run", "--rm", "--entrypoint", "sh", image,
+                "-c", "id -u postgres; id -g postgres",
+            ],
+            check=True, text=True, capture_output=True,
+        )
+        lines = [l.strip() for l in (proc.stdout or "").splitlines() if l.strip()]
+        uid = int(lines[0]) if len(lines) >= 1 else 999
+        gid = int(lines[1]) if len(lines) >= 2 else uid
+        return uid, gid
+    except Exception:
+        return 999, 999
+
+
 def _pgdata_env_for_clone_path(clone_path: Path) -> str:
     # Use sudo test to avoid permission issues on files owned by uid 999
     try:
@@ -78,8 +100,9 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     # Create writable snapshot
     _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(snap_path), str(clone_path)])
 
-    # Permissions for postgres uid/gid 999
-    _run(["sudo", "-n", "chown", "-R", "999:999", str(clone_path)])
+    # Permissions for postgres uid/gid detected from image
+    uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+    _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
     _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
 
     # Write clone metadata (.snaplicator.json and xattr)
@@ -272,8 +295,9 @@ def clone_from_main_and_run(opts: CloneOptions) -> Dict:
     # Create writable snapshot from main
     _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(src_main), str(clone_path)])
 
-    # Permissions
-    _run(["sudo", "-n", "chown", "-R", "999:999", str(clone_path)])
+    # Permissions for postgres uid/gid detected from image
+    uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+    _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
     _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
 
     # Write clone metadata
