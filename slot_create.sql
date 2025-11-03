@@ -1,0 +1,1 @@
+select slot_name, plugin from pg_create_logical_replication_slot(snaplicator_subscription,pgoutput);

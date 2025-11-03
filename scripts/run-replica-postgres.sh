@@ -42,6 +42,23 @@ if [ -f "$ENV_FILE" ]; then
   _load_dotenv "$ENV_FILE"
   echo "Loaded config from $ENV_FILE"
 fi
+# PRIMARY_CONNSTR가 비어있으면 .env 값으로 구성 (URI)
+if [ -z "${PRIMARY_CONNSTR:-}" ]; then
+  if [ -n "${PRIMARY_HOST:-}" ] && [ -n "${PRIMARY_PORT:-}" ] \
+     && [ -n "${PRIMARY_DB:-}" ] && [ -n "${PRIMARY_USER:-}" ]; then
+    QPARAMS="target_session_attrs=read-write"
+    if [ -n "${PGSSLMODE:-}" ]; then
+      QPARAMS="sslmode=${PGSSLMODE}&${QPARAMS}"
+    else
+      QPARAMS="sslmode=prefer&${QPARAMS}"
+    fi
+    if [ -n "${PRIMARY_PASSWORD:-}" ]; then
+      PRIMARY_CONNSTR="postgresql://${PRIMARY_USER}:${PRIMARY_PASSWORD}@${PRIMARY_HOST}:${PRIMARY_PORT}/${PRIMARY_DB}?${QPARAMS}"
+    else
+      PRIMARY_CONNSTR="postgresql://${PRIMARY_USER}@${PRIMARY_HOST}:${PRIMARY_PORT}/${PRIMARY_DB}?${QPARAMS}"
+    fi
+  fi
+fi
 
 # 필수 환경변수 검증 (모든 값은 .env에서 제공되어야 함)
 : "${CONTAINER_NAME:?CONTAINER_NAME is required}"
@@ -335,14 +352,29 @@ else
   fi
 fi
 
-# 권한 설정 (컨테이너 postgres 사용자 uid/gid 999)
-sudo chown -R 999:999 "$MAIN_PATH"
+# 권한 설정: 컨테이너 postgres 사용자 uid/gid에 맞춰 소유권 부여
+# 이미지에 따라 uid/gid가 다름 (Debian: 999, Alpine: 70 등)
+POSTGRES_IMAGE=${POSTGRES_IMAGE:-postgres:17}
+POSTGRES_UID=${POSTGRES_UID:-}
+POSTGRES_GID=${POSTGRES_GID:-}
+if [ -z "$POSTGRES_UID" ] || [ -z "$POSTGRES_GID" ]; then
+  if docker run --rm --entrypoint sh "$POSTGRES_IMAGE" -lc 'id -u postgres; id -g postgres' >/tmp/_pg_ids.$$ 2>/dev/null; then
+    POSTGRES_UID=$(sed -n '1p' /tmp/_pg_ids.$$)
+    POSTGRES_GID=$(sed -n '2p' /tmp/_pg_ids.$$)
+    rm -f /tmp/_pg_ids.$$
+  else
+    case "$POSTGRES_IMAGE" in
+      *alpine*) POSTGRES_UID=${POSTGRES_UID:-70}; POSTGRES_GID=${POSTGRES_GID:-70} ;;
+      *)        POSTGRES_UID=${POSTGRES_UID:-999}; POSTGRES_GID=${POSTGRES_GID:-999} ;;
+    esac
+  fi
+fi
+echo "Using container postgres uid:gid ${POSTGRES_UID}:${POSTGRES_GID}"
+sudo chown -R "${POSTGRES_UID}:${POSTGRES_GID}" "$MAIN_PATH"
 sudo chmod 700 "$MAIN_PATH" || true
 
-# 네트워크 준비
-if ! docker network ls | grep -q "${NETWORK_NAME}"; then
-  docker network create "${NETWORK_NAME}"
-fi
+# 네트워크: 호스트 네트워크 강제 사용
+USE_HOST_NETWORK=1
 
 # 기존 컨테이너 정리
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
@@ -351,20 +383,42 @@ fi
 
 # 볼륨 마운트 설정
 BASE_DIR=$(cd "$(dirname "$0")/.." && pwd)
-VOLUME_ARGS=( -v "$BASE_DIR/replication/replica-init:/docker-entrypoint-initdb.d:ro" )
+VOLUME_ARGS=()
 
 # 데이터 디렉토리 마운트 설정
 DATA_MOUNT_ARGS=( -v "$MAIN_PATH:/var/lib/postgresql/data" -e PGDATA=/var/lib/postgresql/data/pgdata )
 
-# 컨테이너 실행 (postgres:17)
+# 컨테이너 실행 (postgres 이미지 커스터마이즈 가능)
+POSTGRES_IMAGE=${POSTGRES_IMAGE:-postgres:17}
+DOCKER_NET_ARGS=()
+DOCKER_PORT_ARGS=()
+if [ "$USE_HOST_NETWORK" = "1" ]; then
+  echo "[INFO] Using host network for container (PRIMARY_HOST=$PRIMARY_HOST)"
+  DOCKER_NET_ARGS+=( --network host )
+else
+  DOCKER_NET_ARGS+=( --network "${NETWORK_NAME}" )
+  DOCKER_PORT_ARGS+=( -p "${HOST_PORT}:5432" )
+fi
+DOCKER_ENV_VARS=()
+if [ -n "${PRIMARY_CONNSTR:-}" ]; then
+  DOCKER_ENV_VARS+=( -e PRIMARY_CONNSTR="$PRIMARY_CONNSTR" )
+fi
+if [ -n "${PGSSLMODE:-}" ]; then
+  DOCKER_ENV_VARS+=( -e PGSSLMODE="$PGSSLMODE" )
+fi
+
 CONTAINER_ID=$(docker run -d \
   --name "${CONTAINER_NAME}" \
-  --network "${NETWORK_NAME}" \
-  -p "${HOST_PORT}:5432" \
+  "${DOCKER_NET_ARGS[@]}" \
+  "${DOCKER_PORT_ARGS[@]}" \
   --env-file "${ENV_FILE}" \
+  "${DOCKER_ENV_VARS[@]}" \
   "${DATA_MOUNT_ARGS[@]}" \
   "${VOLUME_ARGS[@]}" \
-  postgres:17)
+  "$POSTGRES_IMAGE" \
+  -c wal_level=${WAL_LEVEL:-logical} \
+  -c max_replication_slots=${MAX_REPLICATION_SLOTS:-10} \
+  -c max_wal_senders=${MAX_WAL_SENDERS:-${MAX_REPLICATION_SLOTS:-10}})
 echo "$CONTAINER_ID"
 
 # 준비 대기 및 상태 출력
@@ -389,6 +443,26 @@ for i in {1..60}; do
   else
     if docker exec "${CONTAINER_NAME}" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
       echo "Replica ready on port ${HOST_PORT}"
+      # Post-init replication job (non-fatal) - run outside initdb.d
+      if [ -d "$BASE_DIR/replication/replica-init" ]; then
+        echo "[post-init] starting replication init job (idempotent, with retries)"
+        docker exec "${CONTAINER_NAME}" mkdir -p /opt/replica-init >/dev/null 2>&1 || true
+        docker cp "$BASE_DIR/replication/replica-init/." "${CONTAINER_NAME}:/opt/replica-init" >/dev/null 2>&1 || true
+        TRIES=${POST_INIT_TRIES:-5}
+        DELAY=${POST_INIT_DELAY:-2}
+        for s in 05_clone_schema.sh 20_create_subscription.sh; do
+          n=1
+          while [ $n -le $TRIES ]; do
+            echo "[post-init] ($s) attempt $n/$TRIES"
+            if docker exec -e TRACE=${TRACE:-0} -e LOG_FILE=/var/lib/postgresql/replica-init.log "${CONTAINER_NAME}" bash -lc "if [ -f /opt/replica-init/$s ]; then bash /opt/replica-init/$s; fi"; then
+              echo "[post-init] ($s) done"; break
+            else
+              echo "[post-init] ($s) failed; retrying in ${DELAY}s"; sleep "$DELAY"; DELAY=$((DELAY*2))
+            fi
+            n=$((n+1))
+          done
+        done
+      fi
       docker logs "${CONTAINER_NAME}" --tail 50 || true
       exit 0
     else

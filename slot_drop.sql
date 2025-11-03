@@ -1,0 +1,1 @@
+select pg_drop_replication_slot(snaplicator_subscription);
