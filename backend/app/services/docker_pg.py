@@ -513,31 +513,34 @@ def delete_clone(root_data_dir: str, main_data_dir: Optional[str], container_nam
     - If MAIN_DATA_DIR provided, ensure basename startswith f"{MAIN_DATA_DIR}-clone-"
     - Ensure source is a btrfs subvolume
     """
-    # Inspect target container mounts to resolve the host clone subvolume path
-    mounts_json = ""
+    # First attempt: inspect container mounts to resolve the host clone subvolume path
+    host_src: Optional[str] = None
     try:
         mounts_json = subprocess.run(
             ["docker", "inspect", container_name, "--format", "{{json .Mounts}}"],
             check=True, text=True, capture_output=True,
         ).stdout
+        try:
+            mounts = json.loads(mounts_json) or []
+        except json.JSONDecodeError:
+            mounts = []
+        for m in mounts:
+            dest = m.get("Destination", "")
+            src = m.get("Source", "")
+            if dest.startswith("/var/lib/postgresql/data") and src:
+                host_src = src
+                break
     except subprocess.CalledProcessError:
-        raise FileNotFoundError(f"Container not found: {container_name}")
-
-    try:
-        mounts = json.loads(mounts_json) or []
-    except json.JSONDecodeError:
-        mounts = []
-
-    host_src: Optional[str] = None
-    for m in mounts:
-        dest = m.get("Destination", "")
-        src = m.get("Source", "")
-        if dest.startswith("/var/lib/postgresql/data") and src:
-            host_src = src
-            break
+        # Container not found. Treat the provided name as a clone subvolume name under ROOT_DATA_DIR.
+        candidate = Path(root_data_dir) / container_name
+        if candidate.exists():
+            host_src = str(candidate)
+        else:
+            # Fall back to original error for clarity
+            raise FileNotFoundError(f"Container not found and no matching subvolume: {container_name}")
 
     if not host_src:
-        raise RuntimeError(f"Could not determine clone subvolume path from container mounts. mounts={mounts_json[:400]}")
+        raise RuntimeError("Could not determine clone subvolume path from container or subvolume name")
 
     host_path = Path(host_src).resolve()
     root_path = Path(root_data_dir).resolve()

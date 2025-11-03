@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from typing import Dict, List
+from pathlib import Path
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -156,3 +157,76 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 		"active": active if active else None,
 		"details": details if details else None,
 	} 
+
+
+def run_replication_check_sql(
+    sql_file: str,
+    publisher_connstr: str,
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> Dict:
+    """Run the same SQL file on publisher (host) and subscriber (inside container).
+
+    Returns status and outputs separately. Always returns 200-level result to allow FE to show both sides,
+    with ok flags and error messages included.
+    """
+    sql_path = Path(sql_file)
+    if not sql_path.exists():
+        raise FileNotFoundError(f"SQL file not found: {sql_path}")
+
+    # Publisher: direct psql with libpq connstr
+    pub_ok = False
+    pub_out = ""
+    pub_err = ""
+    try:
+        p_pub = subprocess.run(
+            [
+                "psql", publisher_connstr,
+                "-v", "ON_ERROR_STOP=1",
+                "-At", "-F", ",",
+                "-f", str(sql_path),
+            ],
+            text=True, capture_output=True, check=True,
+        )
+        pub_ok = True
+        pub_out = (p_pub.stdout or "").strip()
+    except subprocess.CalledProcessError as e:  # noqa: PERF203
+        pub_err = (e.stderr or e.stdout or "").strip()
+
+    # Subscriber: copy file into container and run psql locally
+    sub_ok = False
+    sub_out = ""
+    sub_err = ""
+    try:
+        # Copy SQL into container
+        cp = subprocess.run(["docker", "cp", str(sql_path), f"{subscriber_container}:/tmp/replication_check.sql"], text=True, capture_output=True)
+        if cp.returncode != 0:
+            raise RuntimeError((cp.stderr or cp.stdout or "").strip())
+
+        # Build exec command with PGPASSWORD if provided
+        exec_cmd: List[str] = [
+            "docker", "exec", subscriber_container,
+        ]
+        if subscriber_password:
+            exec_cmd += ["env", f"PGPASSWORD={subscriber_password}"]
+        exec_cmd += [
+            "psql", "-h", "localhost",
+            "-U", subscriber_user, "-d", subscriber_db,
+            "-v", "ON_ERROR_STOP=1",
+            "-At", "-F", ",",
+            "-f", "/tmp/replication_check.sql",
+        ]
+        p_sub = subprocess.run(exec_cmd, text=True, capture_output=True, check=True)
+        sub_ok = True
+        sub_out = (p_sub.stdout or "").strip()
+    except subprocess.CalledProcessError as e:  # noqa: PERF203
+        sub_err = (e.stderr or e.stdout or "").strip()
+    except Exception as e:
+        sub_err = str(e)
+
+    return {
+        "publisher": {"ok": pub_ok, "output": pub_out, "error": (pub_err or None)},
+        "subscriber": {"ok": sub_ok, "output": sub_out, "error": (sub_err or None)},
+    }

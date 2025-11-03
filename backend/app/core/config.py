@@ -23,6 +23,17 @@ class Settings(BaseSettings):
 	postgres_db: Optional[str] = None
 	postgres_image: str = "postgres:17"
 
+	# Publisher connection (libpq connstr, e.g. "host=... port=... user=... password=... dbname=...")
+	publisher_connstr: Optional[str] = None
+
+	# Fallback fields to build publisher connstr like scripts do
+	primary_host: Optional[str] = None
+	primary_port: Optional[int] = None
+	primary_db: Optional[str] = None
+	primary_user: Optional[str] = None
+	primary_password: Optional[str] = None
+	pgsslmode: Optional[str] = None  # e.g., require/prefer
+
 	model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
 settings = Settings() 
