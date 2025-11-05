@@ -20,6 +20,9 @@ interface CloneItem {
     is_running: boolean
     container_started_at: string | null
     description?: string | null
+    usage_bytes?: number | null
+    fs_used_bytes?: number | null
+    fs_size_bytes?: number | null
 }
 
 
@@ -74,6 +77,18 @@ export function App() {
 
     const api = import.meta.env.VITE_API_BASE_URL || ''
     const base = api ? api : '/api'
+
+    const formatBytes = (n?: number | null) => {
+        if (n == null || isNaN(n)) return '-'
+        const units = ['B', 'KB', 'MB', 'GB', 'TB']
+        let v = n
+        let i = 0
+        while (v >= 1024 && i < units.length - 1) {
+            v /= 1024
+            i++
+        }
+        return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`
+    }
 
     const loadHealth = async () => {
         try {
@@ -381,6 +396,12 @@ export function App() {
                                     <div className="subtle" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                                         {c.description && <span title={c.description}>{c.description}</span>}
                                         {c.container_status && <span>status: {c.container_status}</span>}
+                                    </div>
+                                    <div className="subtle" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                                        <span>size: {formatBytes(c.usage_bytes)}</span>
+                                        {typeof c.fs_used_bytes === 'number' && typeof c.fs_size_bytes === 'number' && (
+                                            <span>btrfs: {formatBytes(c.fs_used_bytes)} / {formatBytes(c.fs_size_bytes)}</span>
+                                        )}
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: 8 }}>

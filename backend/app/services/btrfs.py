@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 import json
 
@@ -63,6 +63,102 @@ def _read_snapshot_description(path: Path) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def _human_to_bytes(text: str) -> Optional[int]:
+    try:
+        s = text.strip().lower().replace(',', '')
+        # Accept forms like "123456" or "1.23 GiB" or "1.23g"
+        parts = s.split()
+        if not parts:
+            return None
+        num_str = parts[0]
+        unit = parts[1] if len(parts) > 1 else 'b'
+        val = float(num_str)
+        mul = 1
+        if unit in ('b', 'bytes'):
+            mul = 1
+        elif unit in ('k', 'kb', 'kib'):
+            mul = 1024
+        elif unit in ('m', 'mb', 'mib'):
+            mul = 1024 ** 2
+        elif unit in ('g', 'gb', 'gib'):
+            mul = 1024 ** 3
+        elif unit in ('t', 'tb', 'tib'):
+            mul = 1024 ** 4
+        else:
+            # try stripping trailing letters like gi, gib
+            for u, factor in [('t', 1024**4), ('g', 1024**3), ('m', 1024**2), ('k', 1024)]:
+                if unit.startswith(u):
+                    mul = factor
+                    break
+        return int(val * mul)
+    except Exception:
+        return None
+
+
+def _get_fs_totals_bytes(path: Path) -> Tuple[Optional[int], Optional[int]]:
+    """Return (size_bytes, used_bytes) for the filesystem containing path."""
+    try:
+        out = _run(["df", "-B1", "--output=size,used", "-P", str(path)]).stdout.splitlines()
+        if len(out) >= 2:
+            cols = out[1].split()
+            if len(cols) >= 2:
+                size_b = int(cols[0])
+                used_b = int(cols[1])
+                return size_b, used_b
+    except subprocess.CalledProcessError:
+        pass
+    # Fallback using stat -f
+    try:
+        # block size, blocks, blocks used
+        bs = int(subprocess.run(["stat", "-f", "-c", "%S", str(path)], check=True, text=True, capture_output=True).stdout.strip())
+        total = int(subprocess.run(["stat", "-f", "-c", "%b", str(path)], check=True, text=True, capture_output=True).stdout.strip())
+        free = int(subprocess.run(["stat", "-f", "-c", "%a", str(path)], check=True, text=True, capture_output=True).stdout.strip())
+        size_b = bs * total
+        used_b = bs * (total - free)
+        return size_b, used_b
+    except Exception:
+        return None, None
+
+
+def _get_subvolume_usage_bytes(path: Path) -> Optional[int]:
+    """Best-effort size in bytes for a subvolume.
+    Prefer btrfs filesystem du -s (exclusive) if available, fallback to du -sb.
+    """
+    # Try btrfs filesystem du -s first (requires root)
+    try:
+        out = _run(["sudo", "-n", "btrfs", "filesystem", "du", "-s", str(path)]).stdout
+        # Look for a line like: Total exclusive: 1.12GiB
+        for line in out.splitlines():
+            l = line.strip().lower()
+            if l.startswith("total exclusive:"):
+                num = l.split(":", 1)[1].strip()
+                val = _human_to_bytes(num)
+                if isinstance(val, int):
+                    return val
+        # As a fallback, try referenced total
+        for line in out.splitlines():
+            l = line.strip().lower()
+            if l.startswith("total referenced:"):
+                num = l.split(":", 1)[1].strip()
+                val = _human_to_bytes(num)
+                if isinstance(val, int):
+                    return val
+    except subprocess.CalledProcessError:
+        pass
+    # Fallback to du -sb
+    try:
+        out = _run(["sudo", "-n", "du", "-sb", str(path)]).stdout
+        first = out.splitlines()[0].split()[0]
+        return int(first)
+    except Exception:
+        try:
+            out = subprocess.run(["du", "-sb", str(path)], check=True, text=True, capture_output=True).stdout
+            first = out.splitlines()[0].split()[0]
+            return int(first)
+        except Exception:
+            return None
 
 
 def list_snapshots(root_data_dir: str, main_data_dir: str) -> List[Dict]:
@@ -201,6 +297,9 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
     prefix = f"{main_data_dir}-clone-"
     clones: List[Dict] = []
 
+    # Filesystem totals (same for all clones under root)
+    fs_size_b, fs_used_b = _get_fs_totals_bytes(root)
+
     for entry in os.scandir(root):
         if not entry.is_dir(follow_symlinks=False):
             continue
@@ -211,6 +310,7 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
         if not _is_btrfs_subvolume(p):
             # skip non-btrfs entries
             continue
+        usage_b = _get_subvolume_usage_bytes(p)
         clones.append({
             "name": name,
             "path": str(p),
@@ -221,6 +321,9 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
             "container_status": None,
             "container_ports": None,
             "container_started_at": None,
+            "usage_bytes": usage_b,
+            "fs_size_bytes": fs_size_b,
+            "fs_used_bytes": fs_used_b,
             "description": _read_snapshot_description(p),
         })
 
