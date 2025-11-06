@@ -168,6 +168,12 @@ export function App() {
     }, [])
 
     const onCreateSnapshot = async () => {
+        const trimmedDesc = snapshotDesc.trim()
+        if (!trimmedDesc) {
+            setMessage(null)
+            setError('스냅샷 설명을 입력해 주세요.')
+            return
+        }
         setCreating(true)
         setMessage(null)
         setError(null)
@@ -175,7 +181,7 @@ export function App() {
             const r = await fetch(`${base}/snapshots`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description: snapshotDesc || null }),
+                body: JSON.stringify({ description: trimmedDesc }),
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const created: SnapshotItem = await r.json()
@@ -190,6 +196,12 @@ export function App() {
     }
 
     const onClone = async (name: string, description: string) => {
+        const trimmedDesc = description.trim()
+        if (!trimmedDesc) {
+            setMessage(null)
+            setError('클론 설명을 입력해 주세요.')
+            return
+        }
         setCloning(name)
         setMessage(null)
         setError(null)
@@ -197,7 +209,7 @@ export function App() {
             const r = await fetch(`${base}/snapshots/${encodeURIComponent(name)}/clone`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description: description || null }),
+                body: JSON.stringify({ description: trimmedDesc }),
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
@@ -211,14 +223,21 @@ export function App() {
     }
 
     const onCloneFromMain = async () => {
+        const trimmedDesc = mainCloneDesc.trim()
+        if (!trimmedDesc) {
+            setMessage(null)
+            setClonesError('메인 클론 설명을 입력해 주세요.')
+            return
+        }
         setMainCloning(true)
         setMessage(null)
+        setClonesError(null)
         setError(null)
         try {
             const r = await fetch(`${base}/clones`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description: mainCloneDesc || null }),
+                body: JSON.stringify({ description: trimmedDesc }),
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
@@ -363,9 +382,9 @@ export function App() {
                     <input className="input"
                         value={mainCloneDesc}
                         onChange={(e) => setMainCloneDesc(e.target.value)}
-                        placeholder="Clone from main: description (optional)"
+                        placeholder="Clone from main: description (required)"
                     />
-                    <button className="btn" onClick={onCloneFromMain} disabled={mainCloning}>
+                    <button className="btn" onClick={onCloneFromMain} disabled={mainCloning || !mainCloneDesc.trim()}>
                         {mainCloning ? 'Cloning...' : 'Clone from Main'}
                     </button>
                 </div>
@@ -422,9 +441,9 @@ export function App() {
                     <input className="input"
                         value={snapshotDesc}
                         onChange={(e) => setSnapshotDesc(e.target.value)}
-                        placeholder="Description (optional)"
+                        placeholder="Description (required)"
                     />
-                    <button className="btn" onClick={onCreateSnapshot} disabled={creating}>
+                    <button className="btn" onClick={onCreateSnapshot} disabled={creating || !snapshotDesc.trim()}>
                         {creating ? 'Creating...' : 'Create Snapshot'}
                     </button>
                 </div>
@@ -437,7 +456,7 @@ export function App() {
                             {it.description && (
                                 <span style={{ opacity: 0.7 }} title={it.description}>– {it.description}</span>
                             )}
-                            <input className="input" placeholder="Clone description (optional)" id={`clone-desc-${it.name}`} />
+                            <input className="input" placeholder="Clone description (required)" id={`clone-desc-${it.name}`} />
                             <button className="btn" onClick={() => {
                                 const el = document.getElementById(`clone-desc-${it.name}`) as HTMLInputElement | null
                                 const desc = el?.value || ''
