@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 import time
 import json
 
@@ -20,6 +20,22 @@ def _is_btrfs_subvolume(path: Path) -> bool:
         return True
     except subprocess.CalledProcessError:
         return False
+
+
+_TIMING_LOG_PATH = Path(__file__).resolve().parents[3] / "timing.log"
+
+
+def _timing_log(message: str) -> None:
+    try:
+        print(message, flush=True)
+    except Exception:
+        pass
+    try:
+        with open(_TIMING_LOG_PATH, "a", encoding="utf-8") as f:
+            ts = datetime.now().isoformat()
+            f.write(f"{ts} {message}\n")
+    except Exception:
+        pass
 
 
 def _detect_postgres_uid_gid(image: str) -> tuple[int, int]:
@@ -72,6 +88,147 @@ def _find_free_port(start_port: int, attempts: int = 1000) -> int:
     raise RuntimeError(f"Failed to find a free port starting from {start_port}")
 
 
+def _find_container_mounting_path(host_path: Path) -> Optional[str]:
+    """Return the name of a running container that mounts host_path at /var/lib/postgresql/data*.
+
+    If multiple containers match, return the first.
+    """
+    try:
+        ids_out = subprocess.run(["docker", "ps", "-q"], check=True, text=True, capture_output=True).stdout
+        container_ids = [line.strip() for line in ids_out.splitlines() if line.strip()]
+    except subprocess.CalledProcessError:
+        return None
+    for cid in container_ids:
+        try:
+            ins = subprocess.run(["docker", "inspect", "--format", "{{.Name}}\t{{json .Mounts}}", cid], check=True, text=True, capture_output=True).stdout.strip()
+            if not ins:
+                continue
+            name_raw, mounts_json = (ins.split("\t") + [""])[:2]
+            cname = name_raw.lstrip('/')
+            mounts = []
+            try:
+                mounts = json.loads(mounts_json) or []
+            except Exception:
+                mounts = []
+            for m in mounts:
+                dest = m.get("Destination", "")
+                src = m.get("Source", "")
+                if not dest.startswith("/var/lib/postgresql/data") or not src:
+                    continue
+                try:
+                    resolved = str(Path(src).resolve())
+                except Exception:
+                    resolved = src
+                if resolved == str(host_path.resolve()):
+                    return cname
+        except subprocess.CalledProcessError:
+            continue
+    return None
+
+
+def _force_checkpoint_on_container(container_name: str, user: str, db: str) -> None:
+    """Force CHECKPOINT (and switch WAL) inside the given Postgres container.
+
+    Best-effort: ignore failures but surface via timing logs.
+    """
+    t0 = time.monotonic()
+    try:
+        # Switch WAL to ensure current WAL segment is closed, then CHECKPOINT
+        subprocess.run([
+            "docker", "exec", container_name,
+            "psql", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", db,
+            "-c", "SELECT pg_switch_wal();",
+        ], check=True, text=True, capture_output=True)
+        subprocess.run([
+            "docker", "exec", container_name,
+            "psql", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", db,
+            "-c", "CHECKPOINT;",
+        ], check=True, text=True, capture_output=True)
+        t1 = time.monotonic()
+        _timing_log(f"[CLONE_TIMING] pre_checkpoint_ms={int((t1-t0)*1000)} container={container_name}")
+    except subprocess.CalledProcessError as e:
+        t1 = time.monotonic()
+        _timing_log(f"[CLONE_TIMING] pre_checkpoint_failed_ms={int((t1-t0)*1000)} container={container_name} err={str(e).strip()}")
+
+
+def _ensure_docker_network(network_name: str) -> None:
+    try:
+        tn0 = time.monotonic()
+        out = subprocess.run(["docker", "network", "ls", "--format", "{{.Name}}"], check=True, text=True, capture_output=True).stdout
+        nets = set(line.strip() for line in out.splitlines())
+        if network_name not in nets:
+            subprocess.run(["docker", "network", "create", network_name], check=True)
+        tn1 = time.monotonic()
+        _timing_log(f"[CLONE_TIMING] docker_network_prepare_ms={int((tn1-tn0)*1000)} network={network_name}")
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to ensure docker network: {e}")
+
+
+_SEQUENCE_SYNC_SQL = """DO $$
+DECLARE
+  r RECORD;
+  v_max       bigint;
+  v_start     bigint;
+  seq_oqname  text;
+BEGIN
+  FOR r IN
+    SELECT
+      ns.nspname        AS table_schema,
+      tbl.relname       AS table_name,
+      col.attname       AS column_name,
+      seq_ns.nspname    AS seq_schema,
+      seq.relname       AS seq_name,
+      seq.oid           AS seq_oid
+    FROM pg_class seq
+    JOIN pg_namespace seq_ns ON seq_ns.oid = seq.relnamespace
+    JOIN pg_depend dep       ON dep.objid = seq.oid AND dep.deptype = 'a'
+    JOIN pg_class tbl        ON tbl.oid = dep.refobjid AND tbl.relkind IN ('r','p')
+    JOIN pg_namespace ns     ON ns.oid = tbl.relnamespace
+    JOIN pg_attribute col    ON col.attrelid = tbl.oid AND col.attnum = dep.refobjsubid AND NOT col.attisdropped
+    WHERE seq.relkind = 'S'
+  LOOP
+    seq_oqname := format('%I.%I', r.seq_schema, r.seq_name);
+    EXECUTE format('SELECT max(%I) FROM %I.%I', r.column_name, r.table_schema, r.table_name)
+      INTO v_max;
+    SELECT s.start_value
+      INTO v_start
+      FROM pg_sequences s
+     WHERE s.schemaname  = r.seq_schema
+       AND s.sequencename = r.seq_name;
+    IF v_max IS NULL THEN
+      PERFORM setval(seq_oqname, v_start, true);
+    ELSE
+      PERFORM setval(seq_oqname, v_max, true);
+    END IF;
+  END LOOP;
+END$$;"""
+
+
+def _sync_owned_sequences(container_name: str, user: str, db: str) -> None:
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(
+            [
+                "docker", "exec", container_name,
+                "psql", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", db,
+                "-c", _SEQUENCE_SYNC_SQL,
+            ],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        t1 = time.monotonic()
+        _timing_log(f"[CLONE_TIMING] sequence_sync_ms={int((t1-t0)*1000)} container={container_name}")
+        stdout = (proc.stdout or "").strip()
+        if stdout:
+            _timing_log(f"[CLONE_TIMING] sequence_sync_stdout container={container_name} out={stdout}")
+    except subprocess.CalledProcessError as e:
+        t1 = time.monotonic()
+        stderr = (e.stderr or e.stdout or "").strip()
+        _timing_log(f"[CLONE_TIMING] sequence_sync_failed_ms={int((t1-t0)*1000)} container={container_name} err={stderr}")
+        raise RuntimeError(f"Sequence synchronization failed: {stderr}") from e
+
+
 @dataclass
 class CloneOptions:
     root_data_dir: str
@@ -87,73 +244,30 @@ class CloneOptions:
     description: Optional[str] = None
 
 
-def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
-    root = Path(opts.root_data_dir)
-    snap_path = root / opts.snapshot_name
-    if not snap_path.exists() or not _is_btrfs_subvolume(snap_path):
-        raise FileNotFoundError(f"Snapshot not found or not a subvolume: {snap_path}")
-
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    clone_name = f"{opts.main_data_dir}-clone-{ts}"
-    clone_path = root / clone_name
-
-    # Create writable snapshot
-    _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(snap_path), str(clone_path)])
-
-    # Permissions for postgres uid/gid detected from image
-    uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
-    _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
-    _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
-
-    # Write clone metadata (.snaplicator.json and xattr)
-    meta = {
-        "name": clone_name,
-        "path": str(clone_path),
-        "source_snapshot": str(snap_path),
-        "root_data_dir": str(root),
-        "main_data_dir": opts.main_data_dir,
-        "created_at": datetime.now().isoformat(),
-        "created_by": "snaplicator-api",
-        "description": opts.description,
-    }
-    meta_json = json.dumps(meta, ensure_ascii=False)
-    meta_path = clone_path / ".snaplicator.json"
-    try:
-        _run(["sudo", "-n", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
-    except subprocess.CalledProcessError:
-        pass
-    try:
-        _run(["sudo", "-n", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(clone_path)])
-    except subprocess.CalledProcessError:
-        pass
-
-    # Determine PGDATA inside the clone
+def _launch_clone_container(
+    clone_path: Path,
+    opts: CloneOptions,
+    container_name: str,
+    host_port_hint: Optional[int],
+    description: Optional[str],
+    remove_existing: bool = True,
+) -> Tuple[int, str, bool, Optional[str]]:
     container_pgdata = _pgdata_env_for_clone_path(clone_path)
 
-    # Prepare docker network
-    try:
-        out = subprocess.run(["docker", "network", "ls", "--format", "{{.Name}}"], check=True, text=True, capture_output=True).stdout
-        nets = set(line.strip() for line in out.splitlines())
-        if opts.network_name not in nets:
-            subprocess.run(["docker", "network", "create", opts.network_name], check=True)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to ensure docker network: {e}")
+    if remove_existing:
+        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
 
-    # Container name with timestamp suffix
-    container_name = f"{opts.container_name}-{ts}"
+    _ensure_docker_network(opts.network_name)
 
-    # Remove existing container with same name if any
-    subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+    host_port = int(host_port_hint) if host_port_hint is not None else _find_free_port(int(opts.host_port))
 
-    # Find available host port starting from opts.host_port
-    selected_port = _find_free_port(int(opts.host_port))
-
-    # Run the container (add labels for identification)
     labels = [
         "--label", "snaplicator=1",
         "--label", f"snaplicator.role=clone",
         "--label", f"snaplicator.main={opts.main_data_dir}",
     ]
+    if description is not None:
+        labels.extend(["--label", f"snaplicator.description={description}"])
 
     envs = [
         "-e", f"POSTGRES_USER={opts.postgres_user}",
@@ -166,16 +280,23 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
         "docker", "run", "-d",
         "--name", container_name,
         "--network", opts.network_name,
-        "-p", f"{selected_port}:5432",
+        "-p", f"{host_port}:5432",
         *labels,
         *envs,
         "-v", f"{str(clone_path)}:/var/lib/postgresql/data",
         opts.postgres_image,
         "-c", "max_logical_replication_workers=0",
     ]
-    subprocess.run(cmd, check=True)
 
-    # Wait for readiness up to 60s (pg_isready)
+    anonymize_ran = False
+    anonymize_output: Optional[str] = None
+
+    tr0 = time.monotonic()
+    subprocess.run(cmd, check=True)
+    tr1 = time.monotonic()
+    _timing_log(f"[CLONE_TIMING] docker_run_ms={int((tr1-tr0)*1000)} container={container_name} port={host_port}")
+
+    tw0 = time.monotonic()
     for _ in range(60):
         ready = subprocess.run(
             [
@@ -187,8 +308,6 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
         if ready.returncode == 0:
             break
         time.sleep(1)
-
-    # Extra guard: ensure container is running and exec works (up to 10s)
     for _ in range(10):
         st = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", container_name], capture_output=True, text=True)
         ok = st.returncode == 0 and st.stdout.strip() == "true"
@@ -196,8 +315,9 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
         if ok and ex.returncode == 0:
             break
         time.sleep(1)
+    tw1 = time.monotonic()
+    _timing_log(f"[CLONE_TIMING] container_ready_wait_ms={int((tw1-tw0)*1000)} container={container_name}")
 
-    # Disable all subscriptions to avoid slot conflicts
     subs_proc = subprocess.run(
         [
             "docker", "exec", container_name,
@@ -221,60 +341,111 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
                 check=False,
             )
 
-    # Run anonymization SQL from project root if present (retry for reliability)
+    try:
+        _sync_owned_sequences(container_name, opts.postgres_user, opts.postgres_db)
+    except Exception:
+        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+        raise
+
     repo_root = str(Path(__file__).resolve().parents[3])
     anon_file = Path(repo_root) / "configs/anonymize.sql"
-    anonymize_ran = False
-    anonymize_output = None
     if anon_file.exists():
-        # Copy into container temp path and execute with ON_ERROR_STOP
-        print(f"Running anonymization SQL from {anon_file}")
-        try:
-            copy_ok = False
-            for _ in range(5):
-                cp = subprocess.run(["docker", "cp", str(anon_file), f"{container_name}:/tmp/anonymize.sql"], capture_output=True, text=True)
-                if cp.returncode == 0:
-                    copy_ok = True
-                    break
-                time.sleep(1)
-            if not copy_ok:
-                subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
-                raise RuntimeError("Anonymization setup failed: unable to copy anonymize.sql into container")
-
-            exec_ok = False
-            last_err = ""
-            last_out = ""
-            for _ in range(5):
-                run_anon = subprocess.run(
-                    [
-                        "docker", "exec", container_name,
-                        "psql", "-v", "ON_ERROR_STOP=1", "-U", opts.postgres_user, "-d", opts.postgres_db,
-                        "-f", "/tmp/anonymize.sql",
-                    ],
-                    capture_output=True, text=True,
-                )
-                if run_anon.returncode == 0:
-                    exec_ok = True
-                    anonymize_ran = True
-                    last_out = (run_anon.stdout or "").strip()
-                    break
-                last_err = (run_anon.stderr or run_anon.stdout or "").strip()
-                time.sleep(1)
-            if not exec_ok:
-                subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
-                raise RuntimeError(f"Anonymization failed: {last_err}")
-            else:
-                anonymize_output = last_out
-        except Exception:
-            # Ensure container is removed on any failure here
+        _timing_log(f"[CLONE_TIMING] anonymize_start file={anon_file}")
+        ta0 = time.monotonic()
+        copy_ok = False
+        for _ in range(5):
+            cp = subprocess.run(["docker", "cp", str(anon_file), f"{container_name}:/tmp/anonymize.sql"], capture_output=True, text=True)
+            if cp.returncode == 0:
+                copy_ok = True
+                break
+            time.sleep(1)
+        if not copy_ok:
             subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
-            raise
+            raise RuntimeError("Anonymization setup failed: unable to copy anonymize.sql into container")
+
+        exec_ok = False
+        last_err = ""
+        last_out = ""
+        for _ in range(5):
+            run_anon = subprocess.run(
+                [
+                    "docker", "exec", container_name,
+                    "psql", "-v", "ON_ERROR_STOP=1", "-U", opts.postgres_user, "-d", opts.postgres_db,
+                    "-f", "/tmp/anonymize.sql",
+                ],
+                capture_output=True, text=True,
+            )
+            if run_anon.returncode == 0:
+                exec_ok = True
+                anonymize_ran = True
+                last_out = (run_anon.stdout or "").strip()
+                break
+            last_err = (run_anon.stderr or run_anon.stdout or "").strip()
+            time.sleep(1)
+        if not exec_ok:
+            subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+            raise RuntimeError(f"Anonymization failed: {last_err}")
+        anonymize_output = last_out
+        ta1 = time.monotonic()
+        _timing_log(f"[CLONE_TIMING] anonymization_ms={int((ta1-ta0)*1000)} container={container_name}")
+
+    return host_port, container_pgdata, anonymize_ran, anonymize_output
+
+
+def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
+    root = Path(opts.root_data_dir)
+    snap_path = root / opts.snapshot_name
+    if not snap_path.exists() or not _is_btrfs_subvolume(snap_path):
+        raise FileNotFoundError(f"Snapshot not found or not a subvolume: {snap_path}")
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    clone_name = f"{opts.main_data_dir}-clone-{ts}"
+    clone_path = root / clone_name
+
+    t0 = time.monotonic()
+    _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(snap_path), str(clone_path)])
+    t1 = time.monotonic()
+    _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={snap_path} target={clone_path}")
+
+    uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+    _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
+    _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
+
+    meta = {
+        "name": clone_name,
+        "path": str(clone_path),
+        "source_snapshot": str(snap_path),
+        "root_data_dir": str(root),
+        "main_data_dir": opts.main_data_dir,
+        "created_at": datetime.now().isoformat(),
+        "created_by": "snaplicator-api",
+        "description": opts.description,
+    }
+    meta_json = json.dumps(meta, ensure_ascii=False)
+    meta_path = clone_path / ".snaplicator.json"
+    try:
+        _run(["sudo", "-n", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
+    except subprocess.CalledProcessError:
+        pass
+    try:
+        _run(["sudo", "-n", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(clone_path)])
+    except subprocess.CalledProcessError:
+        pass
+
+    container_name = f"{opts.container_name}-{ts}"
+    host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
+        clone_path=clone_path,
+        opts=opts,
+        container_name=container_name,
+        host_port_hint=None,
+        description=opts.description,
+    )
 
     return {
         "snapshot": str(snap_path),
         "clone_subvolume": str(clone_path),
         "container_name": container_name,
-        "host_port": selected_port,
+        "host_port": host_port,
         "pgdata": container_pgdata,
         "metadata_path": str(meta_path),
         "anonymize_ran": anonymize_ran,
@@ -292,15 +463,24 @@ def clone_from_main_and_run(opts: CloneOptions) -> Dict:
     clone_name = f"{opts.main_data_dir}-clone-{ts}"
     clone_path = root / clone_name
 
-    # Create writable snapshot from main
-    _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(src_main), str(clone_path)])
+    try:
+        src_container = _find_container_mounting_path(src_main)
+        if src_container:
+            _force_checkpoint_on_container(src_container, opts.postgres_user, opts.postgres_db)
+        else:
+            _timing_log(f"[CLONE_TIMING] pre_checkpoint_skipped reason=no_container_for_src path={src_main}")
+    except Exception as e:
+        _timing_log(f"[CLONE_TIMING] pre_checkpoint_error path={src_main} err={str(e).strip()}")
 
-    # Permissions for postgres uid/gid detected from image
+    t0 = time.monotonic()
+    _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(src_main), str(clone_path)])
+    t1 = time.monotonic()
+    _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={src_main} target={clone_path}")
+
     uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
     _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
     _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
 
-    # Write clone metadata
     meta = {
         "name": clone_name,
         "path": str(clone_path),
@@ -322,138 +502,183 @@ def clone_from_main_and_run(opts: CloneOptions) -> Dict:
     except subprocess.CalledProcessError:
         pass
 
-    # Determine PGDATA inside the clone
-    container_pgdata = _pgdata_env_for_clone_path(clone_path)
-
-    # Prepare docker network
-    try:
-        out = subprocess.run(["docker", "network", "ls", "--format", "{{.Name}}"], check=True, text=True, capture_output=True).stdout
-        nets = set(line.strip() for line in out.splitlines())
-        if opts.network_name not in nets:
-            subprocess.run(["docker", "network", "create", opts.network_name], check=True)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to ensure docker network: {e}")
-
-    # Container name with timestamp suffix
     container_name = f"{opts.container_name}-{ts}"
-
-    # Remove existing container with same name if any
-    subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
-
-    # Find available host port starting from opts.host_port
-    selected_port = _find_free_port(int(opts.host_port))
-
-    # Run the container (add labels for identification)
-    labels = [
-        "--label", "snaplicator=1",
-        "--label", f"snaplicator.role=clone",
-        "--label", f"snaplicator.main={opts.main_data_dir}",
-    ]
-
-    envs = [
-        "-e", f"POSTGRES_USER={opts.postgres_user}",
-        "-e", f"POSTGRES_PASSWORD={opts.postgres_password}",
-        "-e", f"POSTGRES_DB={opts.postgres_db}",
-        "-e", f"PGDATA={container_pgdata}",
-    ]
-
-    cmd = [
-        "docker", "run", "-d",
-        "--name", container_name,
-        "--network", opts.network_name,
-        "-p", f"{selected_port}:5432",
-        *labels,
-        *envs,
-        "-v", f"{str(clone_path)}:/var/lib/postgresql/data",
-        opts.postgres_image,
-        "-c", "max_logical_replication_workers=0",
-    ]
-    subprocess.run(cmd, check=True)
-
-    # Wait for readiness and extra guard
-    for _ in range(60):
-        ready = subprocess.run([
-            "docker", "exec", container_name, "pg_isready", "-U", opts.postgres_user, "-d", opts.postgres_db,
-        ], capture_output=True, text=True)
-        if ready.returncode == 0:
-            break
-        time.sleep(1)
-    for _ in range(10):
-        st = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", container_name], capture_output=True, text=True)
-        ok = st.returncode == 0 and st.stdout.strip() == "true"
-        ex = subprocess.run(["docker", "exec", container_name, "sh", "-c", "true"], capture_output=True, text=True)
-        if ok and ex.returncode == 0:
-            break
-        time.sleep(1)
-
-    # Disable subscriptions
-    subs_proc = subprocess.run([
-        "docker", "exec", container_name,
-        "psql", "-U", opts.postgres_user, "-d", opts.postgres_db, "-tAc",
-        "SELECT subname FROM pg_subscription",
-    ], capture_output=True, text=True)
-    subs_out = subs_proc.stdout.strip()
-    if subs_out:
-        for sub in subs_out.splitlines():
-            sub = sub.strip()
-            if not sub:
-                continue
-            subprocess.run([
-                "docker", "exec", container_name,
-                "psql", "-v", "ON_ERROR_STOP=1", "-U", opts.postgres_user, "-d", opts.postgres_db,
-                "-c", f"ALTER SUBSCRIPTION \"{sub}\" DISABLE;",
-            ], check=False)
-
-    # Anonymize (same as above)
-    repo_root = str(Path(__file__).resolve().parents[3])
-    anon_file = Path(repo_root) / "configs/anonymize.sql"
-    anonymize_ran = False
-    anonymize_output = None
-    if anon_file.exists():
-        try:
-            copy_ok = False
-            for _ in range(5):
-                cp = subprocess.run(["docker", "cp", str(anon_file), f"{container_name}:/tmp/anonymize.sql"], capture_output=True, text=True)
-                if cp.returncode == 0:
-                    copy_ok = True
-                    break
-                time.sleep(1)
-            if not copy_ok:
-                subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
-                raise RuntimeError("Anonymization setup failed: unable to copy anonymize.sql into container")
-
-            exec_ok = False
-            last_err = ""
-            last_out = ""
-            for _ in range(5):
-                run_anon = subprocess.run([
-                    "docker", "exec", container_name,
-                    "psql", "-v", "ON_ERROR_STOP=1", "-U", opts.postgres_user, "-d", opts.postgres_db,
-                    "-f", "/tmp/anonymize.sql",
-                ], capture_output=True, text=True)
-                if run_anon.returncode == 0:
-                    exec_ok = True
-                    anonymize_ran = True
-                    last_out = (run_anon.stdout or "").strip()
-                    break
-                last_err = (run_anon.stderr or run_anon.stdout or "").strip()
-                time.sleep(1)
-            if not exec_ok:
-                subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
-                raise RuntimeError(f"Anonymization failed: {last_err}")
-            else:
-                anonymize_output = last_out
-        except Exception:
-            subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
-            raise
+    host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
+        clone_path=clone_path,
+        opts=opts,
+        container_name=container_name,
+        host_port_hint=None,
+        description=opts.description,
+    )
 
     return {
         "source_main": str(src_main),
         "clone_subvolume": str(clone_path),
         "container_name": container_name,
-        "host_port": selected_port,
+        "host_port": host_port,
         "pgdata": container_pgdata,
         "metadata_path": str(meta_path),
+        "anonymize_ran": anonymize_ran,
+        "anonymize_output": anonymize_output,
+    }
+
+
+def refresh_clone_in_place(
+    target_container: str,
+    opts: CloneOptions,
+    description_override: Optional[str] = None,
+) -> Dict:
+    root = Path(opts.root_data_dir)
+    src_main = root / opts.main_data_dir
+    if not src_main.exists() or not _is_btrfs_subvolume(src_main):
+        raise FileNotFoundError(f"Main replica not found or not a subvolume: {src_main}")
+
+    try:
+        inspect_out = subprocess.run(
+            ["docker", "inspect", target_container],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+    except subprocess.CalledProcessError as e:
+        raise FileNotFoundError(f"Container not found: {target_container}") from e
+
+    try:
+        inspect_data = json.loads(inspect_out)[0]
+    except (IndexError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Failed to inspect container: {target_container}") from e
+
+    ports = inspect_data.get("NetworkSettings", {}).get("Ports", {})
+    port_binding = ports.get("5432/tcp")
+    if not port_binding:
+        raise RuntimeError(f"Container {target_container} does not expose 5432/tcp")
+    try:
+        host_port = int(port_binding[0]["HostPort"])
+    except (IndexError, KeyError, ValueError, TypeError) as e:
+        raise RuntimeError(f"Failed to determine host port for container {target_container}") from e
+
+    host_path: Optional[Path] = None
+    for m in inspect_data.get("Mounts", []):
+        dest = m.get("Destination", "")
+        src = m.get("Source", "")
+        if dest.startswith("/var/lib/postgresql/data") and src:
+            host_path = Path(src)
+            break
+    if not host_path:
+        raise RuntimeError(f"Could not determine clone subvolume path for container {target_container}")
+
+    description = description_override
+    if description is None:
+        meta_path_old = host_path / ".snaplicator.json"
+        try:
+            meta_raw = subprocess.run(
+                ["sudo", "-n", "cat", str(meta_path_old)],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout
+            meta_old = json.loads(meta_raw)
+            description = meta_old.get("description")
+        except Exception:
+            description = None
+
+    # Best-effort: force checkpoint on source main container before snapshot
+    try:
+        src_container = _find_container_mounting_path(src_main)
+        if src_container:
+            _force_checkpoint_on_container(src_container, opts.postgres_user, opts.postgres_db)
+        else:
+            _timing_log(f"[CLONE_TIMING] pre_checkpoint_skipped reason=no_container_for_src path={src_main}")
+    except Exception as e:
+        _timing_log(f"[CLONE_TIMING] pre_checkpoint_error path={src_main} err={str(e).strip()}")
+
+    subprocess.run(["docker", "rm", "-f", target_container], check=False, capture_output=True)
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    temp_path = host_path.parent / f"{host_path.name}-refresh-{ts}"
+    backup_path: Optional[Path] = None
+
+    try:
+        t0 = time.monotonic()
+        _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(src_main), str(temp_path)])
+        t1 = time.monotonic()
+        _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={src_main} target={temp_path}")
+
+        uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+        _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(temp_path)])
+        _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(temp_path)])
+
+        meta = {
+            "name": host_path.name,
+            "path": str(host_path),
+            "source_main_path": str(src_main),
+            "root_data_dir": str(root),
+            "main_data_dir": opts.main_data_dir,
+            "refreshed_at": datetime.now().isoformat(),
+            "created_by": "snaplicator-api",
+            "description": description,
+        }
+        meta_json = json.dumps(meta, ensure_ascii=False)
+        meta_path_new = temp_path / ".snaplicator.json"
+        try:
+            _run(["sudo", "-n", "bash", "-lc", f"cat > {meta_path_new!s} <<'EOF'\n{meta_json}\nEOF\n"])
+        except subprocess.CalledProcessError:
+            pass
+        try:
+            _run(["sudo", "-n", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(temp_path)])
+        except subprocess.CalledProcessError:
+            pass
+
+        if host_path.exists():
+            backup_path = host_path.parent / f"{host_path.name}-prev-{ts}"
+            _run(["sudo", "-n", "mv", str(host_path), str(backup_path)])
+
+        _run(["sudo", "-n", "mv", str(temp_path), str(host_path)])
+
+    except Exception:
+        try:
+            if temp_path.exists():
+                _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(temp_path)])
+        except subprocess.CalledProcessError:
+            pass
+        if backup_path and backup_path.exists() and not host_path.exists():
+            try:
+                _run(["sudo", "-n", "mv", str(backup_path), str(host_path)])
+            except subprocess.CalledProcessError:
+                pass
+        raise
+
+    anonymize_ran = False
+    anonymize_output = None
+    refresh_success = False
+    try:
+        host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
+            clone_path=host_path,
+            opts=opts,
+            container_name=target_container,
+            host_port_hint=host_port,
+            description=description,
+            remove_existing=False,
+        )
+        refresh_success = True
+    finally:
+        if not refresh_success:
+            # Keep backup for manual recovery
+            pass
+
+    if backup_path and backup_path.exists() and refresh_success:
+        try:
+            _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(backup_path)])
+        except subprocess.CalledProcessError:
+            pass
+
+    return {
+        "refreshed_container": target_container,
+        "host_port": host_port,
+        "clone_subvolume": str(host_path),
+        "pgdata": container_pgdata,
+        "metadata_path": str(host_path / ".snaplicator.json"),
+        "description": description,
         "anonymize_ran": anonymize_ran,
         "anonymize_output": anonymize_output,
     }

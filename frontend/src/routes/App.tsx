@@ -74,6 +74,7 @@ export function App() {
     const [snapshotDesc, setSnapshotDesc] = useState('')
     const [mainCloneDesc, setMainCloneDesc] = useState('')
     const [mainCloning, setMainCloning] = useState(false)
+    const [refreshingClone, setRefreshingClone] = useState<string | null>(null)
 
     const api = import.meta.env.VITE_API_BASE_URL || ''
     const base = api ? api : '/api'
@@ -289,6 +290,41 @@ export function App() {
         }
     }
 
+    const onRefreshClone = async (clone: CloneItem) => {
+        const targetName = clone.container_name || clone.name
+        if (!targetName || !clone.has_container) {
+            setClonesError('실행 중인 컨테이너가 없는 클론은 최신화할 수 없습니다.')
+            return
+        }
+
+        const defaultDesc = clone.description || ''
+        const input = window.prompt('새 description을 입력하세요. 변경하지 않으려면 그대로 두고 OK를 누르세요.', defaultDesc)
+        if (input === null) {
+            return
+        }
+        const trimmed = input.trim()
+
+        setRefreshingClone(targetName)
+        setMessage(null)
+        setError(null)
+        setClonesError(null)
+        try {
+            const r = await fetch(`${base}/clones/${encodeURIComponent(targetName)}/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(trimmed ? { description: trimmed } : {}),
+            })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            const res = await r.json()
+            setMessage(`Refreshed ${res.refreshed_container} using ${res.clone_subvolume}`)
+            loadClones()
+        } catch (e: any) {
+            setError(String(e?.message || e))
+        } finally {
+            setRefreshingClone(null)
+        }
+    }
+
     return (
         <div className="container">
             <div className="header">
@@ -424,6 +460,14 @@ export function App() {
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: 8 }}>
+                                    <button
+                                        className="btn"
+                                        onClick={() => onRefreshClone(c)}
+                                        disabled={refreshingClone === targetName || !c.has_container}
+                                        title={c.has_container ? '컨테이너를 최신 데이터로 교체' : '컨테이너가 없어 최신화할 수 없습니다.'}
+                                    >
+                                        {refreshingClone === targetName ? 'Refreshing...' : 'Refresh'}
+                                    </button>
                                     <button className="btn btn-danger" onClick={() => onDelete(targetName)} disabled={deletingBusy}>Delete</button>
                                 </div>
                             </li>
