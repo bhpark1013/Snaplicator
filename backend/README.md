@@ -16,7 +16,7 @@ pip install -r requirements.txt
 # MAIN_DATA_DIR=replica
 
 ./run.sh
-# Open http://localhost:8000/docs
+# Open http://localhost:8888/docs
 ```
 
 ## Endpoints
@@ -28,17 +28,17 @@ pip install -r requirements.txt
 ## Quick test (curl)
 ```bash
 # Health
-curl -s http://localhost:8000/health | jq .
+curl -s http://localhost:8888/health | jq .
 
 # List snapshots
-curl -s http://localhost:8000/snapshots | jq .
+curl -s http://localhost:8888/snapshots | jq .
 
 # Create snapshot
-curl -s -X POST http://localhost:8000/snapshots | jq .
+curl -s -X POST http://localhost:8888/snapshots | jq .
 
 # Create clone from a snapshot (example name)
 # Required .env: CONTAINER_NAME, NETWORK_NAME, HOST_PORT, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
-curl -s -X POST http://localhost:8000/snapshots/replica-snapshot-20250921-041339/clone | jq .
+curl -s -X POST http://localhost:8888/snapshots/replica-snapshot-20250921-041339/clone | jq .
 ```
 
 ## Notes

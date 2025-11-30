@@ -20,9 +20,6 @@ interface CloneItem {
     is_running: boolean
     container_started_at: string | null
     description?: string | null
-    usage_bytes?: number | null
-    fs_used_bytes?: number | null
-    fs_size_bytes?: number | null
 }
 
 
@@ -47,8 +44,13 @@ interface ReplicationCheckResult {
     subscriber: ReplicationCheckSide
 }
 
+interface FsUsageSummary {
+    fs_used_bytes?: number | null
+    fs_size_bytes?: number | null
+    calculated_at?: string | null
+}
+
 export function App() {
-    const [health, setHealth] = useState<string>('unknown')
     const [items, setItems] = useState<SnapshotItem[]>([])
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -75,6 +77,7 @@ export function App() {
     const [mainCloneDesc, setMainCloneDesc] = useState('')
     const [mainCloning, setMainCloning] = useState(false)
     const [refreshingClone, setRefreshingClone] = useState<string | null>(null)
+    const [fsUsage, setFsUsage] = useState<FsUsageSummary | null>(null)
 
     const api = import.meta.env.VITE_API_BASE_URL || ''
     const base = api ? api : '/api'
@@ -91,15 +94,11 @@ export function App() {
         return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`
     }
 
-    const loadHealth = async () => {
-        try {
-            const r = await fetch(`${base}/health`)
-            if (!r.ok) throw new Error(`${r.status}`)
-            const data = await r.json()
-            setHealth(data?.status || 'ok')
-        } catch {
-            setHealth('down')
-        }
+    const loadFsUsage = () => {
+        fetch(`${base}/clones/usage/fs`)
+            .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+            .then((data: FsUsageSummary) => setFsUsage(data))
+            .catch(() => setFsUsage(null))
     }
 
     const loadSnapshots = () => {
@@ -153,10 +152,10 @@ export function App() {
     }
 
     useEffect(() => {
-        loadHealth()
         loadClones()
         loadSnapshots()
         loadCopy()
+        loadFsUsage()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
@@ -297,12 +296,8 @@ export function App() {
             return
         }
 
-        const defaultDesc = clone.description || ''
-        const input = window.prompt('새 description을 입력하세요. 변경하지 않으려면 그대로 두고 OK를 누르세요.', defaultDesc)
-        if (input === null) {
-            return
-        }
-        const trimmed = input.trim()
+        const ok = window.confirm(`${targetName} 클론을 최신화할까요?`)
+        if (!ok) return
 
         setRefreshingClone(targetName)
         setMessage(null)
@@ -312,7 +307,7 @@ export function App() {
             const r = await fetch(`${base}/clones/${encodeURIComponent(targetName)}/refresh`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(trimmed ? { description: trimmed } : {}),
+                body: JSON.stringify({}),
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
@@ -329,37 +324,66 @@ export function App() {
         <div className="container">
             <div className="header">
                 <div className="title">Snaplicator</div>
-                <div className="row">
-                    <button className="btn" onClick={loadHealth}>Health</button>
-                    <button className="btn" onClick={loadClones} disabled={clonesLoading}>{clonesLoading ? 'Refreshing...' : 'Refresh Clones'}</button>
-                    <button className="btn" onClick={loadSnapshots} disabled={loading}>{loading ? 'Refreshing...' : 'Refresh Snapshots'}</button>
-                </div>
             </div>
 
-            <section className="card" style={{ marginTop: 16 }}>
-                <h2>Initial Copy</h2>
-                {copy && (
-                    <div style={{ marginTop: 8 }}>
-                        <div>Initial copy status: <strong>{copy.status}</strong></div>
-                        {copy.total_tables > 0 && (
-                            <div style={{ marginTop: 4 }}>
-                                <div>{copy.finished_tables} / {copy.total_tables} tables ({copy.percent.toFixed(1)}%)</div>
-                                {copy.active && copy.active.length > 0 && (
-                                    <ul style={{ marginTop: 4 }}>
-                                        {copy.active.slice(0, 3).map((a, i) => (
-                                            <li key={i} style={{ opacity: 0.8 }}>
-                                                {a.schema}.{a.table}
-                                                {typeof a.percent === 'number' ? ` – ${a.percent.toFixed(1)}%` : ''}
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) minmax(240px, 320px)', gap: 16, marginTop: 16, alignItems: 'stretch' }}>
+                <section className="card">
+                    <h2>Initial Copy</h2>
+                    {copy ? (
+                        <div style={{ marginTop: 8 }}>
+                            <div>Initial copy status: <strong>{copy.status}</strong></div>
+                            {copy.total_tables > 0 && (
+                                <div style={{ marginTop: 4 }}>
+                                    <div>{copy.finished_tables} / {copy.total_tables} tables ({copy.percent.toFixed(1)}%)</div>
+                                    {copy.active && copy.active.length > 0 && (
+                                        <ul style={{ marginTop: 4 }}>
+                                            {copy.active.slice(0, 3).map((a, i) => (
+                                                <li key={i} style={{ opacity: 0.8 }}>
+                                                    {a.schema}.{a.table}
+                                                    {typeof a.percent === 'number' ? ` – ${a.percent.toFixed(1)}%` : ''}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            )}
+                            {copyError && <p style={{ color: 'red' }}>{copyError}</p>}
+                        </div>
+                    ) : (
+                        <p style={{ marginTop: 8, opacity: 0.7 }}>No copy progress available.</p>
+                    )}
+                </section>
+
+                <section className="card">
+                    <h2>Btrfs Usage</h2>
+                    {fsUsage ? (
+                        <div style={{ fontSize: 13, display: 'grid', gap: 6, marginTop: 8 }}>
+                            <div>
+                                <span style={{ fontWeight: 600 }}>Used:</span>{' '}
+                                {`${formatBytes(fsUsage.fs_used_bytes)} / ${formatBytes(fsUsage.fs_size_bytes)}`}
                             </div>
-                        )}
-                        {copyError && <p style={{ color: 'red' }}>{copyError}</p>}
-                    </div>
-                )}
-            </section>
+                            {typeof fsUsage.fs_used_bytes === 'number' && typeof fsUsage.fs_size_bytes === 'number' && fsUsage.fs_size_bytes > 0 && (
+                                <div style={{ height: 6, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden', position: 'relative', marginTop: 4 }}>
+                                    <div
+                                        style={{
+                                            height: '100%',
+                                            width: `${Math.min(100, (fsUsage.fs_used_bytes / fsUsage.fs_size_bytes) * 100).toFixed(2)}%`,
+                                            background: '#3b82f6',
+                                        }}
+                                    />
+                                </div>
+                            )}
+                            {fsUsage.calculated_at && (
+                                <div style={{ opacity: 0.7 }}>
+                                    Measured {new Date(fsUsage.calculated_at).toLocaleString()}
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <p style={{ opacity: 0.7, marginTop: 8 }}>Usage unavailable.</p>
+                    )}
+                </section>
+            </div>
 
             <section className="card" style={{ marginTop: 16 }}>
                 <h2>Replication Check</h2>
@@ -429,39 +453,33 @@ export function App() {
                     {clones.length === 0 && <li style={{ opacity: 0.7 }}>No clones</li>}
                     {clones.map((c) => {
                         const targetName = c.container_name || c.name
+                        const statusLabel = c.has_container
+                            ? (c.container_status || (c.is_running ? 'running' : 'stopped'))
+                            : 'no-container'
+                        const statusColor = c.has_container
+                            ? (c.is_running ? '#22c55e' : '#9ca3af')
+                            : undefined
                         return (
                             <li key={c.path} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center' }}>
                                 <div style={{ display: 'grid', gap: 4 }}>
                                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                                         <span style={{ fontWeight: 700 }}>{c.name}</span>
-                                        {c.has_container ? (
-                                            <span className="badge" style={{ color: c.is_running ? '#22c55e' : '#9ca3af' }}>
-                                                {c.is_running ? 'running' : 'stopped'}
-                                            </span>
-                                        ) : (
-                                            <span className="badge">no-container</span>
-                                        )}
-                                        {typeof c.host_port === 'number' && (
-                                            <span className="badge">port {c.host_port}</span>
-                                        )}
-                                        {c.container_started_at && (
-                                            <span className="badge">started {new Date(c.container_started_at).toLocaleString()}</span>
-                                        )}
+                                        <span className="badge" style={statusColor ? { color: statusColor } : undefined}>
+                                            {statusLabel}
+                                        </span>
                                     </div>
                                     <div className="subtle" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                                         {c.description && <span title={c.description}>{c.description}</span>}
-                                        {c.container_status && <span>status: {c.container_status}</span>}
+                                        <span>status: {statusLabel}</span>
                                     </div>
                                     <div className="subtle" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                                        <span>size: {formatBytes(c.usage_bytes)}</span>
-                                        {typeof c.fs_used_bytes === 'number' && typeof c.fs_size_bytes === 'number' && (
-                                            <span>btrfs: {formatBytes(c.fs_used_bytes)} / {formatBytes(c.fs_size_bytes)}</span>
-                                        )}
+                                        {typeof c.host_port === 'number' && <span>port: {c.host_port}</span>}
+                                        {c.container_started_at && <span>started at: {new Date(c.container_started_at).toLocaleString()}</span>}
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: 8 }}>
-                                    <button
-                                        className="btn"
+                                    <Link className="btn" to={`/clones/${encodeURIComponent(targetName)}`}>View</Link>
+                                    <button className="btn"
                                         onClick={() => onRefreshClone(c)}
                                         disabled={refreshingClone === targetName || !c.has_container}
                                         title={c.has_container ? '컨테이너를 최신 데이터로 교체' : '컨테이너가 없어 최신화할 수 없습니다.'}

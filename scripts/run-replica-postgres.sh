@@ -38,6 +38,104 @@ _load_dotenv() {
   done < "$file"
 }
 
+_configure_fdw_schemas() {
+  local schema_csv="$1"
+  if [ -z "$schema_csv" ]; then
+    return 0
+  fi
+
+  local server_name="${FDW_SERVER_NAME:-primary_fdw_server}"
+
+  docker exec "${CONTAINER_NAME}" psql -v ON_ERROR_STOP=1 \
+    -v server_name="$server_name" \
+    -v primary_host="$PRIMARY_HOST" \
+    -v primary_db="$PRIMARY_DB" \
+    -v primary_port="$PRIMARY_PORT" \
+    -v primary_user="$PRIMARY_USER" \
+    -v primary_password="$PRIMARY_PASSWORD" \
+    -v local_user="$POSTGRES_USER" \
+    -d "$POSTGRES_DB" -U "$POSTGRES_USER" <<'SQL'
+CREATE EXTENSION IF NOT EXISTS postgres_fdw;
+
+DO $fdw$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname = :'server_name') THEN
+    EXECUTE format(
+      'ALTER SERVER %I OPTIONS (SET host %L, SET dbname %L, SET port %L)',
+      :'server_name', :'primary_host', :'primary_db', :'primary_port');
+  ELSE
+    EXECUTE format(
+      'CREATE SERVER %I FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host %L, dbname %L, port %L)',
+      :'server_name', :'primary_host', :'primary_db', :'primary_port');
+  END IF;
+END
+$fdw$;
+
+DO $fdw$
+DECLARE
+  role_oid oid;
+BEGIN
+  SELECT oid INTO role_oid FROM pg_roles WHERE rolname = :'local_user';
+  IF role_oid IS NULL THEN
+    RAISE EXCEPTION 'role % not found', :'local_user';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_user_mapping
+    WHERE srvname = :'server_name' AND umuser = role_oid
+  ) THEN
+    EXECUTE format(
+      'ALTER USER MAPPING FOR %I SERVER %I OPTIONS (SET user %L, SET password %L)',
+      :'local_user', :'server_name', :'primary_user', :'primary_password');
+  ELSE
+    EXECUTE format(
+      'CREATE USER MAPPING FOR %I SERVER %I OPTIONS (user %L, password %L)',
+      :'local_user', :'server_name', :'primary_user', :'primary_password');
+  END IF;
+END
+$fdw$;
+SQL
+
+  IFS=',' read -r -a schema_array <<< "$schema_csv"
+  local schema
+  for raw_schema in "${schema_array[@]}"; do
+    schema="$(printf '%s' "$raw_schema" | xargs)"
+    if [ -z "$schema" ]; then
+      continue
+    fi
+
+    echo "[FDW] importing schema '${schema}' from primary"
+    docker exec "${CONTAINER_NAME}" psql -v ON_ERROR_STOP=1 \
+      -v server_name="$server_name" \
+      -v schema="$schema" \
+      -d "$POSTGRES_DB" -U "$POSTGRES_USER" <<'SQL'
+CREATE SCHEMA IF NOT EXISTS :"schema";
+
+DO $fdw$
+DECLARE
+  rec record;
+BEGIN
+  FOR rec IN
+    SELECT format('%I.%I', n.nspname, c.relname) AS fqname
+    FROM pg_foreign_table ft
+      JOIN pg_class c ON c.oid = ft.ftrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = :'schema'
+  LOOP
+    EXECUTE 'DROP FOREIGN TABLE IF EXISTS ' || rec.fqname || ' CASCADE';
+  END LOOP;
+END
+$fdw$;
+
+IMPORT FOREIGN SCHEMA :"schema"
+  FROM SERVER :"server_name"
+  INTO :"schema"
+  OPTIONS (import_collate 'false', import_default 'false');
+SQL
+  done
+}
+
 if [ -f "$ENV_FILE" ]; then
   _load_dotenv "$ENV_FILE"
   echo "Loaded config from $ENV_FILE"
@@ -443,6 +541,10 @@ for i in {1..60}; do
   else
     if docker exec "${CONTAINER_NAME}" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
       echo "Replica ready on port ${HOST_PORT}"
+      if [ -n "${FDW_SCHEMAS:-}" ]; then
+        echo "[FDW] configuring schemas: ${FDW_SCHEMAS}"
+        _configure_fdw_schemas "${FDW_SCHEMAS}"
+      fi
       # Post-init replication job (non-fatal) - run outside initdb.d
       if [ -d "$BASE_DIR/replication/replica-init" ]; then
         echo "[post-init] starting replication init job (idempotent, with retries)"

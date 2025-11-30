@@ -9,6 +9,8 @@ from typing import Optional, Dict, List, Tuple
 import time
 import json
 
+from .btrfs import write_snaplicator_metadata, read_snaplicator_metadata, get_clone_detail
+
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True, text=True, capture_output=True)
@@ -251,6 +253,7 @@ def _launch_clone_container(
     host_port_hint: Optional[int],
     description: Optional[str],
     remove_existing: bool = True,
+    run_anonymize: bool = True,
 ) -> Tuple[int, str, bool, Optional[str]]:
     container_pgdata = _pgdata_env_for_clone_path(clone_path)
 
@@ -349,7 +352,7 @@ def _launch_clone_container(
 
     repo_root = str(Path(__file__).resolve().parents[3])
     anon_file = Path(repo_root) / "configs/anonymize.sql"
-    if anon_file.exists():
+    if run_anonymize and anon_file.exists():
         _timing_log(f"[CLONE_TIMING] anonymize_start file={anon_file}")
         ta0 = time.monotonic()
         copy_ok = False
@@ -439,6 +442,7 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
         container_name=container_name,
         host_port_hint=None,
         description=opts.description,
+        run_anonymize=False,
     )
 
     return {
@@ -567,20 +571,13 @@ def refresh_clone_in_place(
     if not host_path:
         raise RuntimeError(f"Could not determine clone subvolume path for container {target_container}")
 
+    existing_meta = read_snaplicator_metadata(host_path)
+
     description = description_override
     if description is None:
-        meta_path_old = host_path / ".snaplicator.json"
-        try:
-            meta_raw = subprocess.run(
-                ["sudo", "-n", "cat", str(meta_path_old)],
-                check=True,
-                text=True,
-                capture_output=True,
-            ).stdout
-            meta_old = json.loads(meta_raw)
-            description = meta_old.get("description")
-        except Exception:
-            description = None
+        desc_val = existing_meta.get("description") if isinstance(existing_meta, dict) else None
+        if isinstance(desc_val, str) and desc_val.strip():
+            description = desc_val.strip()
 
     # Best-effort: force checkpoint on source main container before snapshot
     try:
@@ -608,7 +605,8 @@ def refresh_clone_in_place(
         _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(temp_path)])
         _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(temp_path)])
 
-        meta = {
+        meta = dict(existing_meta or {})
+        meta.update({
             "name": host_path.name,
             "path": str(host_path),
             "source_main_path": str(src_main),
@@ -617,17 +615,8 @@ def refresh_clone_in_place(
             "refreshed_at": datetime.now().isoformat(),
             "created_by": "snaplicator-api",
             "description": description,
-        }
-        meta_json = json.dumps(meta, ensure_ascii=False)
-        meta_path_new = temp_path / ".snaplicator.json"
-        try:
-            _run(["sudo", "-n", "bash", "-lc", f"cat > {meta_path_new!s} <<'EOF'\n{meta_json}\nEOF\n"])
-        except subprocess.CalledProcessError:
-            pass
-        try:
-            _run(["sudo", "-n", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(temp_path)])
-        except subprocess.CalledProcessError:
-            pass
+        })
+        write_snaplicator_metadata(temp_path, meta)
 
         if host_path.exists():
             backup_path = host_path.parent / f"{host_path.name}-prev-{ts}"
@@ -681,6 +670,124 @@ def refresh_clone_in_place(
         "description": description,
         "anonymize_ran": anonymize_ran,
         "anonymize_output": anonymize_output,
+    }
+
+
+def reset_clone_to_snapshot(
+    identifier: str,
+    snapshot_name: str,
+    opts: CloneOptions,
+    description_override: Optional[str] = None,
+) -> Dict:
+    clone_detail = get_clone_detail(opts.root_data_dir, opts.main_data_dir, identifier)
+    if not clone_detail.get("has_container"):
+        raise RuntimeError("Clone does not have an active container to reset.")
+
+    container_name = clone_detail.get("container_name") or identifier
+    host_port_hint = clone_detail.get("host_port")
+    try:
+        host_port_hint = int(host_port_hint) if host_port_hint is not None else None
+    except Exception:
+        host_port_hint = None
+
+    host_path = Path(clone_detail["path"]).resolve()
+    root = Path(opts.root_data_dir).resolve()
+    snapshot_path = (root / snapshot_name).resolve()
+
+    if not str(snapshot_path).startswith(str(root)):
+        raise PermissionError(f"Snapshot path outside ROOT_DATA_DIR: {snapshot_path}")
+    if not snapshot_path.exists() or not _is_btrfs_subvolume(snapshot_path):
+        raise FileNotFoundError(f"Snapshot not found or not a subvolume: {snapshot_path}")
+
+    snapshot_meta = read_snaplicator_metadata(snapshot_path)
+
+    subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    temp_path = host_path.parent / f"{host_path.name}-reset-{ts}"
+    backup_path: Optional[Path] = None
+
+    try:
+        _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(snapshot_path), str(temp_path)])
+        uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+        _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(temp_path)])
+        _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(temp_path)])
+
+        existing_meta = clone_detail.get("metadata") or {}
+        meta = dict(existing_meta)
+        description = description_override
+        if description is None:
+            desc_candidate = meta.get("description")
+            if not desc_candidate and isinstance(snapshot_meta, dict):
+                desc_candidate = snapshot_meta.get("description")
+            if isinstance(desc_candidate, str) and desc_candidate.strip():
+                description = desc_candidate.strip()
+
+        now_iso = datetime.now().isoformat()
+        meta.update({
+            "name": host_path.name,
+            "path": str(host_path),
+            "root_data_dir": str(root),
+            "main_data_dir": opts.main_data_dir,
+            "description": description,
+            "reset_at": now_iso,
+            "reset_from_snapshot": snapshot_name,
+            "created_by": "snaplicator-api",
+        })
+        write_snaplicator_metadata(temp_path, meta)
+
+        if host_path.exists():
+            backup_path = host_path.parent / f"{host_path.name}-prev-{ts}"
+            _run(["sudo", "-n", "mv", str(host_path), str(backup_path)])
+        _run(["sudo", "-n", "mv", str(temp_path), str(host_path)])
+
+    except Exception:
+        try:
+            if temp_path.exists():
+                _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(temp_path)])
+        except subprocess.CalledProcessError:
+            pass
+        if backup_path and backup_path.exists() and not host_path.exists():
+            try:
+                _run(["sudo", "-n", "mv", str(backup_path), str(host_path)])
+            except subprocess.CalledProcessError:
+                pass
+        raise
+
+    anonymize_ran = False
+    anonymize_output = None
+    reset_success = False
+    try:
+        host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
+            clone_path=host_path,
+            opts=opts,
+            container_name=container_name,
+            host_port_hint=host_port_hint,
+            description=description,
+            remove_existing=False,
+            run_anonymize=False,
+        )
+        reset_success = True
+    finally:
+        if backup_path and backup_path.exists():
+            if reset_success:
+                try:
+                    _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(backup_path)])
+                except subprocess.CalledProcessError:
+                    pass
+            # On failure, keep backup for manual recovery
+
+    return {
+        "reset_container": container_name,
+        "host_port": host_port,
+        "clone_subvolume": str(host_path),
+        "pgdata": container_pgdata,
+        "metadata_path": str(host_path / ".snaplicator.json"),
+        "description": description,
+        "snapshot_used": snapshot_name,
+        "anonymize_ran": anonymize_ran,
+        "anonymize_output": anonymize_output,
+        "snapshot_metadata": snapshot_meta,
     }
 
 

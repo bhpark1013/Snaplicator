@@ -2,10 +2,22 @@ from __future__ import annotations
 
 import os
 import subprocess
+import logging
+import time
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime
 import json
+
+
+logger = logging.getLogger(__name__)
+if logger.level == logging.NOTSET:
+    logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("[%(levelname)s] %(asctime)s %(name)s: %(message)s"))
+    logger.addHandler(handler)
+    logger.propagate = False
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -31,37 +43,62 @@ def _is_readonly_subvolume(path: Path) -> bool:
         return False
 
 
-def _read_snapshot_description(path: Path) -> Optional[str]:
-    # 1) Try metadata file
+def read_snaplicator_metadata(path: Path) -> Dict[str, Any]:
     meta_path = path / ".snaplicator.json"
+    data: Dict[str, Any] = {}
+
+    def _load_json_text(text: str) -> Dict[str, Any]:
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+        return {}
+
     try:
         out = subprocess.run(["sudo", "-n", "cat", str(meta_path)], text=True, capture_output=True, check=True).stdout
         if out:
-            data = json.loads(out)
-            desc = data.get("description")
-            if isinstance(desc, str) and desc.strip():
-                return desc
+            data = _load_json_text(out)
     except Exception:
-        # fallback: try without sudo
         try:
             if meta_path.exists():
                 with meta_path.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    desc = data.get("description")
-                    if isinstance(desc, str) and desc.strip():
-                        return desc
+                    data = _load_json_text(f.read())
+        except Exception:
+            data = {}
+
+    if not data:
+        try:
+            out = subprocess.run(["sudo", "-n", "getfattr", "-n", "user.snaplicator", "--only-values", str(path)], text=True, capture_output=True, check=True).stdout
+            if out:
+                data = _load_json_text(out)
         except Exception:
             pass
-    # 2) Try xattr user.snaplicator
+
+    return data
+
+
+def write_snaplicator_metadata(target: Path, meta: Dict[str, Any]) -> None:
+    meta_json = json.dumps(meta, ensure_ascii=False)
+    meta_path = target / ".snaplicator.json"
     try:
-        out = subprocess.run(["sudo", "-n", "getfattr", "-n", "user.snaplicator", "--only-values", str(path)], text=True, capture_output=True, check=True).stdout
-        if out:
-            data = json.loads(out)
-            desc = data.get("description")
-            if isinstance(desc, str) and desc.strip():
-                return desc
-    except Exception:
+        _run(["sudo", "-n", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
+    except subprocess.CalledProcessError:
         pass
+    try:
+        _run(["sudo", "-n", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(target)])
+    except subprocess.CalledProcessError:
+        pass
+
+
+def _read_snapshot_description(path: Path) -> Optional[str]:
+    data = read_snaplicator_metadata(path)
+    desc = data.get("description") if isinstance(data, dict) else None
+    if isinstance(desc, str):
+        desc = desc.strip()
+        if desc:
+            return desc
     return None
 
 
@@ -166,7 +203,6 @@ def list_snapshots(root_data_dir: str, main_data_dir: str) -> List[Dict]:
     if not root.exists():
         raise FileNotFoundError(f"Root path not found: {root}")
 
-    prefix = f"{main_data_dir}-snapshot-"
     items: List[Dict] = []
 
     # Scan immediate children for snapshot naming
@@ -174,16 +210,19 @@ def list_snapshots(root_data_dir: str, main_data_dir: str) -> List[Dict]:
         if not entry.is_dir(follow_symlinks=False):
             continue
         name = entry.name
-        if not name.startswith(prefix):
-            continue
         p = Path(entry.path)
         if not _is_btrfs_subvolume(p):
             continue
+        if not _is_readonly_subvolume(p):
+            # Skip writable subvolumes; snapshots must be readonly by definition
+            continue
+        meta = read_snaplicator_metadata(p)
         items.append({
             "name": name,
             "path": str(p),
-            "readonly": _is_readonly_subvolume(p),
+            "readonly": True,
             "description": _read_snapshot_description(p),
+            "metadata": meta if isinstance(meta, dict) and meta else None,
         })
 
     # Sort by name (timestamp-friendly)
@@ -222,19 +261,9 @@ def create_snapshot(root_data_dir: str, main_data_dir: str, description: Optiona
         "created_at": datetime.now().isoformat(),
         "created_by": "snaplicator-api",
         "description": description,
+        "type": "main_snapshot",
     }
-    meta_json = json.dumps(meta, ensure_ascii=False)
-    meta_path = target / ".snaplicator.json"
-    try:
-        # Use sudo to ensure we can write even if owner is uid 999
-        _run(["sudo", "-n", "bash", "-lc", f"cat > {meta_path!s} <<'EOF'\n{meta_json}\nEOF\n"])
-    except subprocess.CalledProcessError:
-        pass
-    try:
-        # Extended attribute (may fail if user_xattr is not enabled)
-        _run(["sudo", "-n", "setfattr", "-n", "user.snaplicator", "-v", meta_json, str(target)])
-    except subprocess.CalledProcessError:
-        pass
+    write_snaplicator_metadata(target, meta)
 
     # 3) Toggle snapshot to readonly
     try:
@@ -247,7 +276,7 @@ def create_snapshot(root_data_dir: str, main_data_dir: str, description: Optiona
         "name": target.name,
         "path": str(target),
         "readonly": True,
-        "metadata_path": str(meta_path),
+        "metadata_path": str(target / ".snaplicator.json"),
     }
 
 
@@ -259,9 +288,6 @@ def delete_snapshot(root_data_dir: str, main_data_dir: str, snapshot_name: str) 
         raise PermissionError(f"Refusing to delete outside ROOT_DATA_DIR. path={target} root={root}")
     if not target.exists() or not target.is_dir():
         raise FileNotFoundError(f"Snapshot path not found: {target}")
-    prefix = f"{main_data_dir}-snapshot-"
-    if not snapshot_name.startswith(prefix):
-        raise PermissionError(f"Name does not match snapshot prefix: expected '{prefix}*', got '{snapshot_name}'")
     if not _is_btrfs_subvolume(target):
         # Include fstype for diagnostics
         try:
@@ -269,6 +295,8 @@ def delete_snapshot(root_data_dir: str, main_data_dir: str, snapshot_name: str) 
         except subprocess.CalledProcessError:
             fstype = "unknown"
         raise RuntimeError(f"Target is not a btrfs subvolume: {target} (fstype={fstype})")
+    if not _is_readonly_subvolume(target):
+        raise PermissionError(f"Target subvolume must be readonly to delete via API: {target}")
     # If mounted separately, refuse
     try:
         mnt = subprocess.run(["findmnt", "-T", str(target)], text=True, capture_output=True, check=True).stdout
@@ -290,6 +318,13 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
     """List clones based on btrfs subvolumes only (name starts with {MAIN_DATA_DIR}-clone-),
     and annotate if a docker container is mounting each clone path.
     """
+    overall_start = time.perf_counter()
+    timing_summary: Dict[str, Any] = {}
+    clone_timings: List[Dict[str, Any]] = []
+    docker_timings: List[Dict[str, Any]] = []
+    skipped_snapshot_like = 0
+    skipped_readonly = 0
+
     root = Path(root_data_dir)
     if not root.exists():
         raise FileNotFoundError(f"Root path not found: {root}")
@@ -297,20 +332,43 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
     prefix = f"{main_data_dir}-clone-"
     clones: List[Dict] = []
 
-    # Filesystem totals (same for all clones under root)
-    fs_size_b, fs_used_b = _get_fs_totals_bytes(root)
+    scan_start = time.perf_counter()
+    entries = [entry for entry in os.scandir(root) if entry.is_dir(follow_symlinks=False)]
+    timing_summary["scandir_seconds"] = time.perf_counter() - scan_start
 
-    for entry in os.scandir(root):
-        if not entry.is_dir(follow_symlinks=False):
-            continue
+    for entry in entries:
         name = entry.name
         if not name.startswith(prefix):
             continue
+        if "-snapshot-" in name:
+            skipped_snapshot_like += 1
+            continue
         p = Path(entry.path)
-        if not _is_btrfs_subvolume(p):
+        subvol_check_start = time.perf_counter()
+        is_subvol = _is_btrfs_subvolume(p)
+        subvol_check_seconds = time.perf_counter() - subvol_check_start
+        if not is_subvol:
             # skip non-btrfs entries
             continue
-        usage_b = _get_subvolume_usage_bytes(p)
+        readonly_check_start = time.perf_counter()
+        is_readonly = _is_readonly_subvolume(p)
+        readonly_check_seconds = time.perf_counter() - readonly_check_start
+        if is_readonly:
+            skipped_readonly += 1
+            continue
+        desc_start = time.perf_counter()
+        description = _read_snapshot_description(p)
+        desc_seconds = time.perf_counter() - desc_start
+        metadata_seconds = subvol_check_seconds + readonly_check_seconds + desc_seconds
+
+        clone_timings.append({
+            "clone": name,
+            "subvol_check_seconds": subvol_check_seconds,
+            "readonly_check_seconds": readonly_check_seconds,
+            "description_read_seconds": desc_seconds,
+            "metadata_seconds": metadata_seconds,
+        })
+
         clones.append({
             "name": name,
             "path": str(p),
@@ -321,28 +379,31 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
             "container_status": None,
             "container_ports": None,
             "container_started_at": None,
-            "usage_bytes": usage_b,
-            "fs_size_bytes": fs_size_b,
-            "fs_used_bytes": fs_used_b,
-            "description": _read_snapshot_description(p),
+            "description": description,
         })
 
     # Build map via docker inspect for accurate host Source matching
+    docker_ps_start = time.perf_counter()
     try:
         ids_out = subprocess.run(["docker", "ps", "-aq"], check=True, text=True, capture_output=True).stdout
         container_ids = [line.strip() for line in ids_out.splitlines() if line.strip()]
     except subprocess.CalledProcessError:
         container_ids = []
+    docker_ps_seconds = time.perf_counter() - docker_ps_start
+    timing_summary["docker_ps_seconds"] = docker_ps_seconds
 
     container_infos = []
     for cid in container_ids:
         try:
+            inspect_start = time.perf_counter()
             fmt = "{{.Name}}\t{{json .Mounts}}\t{{.State.Status}}\t{{.State.StartedAt}}\t{{json .NetworkSettings.Ports}}"
             ins = subprocess.run(["docker", "inspect", "--format", fmt, cid], check=True, text=True, capture_output=True).stdout.strip()
             if not ins:
+                docker_timings.append({"container_id": cid, "inspect_seconds": time.perf_counter() - inspect_start, "skipped": True})
                 continue
             parts = ins.split("\t")
             if len(parts) < 5:
+                docker_timings.append({"container_id": cid, "inspect_seconds": time.perf_counter() - inspect_start, "skipped": True})
                 continue
             name_raw, mounts_json, state_status, started_at, ports_json = parts
             cname = name_raw.lstrip('/')
@@ -404,7 +465,13 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
                 "host_port": host_port_int,
                 "started_at": started_at,
             })
+            docker_timings.append({
+                "container_id": cid,
+                "inspect_seconds": time.perf_counter() - inspect_start,
+                "matched_clone": bool(host_src),
+            })
         except subprocess.CalledProcessError:
+            docker_timings.append({"container_id": cid, "inspect_seconds": time.perf_counter() - inspect_start, "error": True})
             continue
 
     # Associate containers to clones by exact host path match
@@ -426,4 +493,198 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
             c["host_port"] = info.get("host_port")
 
     clones.sort(key=lambda x: x["name"])
-    return clones 
+
+    total_seconds = time.perf_counter() - overall_start
+    timing_summary["total_seconds"] = total_seconds
+    timing_summary["clone_count"] = len(clones)
+    timing_summary["containers_found"] = len(container_infos)
+    timing_summary["docker_inspect_seconds_total"] = sum(item["inspect_seconds"] for item in docker_timings)
+    timing_summary["clone_metadata_seconds_total"] = sum(item["metadata_seconds"] for item in clone_timings)
+    timing_summary["skipped_snapshot_like"] = skipped_snapshot_like
+    timing_summary["skipped_readonly"] = skipped_readonly
+
+    # Sort clone timings by metadata collection duration desc for readability
+    clone_timings_sorted = sorted(clone_timings, key=lambda x: x["metadata_seconds"], reverse=True)
+    top_clone_timings = clone_timings_sorted[:5]
+    docker_timings_sorted = sorted(docker_timings, key=lambda x: x["inspect_seconds"], reverse=True)[:5]
+    logger.info(
+        "list_clone_subvolumes_with_containers timings: summary=%s top_clone_timings=%s top_docker_timings=%s",
+        json.dumps(timing_summary, ensure_ascii=False, default=str),
+        json.dumps(top_clone_timings, ensure_ascii=False, default=str),
+        json.dumps(docker_timings_sorted, ensure_ascii=False, default=str),
+    )
+
+    return clones
+
+
+def get_clone_detail(root_data_dir: str, main_data_dir: str, identifier: str) -> Dict[str, Any]:
+    clones = list_clone_subvolumes_with_containers(root_data_dir, main_data_dir)
+    for clone in clones:
+        name = clone.get("name")
+        container_name = clone.get("container_name")
+        if identifier == name or (container_name and identifier == container_name):
+            detail = dict(clone)
+            path = Path(detail["path"])
+            meta = read_snaplicator_metadata(path)
+            detail["metadata"] = meta
+            if isinstance(meta.get("description"), str) and meta["description"].strip():
+                detail["description"] = meta["description"].strip()
+            detail["readonly"] = _is_readonly_subvolume(path)
+            detail["created_at"] = meta.get("created_at")
+            detail["refreshed_at"] = meta.get("refreshed_at")
+            detail["reset_at"] = meta.get("reset_at")
+            detail["reset_from_snapshot"] = meta.get("reset_from_snapshot")
+            detail["exists"] = path.exists()
+            return detail
+    raise FileNotFoundError(f"Clone not found for identifier: {identifier}")
+
+
+def get_clone_usage_summary(root_data_dir: str, main_data_dir: str, identifier: str) -> Dict[str, Any]:
+    detail = get_clone_detail(root_data_dir, main_data_dir, identifier)
+    clone_path = Path(detail["path"])
+    if not clone_path.exists() or not _is_btrfs_subvolume(clone_path):
+        raise FileNotFoundError(f"Clone path not found or not a btrfs subvolume: {clone_path}")
+
+    usage_b = _get_subvolume_usage_bytes(clone_path)
+    fs_size_b, fs_used_b = _get_fs_totals_bytes(Path(root_data_dir))
+    return {
+        "clone": detail.get("name"),
+        "path": detail.get("path"),
+        "container_name": detail.get("container_name"),
+        "usage_bytes": usage_b,
+        "fs_size_bytes": fs_size_b,
+        "fs_used_bytes": fs_used_b,
+        "calculated_at": datetime.now().isoformat(),
+    }
+
+
+def get_fs_usage_summary(root_data_dir: str) -> Dict[str, Any]:
+    root = Path(root_data_dir)
+    if not root.exists():
+        raise FileNotFoundError(f"Root path not found: {root}")
+    size_b, used_b = _get_fs_totals_bytes(root)
+    return {
+        "root_data_dir": str(root),
+        "fs_size_bytes": size_b,
+        "fs_used_bytes": used_b,
+        "calculated_at": datetime.now().isoformat(),
+    }
+
+
+def create_clone_snapshot(
+    root_data_dir: str,
+    main_data_dir: str,
+    identifier: str,
+    description: Optional[str] = None,
+) -> Dict[str, Any]:
+    detail = get_clone_detail(root_data_dir, main_data_dir, identifier)
+    clone_path = Path(detail["path"])
+    if not clone_path.exists() or not _is_btrfs_subvolume(clone_path):
+        raise FileNotFoundError(f"Clone path not found or not a subvolume: {clone_path}")
+
+    root = Path(root_data_dir)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    snapshot_name = f"{detail['name']}-snapshot-{ts}"
+    target = root / snapshot_name
+    if target.exists():
+        raise FileExistsError(f"Target snapshot already exists: {target}")
+
+    _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(clone_path), str(target)])
+
+    meta = {
+        "name": target.name,
+        "path": str(target),
+        "root_data_dir": str(root),
+        "main_data_dir": main_data_dir,
+        "source_clone_name": detail.get("name"),
+        "source_clone_path": detail.get("path"),
+        "source_container_name": detail.get("container_name"),
+        "created_at": datetime.now().isoformat(),
+        "created_by": "snaplicator-api",
+        "description": description,
+        "type": "clone_snapshot",
+    }
+    write_snaplicator_metadata(target, meta)
+
+    try:
+        _run(["sudo", "-n", "btrfs", "property", "set", "-ts", str(target), "ro", "true"])
+    except subprocess.CalledProcessError:
+        _run(["sudo", "-n", "btrfs", "property", "set", str(target), "ro", "true"])
+
+    return {
+        "name": target.name,
+        "path": str(target),
+        "readonly": True,
+        "metadata": meta,
+    }
+
+
+def list_snapshots_for_clone(root_data_dir: str, main_data_dir: str, identifier: str) -> List[Dict[str, Any]]:
+    detail = get_clone_detail(root_data_dir, main_data_dir, identifier)
+    root = Path(root_data_dir)
+    snapshots: List[Dict[str, Any]] = []
+
+    overall_start = time.perf_counter()
+    scan_start = time.perf_counter()
+    entries = [entry for entry in os.scandir(root) if entry.is_dir(follow_symlinks=False)]
+    scan_seconds = time.perf_counter() - scan_start
+
+    timings: List[Dict[str, Any]] = []
+    skipped_non_btrfs = 0
+    skipped_missing_meta = 0
+    skipped_unmatched = 0
+
+    for entry in entries:
+        per_start = time.perf_counter()
+        path = Path(entry.path)
+        if not _is_btrfs_subvolume(path):
+            skipped_non_btrfs += 1
+            continue
+        readonly_start = time.perf_counter()
+        readonly = _is_readonly_subvolume(path)
+        readonly_seconds = time.perf_counter() - readonly_start
+        meta_start = time.perf_counter()
+        meta = read_snaplicator_metadata(path)
+        meta_seconds = time.perf_counter() - meta_start
+        if not isinstance(meta, dict) or not meta:
+            skipped_missing_meta += 1
+            continue
+        source_path = meta.get("source_clone_path")
+        source_name = meta.get("source_clone_name")
+        if source_path == detail.get("path") or source_name == detail.get("name"):
+            snapshots.append({
+                "name": entry.name,
+                "path": str(path),
+                "readonly": readonly,
+                "description": meta.get("description"),
+                "metadata": meta,
+            })
+            timings.append({
+                "name": entry.name,
+                "total_seconds": time.perf_counter() - per_start,
+                "readonly_seconds": readonly_seconds,
+                "meta_seconds": meta_seconds,
+            })
+        else:
+            skipped_unmatched += 1
+
+    total_seconds = time.perf_counter() - overall_start
+    if logger.isEnabledFor(logging.INFO):
+        top_snapshots = sorted(timings, key=lambda x: x["total_seconds"], reverse=True)[:5]
+        logger.info(
+            "list_snapshots_for_clone timings: summary=%s top_entries=%s",
+            json.dumps({
+                "clone": detail.get("name"),
+                "total_seconds": total_seconds,
+                "scan_seconds": scan_seconds,
+                "entries": len(entries),
+                "matched": len(snapshots),
+                "skipped_non_btrfs": skipped_non_btrfs,
+                "skipped_missing_meta": skipped_missing_meta,
+                "skipped_unmatched": skipped_unmatched,
+            }, ensure_ascii=False, default=str),
+            json.dumps(top_snapshots, ensure_ascii=False, default=str),
+        )
+
+    snapshots.sort(key=lambda x: x["name"])
+    return snapshots 

@@ -10,5 +10,5 @@ REQ_FILE="$SCRIPT_DIR/requirements.txt"
 python3 -m pip install -r "$REQ_FILE"
 
 # Run server from backend dir so 'app' module is importable
-UVICORN_CMD="uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+UVICORN_CMD="uvicorn app.main:app --host 0.0.0.0 --port 8888 --reload"
 exec $UVICORN_CMD 
