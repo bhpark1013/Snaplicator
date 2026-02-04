@@ -10,12 +10,13 @@ from ...services.btrfs import (
 	get_clone_usage_summary,
 	get_fs_usage_summary,
 )
-from ...services.docker_pg import clone_from_main_and_run, CloneOptions, refresh_clone_in_place, reset_clone_to_snapshot
+from ...services.docker_pg import clone_from_main_and_run, CloneOptions, refresh_clone_in_place, reset_clone_to_snapshot, is_port_in_use
 
 router = APIRouter()
 
 class CreateCloneBody(BaseModel):
 	description: str | None = None
+	port: int | None = None
 
 
 class CloneSnapshotBody(BaseModel):
@@ -48,6 +49,12 @@ def create_clone_from_main(body: CreateCloneBody | None = None):
 		if any(v in (None, "") for v in required):
 			raise HTTPException(status_code=400, detail="Missing required settings in environment for clone-from-main")
 
+		# Validate port if specified
+		specified_port = body.port if body else None
+		if specified_port is not None:
+			if is_port_in_use(specified_port):
+				raise HTTPException(status_code=400, detail=f"Port {specified_port} is already in use")
+
 		opts = CloneOptions(
 			root_data_dir=settings.root_data_dir,
 			main_data_dir=settings.main_data_dir,
@@ -61,7 +68,7 @@ def create_clone_from_main(body: CreateCloneBody | None = None):
 			postgres_image=settings.postgres_image,
 			description=(body.description if body else None),
 		)
-		return clone_from_main_and_run(opts)
+		return clone_from_main_and_run(opts, host_port_override=specified_port)
 	except HTTPException:
 		raise
 	except FileNotFoundError as e:

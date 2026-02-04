@@ -75,6 +75,7 @@ export function App() {
 
     const [snapshotDesc, setSnapshotDesc] = useState('')
     const [mainCloneDesc, setMainCloneDesc] = useState('')
+    const [mainClonePort, setMainClonePort] = useState('')
     const [mainCloning, setMainCloning] = useState(false)
     const [refreshingClone, setRefreshingClone] = useState<string | null>(null)
     const [fsUsage, setFsUsage] = useState<FsUsageSummary | null>(null)
@@ -234,15 +235,17 @@ export function App() {
         setClonesError(null)
         setError(null)
         try {
+            const portNum = mainClonePort.trim() ? parseInt(mainClonePort.trim(), 10) : undefined
             const r = await fetch(`${base}/clones`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description: trimmedDesc }),
+                body: JSON.stringify({ description: trimmedDesc, port: portNum }),
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
             setMessage(`Cloned from main: ${res.clone_subvolume} -> container ${res.container_name} (port ${res.host_port})`)
             setMainCloneDesc('')
+            setMainClonePort('')
             loadClones()
         } catch (e: any) {
             setError(String(e?.message || e))
@@ -443,6 +446,12 @@ export function App() {
                         value={mainCloneDesc}
                         onChange={(e) => setMainCloneDesc(e.target.value)}
                         placeholder="Clone from main: description (required)"
+                    />
+                    <input className="input"
+                        value={mainClonePort}
+                        onChange={(e) => setMainClonePort(e.target.value)}
+                        placeholder="Port (optional)"
+                        style={{ width: 100 }}
                     />
                     <button className="btn" onClick={onCloneFromMain} disabled={mainCloning || !mainCloneDesc.trim()}>
                         {mainCloning ? 'Cloning...' : 'Clone from Main'}

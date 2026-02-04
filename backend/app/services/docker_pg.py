@@ -90,6 +90,14 @@ def _find_free_port(start_port: int, attempts: int = 1000) -> int:
     raise RuntimeError(f"Failed to find a free port starting from {start_port}")
 
 
+def is_port_in_use(port: int) -> bool:
+    """Check if a port is currently in use."""
+    try:
+        out = subprocess.run(["ss", "-ltn"], text=True, capture_output=True, check=True).stdout
+        return f":{port} " in out
+    except Exception:
+        return False
+
 def _find_container_mounting_path(host_path: Path) -> Optional[str]:
     """Return the name of a running container that mounts host_path at /var/lib/postgresql/data*.
 
@@ -457,7 +465,7 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     }
 
 
-def clone_from_main_and_run(opts: CloneOptions) -> Dict:
+def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int] = None) -> Dict:
     root = Path(opts.root_data_dir)
     src_main = root / opts.main_data_dir
     if not src_main.exists() or not _is_btrfs_subvolume(src_main):
@@ -511,7 +519,7 @@ def clone_from_main_and_run(opts: CloneOptions) -> Dict:
         clone_path=clone_path,
         opts=opts,
         container_name=container_name,
-        host_port_hint=None,
+        host_port_hint=host_port_override,
         description=opts.description,
     )
 
