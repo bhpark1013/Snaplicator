@@ -80,6 +80,13 @@ export function App() {
     const [refreshingClone, setRefreshingClone] = useState<string | null>(null)
     const [fsUsage, setFsUsage] = useState<FsUsageSummary | null>(null)
 
+    const [subLogs, setSubLogs] = useState<{ lines: string[]; error_count: number; has_errors: boolean; total_matched: number; container_name: string; filters: { include: string[]; exclude: string[]; tail: number } } | null>(null)
+    const [subLogsLoading, setSubLogsLoading] = useState(false)
+    const [subLogsError, setSubLogsError] = useState<string | null>(null)
+
+    const [subStatus, setSubStatus] = useState<{ status: string; subscriptions: Array<{ name: string; pid: number | null; worker_running: boolean; received_lsn: string | null; latest_end_lsn: string | null; latest_end_time: string | null }> } | null>(null)
+
+
     const api = import.meta.env.VITE_API_BASE_URL || ''
     const base = api ? api : '/api'
 
@@ -93,6 +100,26 @@ export function App() {
             i++
         }
         return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`
+    }
+
+    const loadSubStatus = () => {
+        fetch(`${base}/replication/subscription-status`)
+            .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+            .then((data) => setSubStatus(data))
+            .catch(() => setSubStatus(null))
+    }
+
+    const loadSubLogs = () => {
+        setSubLogsLoading(true)
+        setSubLogsError(null)
+        fetch(`${base}/replication/logs?tail=500`)
+            .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+            .then((data) => setSubLogs(data))
+            .catch(async (e) => {
+                const text = e?.status ? `${e.status} ${await e.text()}` : String(e)
+                setSubLogsError(text)
+            })
+            .finally(() => setSubLogsLoading(false))
     }
 
     const loadFsUsage = () => {
@@ -157,7 +184,18 @@ export function App() {
         loadSnapshots()
         loadCopy()
         loadFsUsage()
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        loadSubLogs()
+        loadSubStatus()
+        // eslint-disable-next-line react-hooks-exhaustive-deps
+    }, [])
+
+    // Auto refresh subscription status and logs every 30 seconds
+    useEffect(() => {
+        const id = setInterval(() => {
+            loadSubLogs()
+            loadSubStatus()
+        }, 30000)
+        return () => clearInterval(id)
     }, [])
 
     // Auto refresh copy progress every 5 seconds
@@ -387,6 +425,80 @@ export function App() {
                     )}
                 </section>
             </div>
+
+            <section className="card" style={{ marginTop: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <h2>Subscription Status</h2>
+                    {subStatus && (
+                        <span style={{
+                            display: 'inline-block',
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: '#fff',
+                            background: subStatus.status === 'ok' ? '#22c55e' : '#ef4444',
+                        }}>
+                            {subStatus.status === 'ok' ? 'DB subscription 정상동작' : 'subscription down'}
+                        </span>
+                    )}
+                    {subLogs && subLogs.has_errors && subStatus?.status === 'ok' && (
+                        <span style={{
+                            display: 'inline-block',
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: '#fff',
+                            background: '#f59e0b',
+                        }}>
+                            resolved (past errors in log)
+                        </span>
+                    )}
+                </div>
+
+                {subStatus && subStatus.subscriptions.length > 0 && (
+                    <div style={{ marginTop: 8, fontSize: 13, display: 'grid', gap: 4 }}>
+                        {subStatus.subscriptions.map((s) => (
+                            <div key={s.name} style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                                <span style={{ fontWeight: 600 }}>{s.name}</span>
+                                <span>worker: {s.worker_running ? `running (pid ${s.pid})` : 'stopped'}</span>
+                                {s.latest_end_time && <span>last sync: {new Date(s.latest_end_time).toLocaleString()}</span>}
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                <div className="row" style={{ margin: '8px 0' }}>
+                    <button className="btn" onClick={() => { loadSubLogs(); loadSubStatus() }} disabled={subLogsLoading}>
+                        {subLogsLoading ? 'Loading...' : 'Refresh'}
+                    </button>
+                    {subLogs && <span style={{ fontSize: 12, opacity: 0.6 }}>{subLogs.total_matched} matched lines (deduped to {subLogs.lines.length})</span>}
+                </div>
+                {subLogsError && <p style={{ color: 'red' }}>{subLogsError}</p>}
+                {subLogs && subLogs.lines.length > 0 && (
+                    <pre style={{ maxHeight: 300, overflow: 'auto', fontSize: 12, lineHeight: 1.5 }}>
+                        {subLogs.lines.map((line, i) => {
+                            const isError = /\b(ERROR|FATAL)\b/.test(line)
+                            return (
+                                <div key={i} style={isError ? { color: '#ef4444', fontWeight: 600 } : undefined}>
+                                    {line}
+                                </div>
+                            )
+                        })}
+                    </pre>
+                )}
+                {subLogs && subLogs.lines.length === 0 && (
+                    <p style={{ opacity: 0.7 }}>No replication-related log lines found.</p>
+                )}
+                {subLogs?.filters && (
+                    <div style={{ marginTop: 8, fontSize: 11, opacity: 0.5, lineHeight: 1.6 }}>
+                        <div>include: {subLogs.filters.include.map((f: string) => `"${f}"`).join(', ')}</div>
+                        <div>exclude: {subLogs.filters.exclude.map((f: string) => `"${f}"`).join(', ')}</div>
+                        <div>source: docker logs --tail {subLogs.filters.tail} {subLogs.container_name}</div>
+                    </div>
+                )}
+            </section>
 
             <section className="card" style={{ marginTop: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2>Replication Check</h2><Link to="/replication" className="btn" style={{ fontSize: 13, padding: "6px 12px" }}>Manage Tables</Link></div>

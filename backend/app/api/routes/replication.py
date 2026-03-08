@@ -279,3 +279,132 @@ def post_trigger_install():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to install trigger: {e}")
+
+
+import re
+import subprocess
+from fastapi import Query
+
+
+SUBSCRIPTION_LOG_FILTERS = [
+    "logical replication",
+    "subscription",
+    "ERROR",
+    "FATAL",
+]
+
+SUBSCRIPTION_LOG_EXCLUDES = [
+    'background worker "logical replication worker"',
+]
+
+
+@router.get("/subscription-status")
+def get_subscription_status():
+    """Check real-time subscription status via pg_stat_subscription."""
+    try:
+        if not settings.container_name or not settings.postgres_user or not settings.postgres_db:
+            raise HTTPException(status_code=400, detail="Missing required settings")
+
+        cmd = [
+            "docker", "exec", settings.container_name,
+            "psql", "-U", settings.postgres_user, "-d", settings.postgres_db,
+            "-t", "-A", "-F", "|",
+            "-c", "SELECT subname, pid, received_lsn, latest_end_lsn, latest_end_time FROM pg_stat_subscription;",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        raw = (proc.stdout or "").strip()
+
+        if not raw:
+            return {"status": "unknown", "subscriptions": []}
+
+        subs = []
+        for line in raw.splitlines():
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 5:
+                pid = parts[1] if parts[1] else None
+                subs.append({
+                    "name": parts[0],
+                    "pid": int(pid) if pid else None,
+                    "worker_running": pid is not None and pid != "",
+                    "received_lsn": parts[2] or None,
+                    "latest_end_lsn": parts[3] or None,
+                    "latest_end_time": parts[4] or None,
+                })
+
+        all_ok = all(s["worker_running"] for s in subs) if subs else False
+        return {
+            "status": "ok" if all_ok else "error",
+            "subscriptions": subs,
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="psql command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to check subscription status: {e}")
+
+
+@router.get("/logs")
+def get_subscription_logs(tail: int = Query(default=500, le=5000)):
+    """Return replication-related log lines from the main replica container.
+
+    Filters: includes lines matching any of SUBSCRIPTION_LOG_FILTERS,
+    excludes lines matching any of SUBSCRIPTION_LOG_EXCLUDES.
+    """
+    try:
+        if not settings.container_name:
+            raise HTTPException(status_code=400, detail="Missing CONTAINER_NAME setting")
+
+        proc = subprocess.run(
+            ["docker", "logs", "--tail", str(tail), settings.container_name],
+            capture_output=True, text=True, timeout=10,
+        )
+        raw = (proc.stdout or "") + (proc.stderr or "")
+
+        include_pattern = re.compile(
+            "|".join(f"({re.escape(f)})" for f in SUBSCRIPTION_LOG_FILTERS),
+            re.IGNORECASE,
+        )
+        exclude_pattern = re.compile(
+            "|".join(f"({re.escape(f)})" for f in SUBSCRIPTION_LOG_EXCLUDES),
+            re.IGNORECASE,
+        )
+
+        lines = [
+            line for line in raw.splitlines()
+            if include_pattern.search(line) and not exclude_pattern.search(line)
+        ]
+
+        error_pattern = re.compile(r"\b(ERROR|FATAL)\b")
+        error_count = sum(1 for line in lines if error_pattern.search(line))
+
+        # Deduplicate consecutive identical messages (strip timestamp for comparison)
+        deduped: list[str] = []
+        seen_msgs: set[str] = set()
+        for line in lines:
+            msg_part = re.sub(
+                r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s+UTC\s+\[\d+\]\s*",
+                "", line,
+            )
+            if msg_part not in seen_msgs:
+                seen_msgs.add(msg_part)
+                deduped.append(line)
+
+        return {
+            "container_name": settings.container_name,
+            "lines": deduped,
+            "total_matched": len(lines),
+            "error_count": error_count,
+            "has_errors": error_count > 0,
+            "filters": {
+                "include": SUBSCRIPTION_LOG_FILTERS,
+                "exclude": SUBSCRIPTION_LOG_EXCLUDES,
+                "tail": tail,
+            },
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="docker logs command timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get subscription logs: {e}")

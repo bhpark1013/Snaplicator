@@ -4,4 +4,4 @@ backend/.venv/
 
 frontend/node_modules/
 
-*.log
+*.logconfigs/anonymize.sql
