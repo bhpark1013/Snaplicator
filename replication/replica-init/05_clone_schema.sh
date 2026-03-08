@@ -204,7 +204,7 @@ if [ $_OLD_E -eq 1 ]; then set -e; fi; if [ -n "$_OLD_ERR_TRAP" ]; then eval "$_
 sed -i -E 's/^(CREATE[[:space:]]+SCHEMA[[:space:]]+)public;$/\1IF NOT EXISTS public;/I' "$TMP_SQL"
 
 log "Applying schema to replica database"
-psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$TMP_SQL" 1>/dev/null 2>>"$TMP_ERR"
+psql -v ON_ERROR_STOP=0 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$TMP_SQL" 2>>"$TMP_ERR"
 PSQL_APPLY_RC=$?
 if [ $PSQL_APPLY_RC -ne 0 ]; then
   log "psql apply failed (rc=$PSQL_APPLY_RC)"

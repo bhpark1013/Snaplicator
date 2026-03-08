@@ -6,6 +6,7 @@ export default defineConfig({
 	server: {
 		host: '0.0.0.0',
 		port: 3000,
+		allowedHosts: true,
 		proxy: {
 			'/api': {
 				target: process.env.VITE_API_BASE_URL || 'http://localhost:8888',
@@ -14,4 +15,4 @@ export default defineConfig({
 			},
 		},
 	},
-}) 
+})

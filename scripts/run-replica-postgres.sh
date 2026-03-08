@@ -504,6 +504,9 @@ fi
 if [ -n "${PGSSLMODE:-}" ]; then
   DOCKER_ENV_VARS+=( -e PGSSLMODE="$PGSSLMODE" )
 fi
+if [ "$USE_HOST_NETWORK" = "1" ]; then
+  DOCKER_ENV_VARS+=( -e PGPORT="${HOST_PORT}" )
+fi
 
 CONTAINER_ID=$(docker run -d \
   --name "${CONTAINER_NAME}" \
@@ -516,7 +519,8 @@ CONTAINER_ID=$(docker run -d \
   "$POSTGRES_IMAGE" \
   -c wal_level=${WAL_LEVEL:-logical} \
   -c max_replication_slots=${MAX_REPLICATION_SLOTS:-10} \
-  -c max_wal_senders=${MAX_WAL_SENDERS:-${MAX_REPLICATION_SLOTS:-10}})
+  -c max_wal_senders=${MAX_WAL_SENDERS:-${MAX_REPLICATION_SLOTS:-10}} \
+  $([ "$USE_HOST_NETWORK" = "1" ] && echo "-c port=${HOST_PORT}"))
 echo "$CONTAINER_ID"
 
 # 준비 대기 및 상태 출력
@@ -539,7 +543,7 @@ for i in {1..60}; do
       exit 1
     fi
   else
-    if docker exec "${CONTAINER_NAME}" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
+    if docker exec "${CONTAINER_NAME}" pg_isready -p "${HOST_PORT:-5432}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
       echo "Replica ready on port ${HOST_PORT}"
       if [ -n "${FDW_SCHEMAS:-}" ]; then
         echo "[FDW] configuring schemas: ${FDW_SCHEMAS}"
@@ -552,7 +556,14 @@ for i in {1..60}; do
         docker cp "$BASE_DIR/replication/replica-init/." "${CONTAINER_NAME}:/opt/replica-init" >/dev/null 2>&1 || true
         TRIES=${POST_INIT_TRIES:-5}
         DELAY=${POST_INIT_DELAY:-2}
-        for s in 05_clone_schema.sh 20_create_subscription.sh; do
+        # Determine which scripts to run based on replication mode
+        if [ "${USE_PGSTREAM:-0}" = "1" ]; then
+          INIT_SCRIPTS=(03_install_extensions.sh 05_clone_schema.sh 25_start_pgstream.sh)
+          echo "[pgstream] Using pgstream for replication (skipping native subscription)"
+        else
+          INIT_SCRIPTS=(05_clone_schema.sh 20_create_subscription.sh)
+        fi
+        for s in "${INIT_SCRIPTS[@]}"; do
           n=1
           while [ $n -le $TRIES ]; do
             echo "[post-init] ($s) attempt $n/$TRIES"

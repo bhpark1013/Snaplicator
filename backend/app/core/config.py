@@ -34,6 +34,11 @@ class Settings(BaseSettings):
 	primary_password: Optional[str] = None
 	pgsslmode: Optional[str] = None  # e.g., require/prefer
 
+	# Publication & Subscription names
+	publication_name: Optional[str] = None
+	subscription_name: Optional[str] = None
+	ddl_sync_interval: Optional[int] = 30  # seconds, 0 to disable
+
 	model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
-settings = Settings() 
+settings = Settings()

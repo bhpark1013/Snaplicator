@@ -156,7 +156,7 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 		"percent": percent,
 		"active": active if active else None,
 		"details": details if details else None,
-	} 
+	}
 
 
 def run_replication_check_sql(
@@ -230,3 +230,377 @@ def run_replication_check_sql(
         "publisher": {"ok": pub_ok, "output": pub_out, "error": (pub_err or None)},
         "subscriber": {"ok": sub_ok, "output": sub_out, "error": (sub_err or None)},
     }
+
+
+# ── New functions for replication table management ──────────────────────
+
+
+def _run_publisher_sql(connstr: str, sql: str) -> str:
+    """Run SQL on publisher via direct psql connection. Returns stdout."""
+    proc = subprocess.run(
+        ["psql", connstr, "-At", "-F", ",", "-c", sql],
+        text=True, capture_output=True, check=True,
+    )
+    return (proc.stdout or "").strip()
+
+
+def _run_subscriber_sql(container_name: str, user: str, password: str | None, db: str, sql: str) -> str:
+    """Run SQL on subscriber via docker exec psql. Returns stdout."""
+    cmd: list[str] = ["docker", "exec"]
+    if password:
+        cmd += ["-e", f"PGPASSWORD={password}"]
+    cmd += [container_name, "psql", "-U", user, "-d", db, "-At", "-F", ",", "-c", sql]
+    proc = subprocess.run(cmd, text=True, capture_output=True, check=True)
+    return (proc.stdout or "").strip()
+
+
+def list_replication_tables(
+    publisher_connstr: str,
+    publication_name: str,
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> List[Dict]:
+    """List all public tables from publisher with publication/subscriber status and estimated rows."""
+
+    # 1) All public tables + estimated row count from publisher
+    all_tables_sql = (
+        "SELECT t.table_schema, t.table_name, COALESCE(s.n_live_tup, 0)::text "
+        "FROM information_schema.tables t "
+        "LEFT JOIN pg_stat_user_tables s ON s.schemaname = t.table_schema AND s.relname = t.table_name "
+        "WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE' "
+        "ORDER BY t.table_name;"
+    )
+    all_out = _run_publisher_sql(publisher_connstr, all_tables_sql)
+
+    # 2) Tables currently in publication
+    pub_sql = f"SELECT schemaname, tablename FROM pg_publication_tables WHERE pubname = '{publication_name}';"
+    pub_out = _run_publisher_sql(publisher_connstr, pub_sql)
+    pub_set = set()
+    for line in pub_out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(",")
+        if len(parts) >= 2:
+            pub_set.add(f"{parts[0]}.{parts[1]}")
+
+    # 3) Tables on subscriber
+    sub_sql = (
+        "SELECT table_schema, table_name "
+        "FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE';"
+    )
+    try:
+        sub_out = _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sub_sql)
+    except Exception:
+        sub_out = ""
+    sub_set = set()
+    for line in sub_out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(",")
+        if len(parts) >= 2:
+            sub_set.add(f"{parts[0]}.{parts[1]}")
+
+    # Combine
+    result: List[Dict] = []
+    for line in all_out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(",")
+        if len(parts) < 3:
+            continue
+        schema = parts[0]
+        table = parts[1]
+        estimated_rows = int(parts[2]) if parts[2] else 0
+        fqn = f"{schema}.{table}"
+        result.append({
+            "schema": schema,
+            "table": table,
+            "in_publication": fqn in pub_set,
+            "in_subscriber": fqn in sub_set,
+            "estimated_rows": estimated_rows,
+        })
+
+    return result
+
+
+def add_tables_to_publication(
+    publisher_connstr: str,
+    publication_name: str,
+    tables: list[str],
+) -> Dict:
+    """Add tables to a publication. Tables already in the publication are skipped."""
+    # Get currently published tables
+    pub_sql = f"SELECT schemaname || '.' || tablename FROM pg_publication_tables WHERE pubname = '{publication_name}';"
+    pub_out = _run_publisher_sql(publisher_connstr, pub_sql)
+    existing = {line.strip() for line in pub_out.splitlines() if line.strip()}
+
+    to_add = [t for t in tables if t not in existing]
+    skipped = [t for t in tables if t in existing]
+
+    if not to_add:
+        return {"added": [], "skipped": skipped, "message": "All tables already in publication"}
+
+    table_list = ", ".join(to_add)
+    alter_sql = f"ALTER PUBLICATION {publication_name} ADD TABLE {table_list};"
+    _run_publisher_sql(publisher_connstr, alter_sql)
+
+    return {"added": to_add, "skipped": skipped}
+
+
+def remove_tables_from_publication(
+    publisher_connstr: str,
+    publication_name: str,
+    tables: list[str],
+) -> Dict:
+    """Remove tables from a publication. Tables not in the publication are skipped."""
+    # Get currently published tables
+    pub_sql = f"SELECT schemaname || '.' || tablename FROM pg_publication_tables WHERE pubname = '{publication_name}';"
+    pub_out = _run_publisher_sql(publisher_connstr, pub_sql)
+    existing = {line.strip() for line in pub_out.splitlines() if line.strip()}
+
+    to_remove = [t for t in tables if t in existing]
+    skipped = [t for t in tables if t not in existing]
+
+    if not to_remove:
+        return {"removed": [], "skipped": skipped, "message": "None of the tables are in publication"}
+
+    table_list = ", ".join(to_remove)
+    alter_sql = f"ALTER PUBLICATION {publication_name} DROP TABLE {table_list};"
+    _run_publisher_sql(publisher_connstr, alter_sql)
+
+    return {"removed": to_remove, "skipped": skipped}
+
+
+
+def sync_table_schemas_to_subscriber(
+    publisher_connstr: str,
+    tables: list[str],
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> Dict:
+    """Sync table schemas from publisher to subscriber for tables that don't exist on subscriber.
+
+    Uses pg_dump --schema-only to get DDL from publisher, then applies to subscriber.
+    Returns dict with synced and skipped tables.
+    """
+    import tempfile, os
+
+    # Check which tables already exist on subscriber
+    sub_sql = (
+        "SELECT table_schema || '.' || table_name "
+        "FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE';"
+    )
+    try:
+        sub_out = _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sub_sql)
+    except Exception:
+        sub_out = ""
+    existing = {line.strip() for line in sub_out.splitlines() if line.strip()}
+
+    synced = []
+    skipped = []
+    errors = []
+
+    for table in tables:
+        if table in existing:
+            skipped.append(table)
+            continue
+
+        # pg_dump --schema-only -t <table> from publisher
+        try:
+            dump_proc = subprocess.run(
+                ["pg_dump", publisher_connstr, "--schema-only", "-t", table],
+                text=True, capture_output=True, check=True,
+            )
+            ddl = dump_proc.stdout
+            if not ddl.strip():
+                errors.append({"table": table, "error": "Empty schema dump"})
+                continue
+
+            # Write DDL to temp file, docker cp into container, run psql
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.sql', delete=False) as tmp:
+                tmp.write(ddl)
+                tmp_path = tmp.name
+
+            try:
+                # Copy into container
+                subprocess.run(
+                    ["docker", "cp", tmp_path, f"{subscriber_container}:/tmp/_sync_schema.sql"],
+                    text=True, capture_output=True, check=True,
+                )
+                # Execute on subscriber
+                exec_cmd = ["docker", "exec"]
+                if subscriber_password:
+                    exec_cmd += ["-e", f"PGPASSWORD={subscriber_password}"]
+                exec_cmd += [
+                    subscriber_container, "psql",
+                    "-U", subscriber_user, "-d", subscriber_db,
+                    "-f", "/tmp/_sync_schema.sql",
+                ]
+                subprocess.run(exec_cmd, text=True, capture_output=True, check=True)
+                synced.append(table)
+            finally:
+                os.unlink(tmp_path)
+
+        except subprocess.CalledProcessError as e:
+            errors.append({"table": table, "error": (e.stderr or e.stdout or str(e)).strip()})
+
+    return {"synced": synced, "skipped": skipped, "errors": errors}
+
+
+def refresh_subscription(
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+    subscription_name: str,
+) -> Dict:
+    """Refresh a subscription to pick up publication changes."""
+    sql = f"ALTER SUBSCRIPTION {subscription_name} REFRESH PUBLICATION;"
+    _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sql)
+    return {"refreshed": True, "subscription": subscription_name}
+
+
+def auto_sync_new_tables(
+    publisher_connstr: str,
+    publication_name: str,
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+    subscription_name: str,
+) -> Dict | None:
+    """Detect tables in publication but not on subscriber, sync schema and refresh.
+
+    Returns None if nothing to sync, otherwise dict with sync details.
+    """
+    # Tables in publication
+    pub_sql = f"SELECT schemaname || '.' || tablename FROM pg_publication_tables WHERE pubname = '{publication_name}';"
+    pub_out = _run_publisher_sql(publisher_connstr, pub_sql)
+    pub_tables = {line.strip() for line in pub_out.splitlines() if line.strip()}
+
+    # Tables on subscriber
+    sub_sql = (
+        "SELECT table_schema || '.' || table_name "
+        "FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE';"
+    )
+    try:
+        sub_out = _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sub_sql)
+    except Exception:
+        sub_out = ""
+    sub_tables = {line.strip() for line in sub_out.splitlines() if line.strip()}
+
+    # Find tables in publication but missing from subscriber
+    missing = [t for t in pub_tables if t not in sub_tables]
+    if not missing:
+        return None
+
+    # Sync schemas
+    import tempfile, os
+    synced = []
+    errors = []
+    for table in missing:
+        try:
+            dump_proc = subprocess.run(
+                ["pg_dump", publisher_connstr, "--schema-only", "-t", table],
+                text=True, capture_output=True, check=True,
+            )
+            ddl = dump_proc.stdout
+            if not ddl.strip():
+                errors.append({"table": table, "error": "Empty schema dump"})
+                continue
+
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.sql', delete=False) as tmp:
+                tmp.write(ddl)
+                tmp_path = tmp.name
+
+            try:
+                subprocess.run(
+                    ["docker", "cp", tmp_path, f"{subscriber_container}:/tmp/_auto_sync.sql"],
+                    text=True, capture_output=True, check=True,
+                )
+                exec_cmd = ["docker", "exec"]
+                if subscriber_password:
+                    exec_cmd += ["-e", f"PGPASSWORD={subscriber_password}"]
+                exec_cmd += [subscriber_container, "psql", "-U", subscriber_user, "-d", subscriber_db, "-f", "/tmp/_auto_sync.sql"]
+                subprocess.run(exec_cmd, text=True, capture_output=True, check=True)
+                synced.append(table)
+            finally:
+                os.unlink(tmp_path)
+        except subprocess.CalledProcessError as e:
+            errors.append({"table": table, "error": (e.stderr or e.stdout or str(e)).strip()})
+
+    # Refresh subscription if any tables were synced
+    refresh_ok = False
+    if synced:
+        try:
+            sql = f"ALTER SUBSCRIPTION {subscription_name} REFRESH PUBLICATION;"
+            _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sql)
+            refresh_ok = True
+        except Exception as e:
+            errors.append({"table": "_refresh", "error": str(e)})
+
+    return {"synced": synced, "errors": errors, "refreshed": refresh_ok}
+
+
+# ── Event Trigger Management ──────────────────────
+
+
+def install_auto_add_trigger(publisher_connstr: str, publication_name: str) -> Dict:
+    """Install or update the event trigger on publisher that auto-adds new public tables to publication.
+
+    Idempotent: safe to call multiple times.
+    """
+    # Create or replace the trigger function with current publication name
+    func_sql = f"""
+CREATE OR REPLACE FUNCTION _snaplicator_auto_add_to_pub()
+RETURNS event_trigger
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+    obj record;
+BEGIN
+    FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands()
+    WHERE command_tag = 'CREATE TABLE'
+      AND schema_name = 'public'
+    LOOP
+        EXECUTE format('ALTER PUBLICATION {publication_name} ADD TABLE %s', obj.object_identity);
+        RAISE NOTICE 'snaplicator: auto-added % to publication {publication_name}', obj.object_identity;
+    END LOOP;
+END;
+$fn$;
+"""
+    _run_publisher_sql(publisher_connstr, func_sql)
+
+    # Create event trigger if not exists (PG14+)
+    # DROP + CREATE to ensure function reference is fresh
+    trigger_sql = """
+DO $do$
+BEGIN
+    DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;
+    CREATE EVENT TRIGGER _snaplicator_auto_pub_add
+    ON ddl_command_end
+    WHEN TAG IN ('CREATE TABLE')
+    EXECUTE FUNCTION _snaplicator_auto_add_to_pub();
+END;
+$do$;
+"""
+    _run_publisher_sql(publisher_connstr, trigger_sql)
+
+    return {"installed": True, "publication": publication_name}
+
+
+def verify_trigger_installed(publisher_connstr: str) -> bool:
+    """Check if the auto-add event trigger exists on the publisher."""
+    sql = "SELECT 1 FROM pg_event_trigger WHERE evtname = '_snaplicator_auto_pub_add';"
+    out = _run_publisher_sql(publisher_connstr, sql)
+    return out.strip() == "1"

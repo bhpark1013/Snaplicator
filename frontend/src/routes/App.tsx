@@ -389,7 +389,7 @@ export function App() {
             </div>
 
             <section className="card" style={{ marginTop: 16 }}>
-                <h2>Replication Check</h2>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2>Replication Check</h2><Link to="/replication" className="btn" style={{ fontSize: 13, padding: "6px 12px" }}>Manage Tables</Link></div>
                 <div className="row" style={{ margin: '8px 0' }}>
                     <button className="btn" onClick={runCheck} disabled={checkLoading}>
                         {checkLoading ? 'Running...' : 'Run Check SQL'}
