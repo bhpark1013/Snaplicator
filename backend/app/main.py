@@ -9,7 +9,7 @@ from .api.routes.health import router as health_router
 from .api.routes.snapshots import router as snapshots_router
 from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
-from .services.replication import auto_sync_new_tables, install_auto_add_trigger, verify_trigger_installed
+from .services.replication import auto_sync_new_tables, sync_column_changes, install_auto_add_trigger, verify_trigger_installed
 
 logger = logging.getLogger("snaplicator.ddl_sync")
 
@@ -74,6 +74,19 @@ async def ddl_sync_loop():
                     logger.info(f"DDL auto-sync: synced {result['synced']}, refreshed={result.get('refreshed')}")
                 if result and result.get("errors"):
                     logger.warning(f"DDL auto-sync errors: {result['errors']}")
+
+                # Sync column changes (ADD COLUMN) for existing tables
+                try:
+                    col_result = await asyncio.to_thread(
+                        sync_column_changes,
+                        connstr, pub_name, container, user, password, db,
+                    )
+                    if col_result and col_result.get("columns_added"):
+                        logger.info(f"Column sync: added {col_result['columns_added']}")
+                    if col_result and col_result.get("errors"):
+                        logger.warning(f"Column sync errors: {col_result['errors']}")
+                except Exception as e:
+                    logger.warning(f"Column sync failed: {e}")
         except Exception as e:
             logger.error(f"DDL auto-sync error: {e}")
 

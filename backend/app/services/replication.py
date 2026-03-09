@@ -552,6 +552,157 @@ def auto_sync_new_tables(
     return {"synced": synced, "errors": errors, "refreshed": refresh_ok}
 
 
+
+def sync_column_changes(
+    publisher_connstr: str,
+    publication_name: str,
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> Dict | None:
+    """Compare column definitions between publisher and subscriber for published tables.
+
+    Detects missing columns on subscriber and applies ALTER TABLE ADD COLUMN.
+    Returns None if no changes, otherwise dict with details.
+    """
+    # Get published tables
+    pub_tables_sql = f"SELECT schemaname || '.' || tablename FROM pg_publication_tables WHERE pubname = '{publication_name}';"
+    pub_out = _run_publisher_sql(publisher_connstr, pub_tables_sql)
+    pub_tables = [line.strip() for line in pub_out.splitlines() if line.strip()]
+
+    if not pub_tables:
+        return None
+
+    # Build IN clause for table names
+    table_names = [t.split(".")[-1] for t in pub_tables]
+    tables_in_pub = ",".join(f"''{t}''" for t in table_names)
+    tables_in_sub = ",".join(f"'{t}'" for t in table_names)
+
+    empty_str_pub = "''"
+    empty_str_sub = "'"
+
+    # Query column info from publisher
+    pub_cols_sql = (
+        "SELECT table_schema, table_name, column_name, ordinal_position::text, "
+        "data_type, udt_name, is_nullable, "
+        f"COALESCE(column_default, {empty_str_pub}{empty_str_pub}) "
+        "FROM information_schema.columns "
+        f"WHERE table_schema = {empty_str_pub}public{empty_str_pub} AND table_name IN ({tables_in_pub}) "
+        "ORDER BY table_schema, table_name, ordinal_position;"
+    )
+    try:
+        pub_cols_out = _run_publisher_sql(publisher_connstr, pub_cols_sql)
+    except Exception:
+        return None
+
+    # Parse publisher columns: {schema.table: {col_name: {type info}}}
+    pub_columns: dict = {}
+    for line in pub_cols_out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(",")
+        if len(parts) < 8:
+            continue
+        schema, table, col, pos = parts[0], parts[1], parts[2], parts[3]
+        dtype, udt, nullable = parts[4], parts[5], parts[6]
+        default = ",".join(parts[7:])
+        fqn = f"{schema}.{table}"
+        if fqn not in pub_columns:
+            pub_columns[fqn] = {}
+        pub_columns[fqn][col] = {
+            "data_type": dtype,
+            "udt_name": udt,
+            "is_nullable": nullable,
+            "column_default": default,
+            "ordinal_position": int(pos),
+        }
+
+    # Query column info from subscriber
+    sub_cols_sql = (
+        "SELECT table_schema, table_name, column_name, ordinal_position::text, "
+        "data_type, udt_name, is_nullable, "
+        f"COALESCE(column_default, {empty_str_sub}{empty_str_sub}) "
+        "FROM information_schema.columns "
+        f"WHERE table_schema = {empty_str_sub}public{empty_str_sub} AND table_name IN ({tables_in_sub}) "
+        "ORDER BY table_schema, table_name, ordinal_position;"
+    )
+    try:
+        sub_cols_out = _run_subscriber_sql(
+            subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+            sub_cols_sql,
+        )
+    except Exception:
+        return None
+
+    sub_columns: dict = {}
+    for line in sub_cols_out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(",")
+        if len(parts) < 8:
+            continue
+        schema, table, col, pos = parts[0], parts[1], parts[2], parts[3]
+        dtype, udt, nullable = parts[4], parts[5], parts[6]
+        default = ",".join(parts[7:])
+        fqn = f"{schema}.{table}"
+        if fqn not in sub_columns:
+            sub_columns[fqn] = {}
+        sub_columns[fqn][col] = {
+            "data_type": dtype,
+            "udt_name": udt,
+            "is_nullable": nullable,
+            "column_default": default,
+            "ordinal_position": int(pos),
+        }
+
+    # Compare and generate ALTER statements
+    added = []
+    errors = []
+
+    TYPE_MAP = {
+        "int4": "integer", "int8": "bigint", "int2": "smallint",
+        "float4": "real", "float8": "double precision",
+        "bool": "boolean", "varchar": "character varying",
+        "timestamptz": "timestamptz", "timestamp": "timestamp",
+        "text": "text", "jsonb": "jsonb", "json": "json",
+        "uuid": "uuid", "numeric": "numeric", "bytea": "bytea",
+        "date": "date", "time": "time", "timetz": "timetz",
+    }
+
+    for fqn, pub_cols in pub_columns.items():
+        sub_cols = sub_columns.get(fqn, {})
+        if not sub_cols:
+            continue  # Table missing entirely; handled by auto_sync_new_tables
+
+        for col_name, pub_info in pub_cols.items():
+            if col_name not in sub_cols:
+                # Column missing on subscriber -> ADD COLUMN
+                udt = pub_info["udt_name"]
+                sql_type = TYPE_MAP.get(udt, udt)
+
+                alter_parts = [f'ALTER TABLE {fqn} ADD COLUMN "{col_name}" {sql_type}']
+                if pub_info["column_default"]:
+                    alter_parts.append(f"DEFAULT {pub_info['column_default']}")
+                alter_sql = " ".join(alter_parts) + ";"
+
+                try:
+                    _run_subscriber_sql(
+                        subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+                        alter_sql,
+                    )
+                    added.append({"table": fqn, "column": col_name, "type": sql_type})
+                except subprocess.CalledProcessError as e:
+                    errors.append({"table": fqn, "column": col_name, "error": (e.stderr or e.stdout or str(e)).strip()})
+
+    if not added and not errors:
+        return None
+
+    return {"columns_added": added, "errors": errors}
+
+
 # ── Event Trigger Management ──────────────────────
 
 
