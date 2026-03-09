@@ -574,64 +574,55 @@ def sync_column_changes(
     if not pub_tables:
         return None
 
-    # Build IN clause for table names
     table_names = [t.split(".")[-1] for t in pub_tables]
-    tables_in_pub = ",".join(f"''{t}''" for t in table_names)
-    tables_in_sub = ",".join(f"'{t}'" for t in table_names)
 
-    empty_str_pub = "''"
-    empty_str_sub = "'"
-
-    # Query column info from publisher
+    # Query columns from publisher - use pg_catalog to avoid quoting issues
     pub_cols_sql = (
-        "SELECT table_schema, table_name, column_name, ordinal_position::text, "
-        "data_type, udt_name, is_nullable, "
-        f"COALESCE(column_default, {empty_str_pub}{empty_str_pub}) "
-        "FROM information_schema.columns "
-        f"WHERE table_schema = {empty_str_pub}public{empty_str_pub} AND table_name IN ({tables_in_pub}) "
-        "ORDER BY table_schema, table_name, ordinal_position;"
+        "SELECT n.nspname, c.relname, a.attname, a.attnum::text, "
+        "t.typname, a.attnotnull::text, "
+        "COALESCE(pg_get_expr(d.adbin, d.adrelid), '') "
+        "FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "JOIN pg_attribute a ON a.attrelid = c.oid "
+        "JOIN pg_type t ON t.oid = a.atttypid "
+        "LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum "
+        "WHERE n.nspname = 'public' "
+        "AND a.attnum > 0 AND NOT a.attisdropped "
+        f"AND c.relname IN ({','.join(repr(t) for t in table_names)}) "
+        "ORDER BY c.relname, a.attnum;"
     )
     try:
         pub_cols_out = _run_publisher_sql(publisher_connstr, pub_cols_sql)
     except Exception:
         return None
 
-    # Parse publisher columns: {schema.table: {col_name: {type info}}}
+    # Parse: {schema.table: {col_name: {typname, notnull, default}}}
     pub_columns: dict = {}
     for line in pub_cols_out.splitlines():
         line = line.strip()
         if not line:
             continue
         parts = line.split(",")
-        if len(parts) < 8:
+        if len(parts) < 7:
             continue
         schema, table, col, pos = parts[0], parts[1], parts[2], parts[3]
-        dtype, udt, nullable = parts[4], parts[5], parts[6]
-        default = ",".join(parts[7:])
+        typname, notnull = parts[4], parts[5]
+        default = ",".join(parts[6:])
         fqn = f"{schema}.{table}"
         if fqn not in pub_columns:
             pub_columns[fqn] = {}
         pub_columns[fqn][col] = {
-            "data_type": dtype,
-            "udt_name": udt,
-            "is_nullable": nullable,
-            "column_default": default,
-            "ordinal_position": int(pos),
+            "typname": typname,
+            "notnull": notnull == "true",
+            "default": default,
+            "ordinal": int(pos),
         }
 
-    # Query column info from subscriber
-    sub_cols_sql = (
-        "SELECT table_schema, table_name, column_name, ordinal_position::text, "
-        "data_type, udt_name, is_nullable, "
-        f"COALESCE(column_default, {empty_str_sub}{empty_str_sub}) "
-        "FROM information_schema.columns "
-        f"WHERE table_schema = {empty_str_sub}public{empty_str_sub} AND table_name IN ({tables_in_sub}) "
-        "ORDER BY table_schema, table_name, ordinal_position;"
-    )
+    # Query columns from subscriber using same query
     try:
         sub_cols_out = _run_subscriber_sql(
             subscriber_container, subscriber_user, subscriber_password, subscriber_db,
-            sub_cols_sql,
+            pub_cols_sql,
         )
     except Exception:
         return None
@@ -642,23 +633,15 @@ def sync_column_changes(
         if not line:
             continue
         parts = line.split(",")
-        if len(parts) < 8:
+        if len(parts) < 7:
             continue
-        schema, table, col, pos = parts[0], parts[1], parts[2], parts[3]
-        dtype, udt, nullable = parts[4], parts[5], parts[6]
-        default = ",".join(parts[7:])
+        schema, table, col = parts[0], parts[1], parts[2]
         fqn = f"{schema}.{table}"
         if fqn not in sub_columns:
             sub_columns[fqn] = {}
-        sub_columns[fqn][col] = {
-            "data_type": dtype,
-            "udt_name": udt,
-            "is_nullable": nullable,
-            "column_default": default,
-            "ordinal_position": int(pos),
-        }
+        sub_columns[fqn][col] = True
 
-    # Compare and generate ALTER statements
+    # Compare and apply
     added = []
     errors = []
 
@@ -666,10 +649,10 @@ def sync_column_changes(
         "int4": "integer", "int8": "bigint", "int2": "smallint",
         "float4": "real", "float8": "double precision",
         "bool": "boolean", "varchar": "character varying",
-        "timestamptz": "timestamptz", "timestamp": "timestamp",
+        "timestamptz": "timestamptz", "timestamp": "timestamp without time zone",
         "text": "text", "jsonb": "jsonb", "json": "json",
         "uuid": "uuid", "numeric": "numeric", "bytea": "bytea",
-        "date": "date", "time": "time", "timetz": "timetz",
+        "date": "date", "time": "time", "timetz": "time with time zone",
     }
 
     for fqn, pub_cols in pub_columns.items():
@@ -679,13 +662,11 @@ def sync_column_changes(
 
         for col_name, pub_info in pub_cols.items():
             if col_name not in sub_cols:
-                # Column missing on subscriber -> ADD COLUMN
-                udt = pub_info["udt_name"]
-                sql_type = TYPE_MAP.get(udt, udt)
+                sql_type = TYPE_MAP.get(pub_info["typname"], pub_info["typname"])
 
                 alter_parts = [f'ALTER TABLE {fqn} ADD COLUMN "{col_name}" {sql_type}']
-                if pub_info["column_default"]:
-                    alter_parts.append(f"DEFAULT {pub_info['column_default']}")
+                if pub_info["default"]:
+                    alter_parts.append(f"DEFAULT {pub_info['default']}")
                 alter_sql = " ".join(alter_parts) + ";"
 
                 try:
