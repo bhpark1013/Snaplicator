@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snaplicator-cli"
+version = "0.1.0"
+description = "Snaplicator CLI - psql-style remote API client for PostgreSQL replica management"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.9.0",
+]
+
+[project.optional-dependencies]
+cli = ["httpx>=0.25.0"]
+
+[project.scripts]
+snaplicator = "cli.main:cli"
+
+[tool.setuptools.packages.find]
+include = ["cli*"]
