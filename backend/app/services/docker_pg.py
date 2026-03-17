@@ -191,7 +191,7 @@ BEGIN
       seq.oid           AS seq_oid
     FROM pg_class seq
     JOIN pg_namespace seq_ns ON seq_ns.oid = seq.relnamespace
-    JOIN pg_depend dep       ON dep.objid = seq.oid AND dep.deptype = 'a'
+    JOIN pg_depend dep       ON dep.objid = seq.oid AND dep.deptype IN ('a', 'i')
     JOIN pg_class tbl        ON tbl.oid = dep.refobjid AND tbl.relkind IN ('r','p')
     JOIN pg_namespace ns     ON ns.oid = tbl.relnamespace
     JOIN pg_attribute col    ON col.attrelid = tbl.oid AND col.attnum = dep.refobjsubid AND NOT col.attisdropped
