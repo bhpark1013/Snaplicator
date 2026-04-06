@@ -9,7 +9,7 @@ from .api.routes.health import router as health_router
 from .api.routes.snapshots import router as snapshots_router
 from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
-from .services.replication import auto_sync_new_tables, sync_column_changes, install_auto_add_trigger, verify_trigger_installed
+from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, install_auto_add_trigger, verify_trigger_installed
 
 logger = logging.getLogger("snaplicator.ddl_sync")
 
@@ -87,6 +87,19 @@ async def ddl_sync_loop():
                         logger.warning(f"Column sync errors: {col_result['errors']}")
                 except Exception as e:
                     logger.warning(f"Column sync failed: {e}")
+
+                # Sync CHECK constraint changes for existing tables
+                try:
+                    chk_result = await asyncio.to_thread(
+                        sync_check_constraints,
+                        connstr, pub_name, container, user, password, db,
+                    )
+                    if chk_result and chk_result.get("constraints_synced"):
+                        logger.info(f"Constraint sync: {chk_result['constraints_synced']}")
+                    if chk_result and chk_result.get("errors"):
+                        logger.warning(f"Constraint sync errors: {chk_result['errors']}")
+                except Exception as e:
+                    logger.warning(f"Constraint sync failed: {e}")
         except Exception as e:
             logger.error(f"DDL auto-sync error: {e}")
 

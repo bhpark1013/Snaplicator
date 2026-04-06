@@ -269,7 +269,7 @@ def list_replication_tables(
         "SELECT t.table_schema, t.table_name, COALESCE(s.n_live_tup, 0)::text "
         "FROM information_schema.tables t "
         "LEFT JOIN pg_stat_user_tables s ON s.schemaname = t.table_schema AND s.relname = t.table_name "
-        "WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE' "
+        "WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema') AND t.table_type = 'BASE TABLE' "
         "ORDER BY t.table_name;"
     )
     all_out = _run_publisher_sql(publisher_connstr, all_tables_sql)
@@ -286,11 +286,26 @@ def list_replication_tables(
         if len(parts) >= 2:
             pub_set.add(f"{parts[0]}.{parts[1]}")
 
+    # 2b) Tables individually registered (can be removed via DROP TABLE)
+    #     vs schema-level (FOR TABLES IN SCHEMA) which cannot
+    indiv_sql = (
+        f"SELECT c.relnamespace::regnamespace || '.' || c.relname "
+        f"FROM pg_publication_rel pr "
+        f"JOIN pg_class c ON c.oid = pr.prrelid "
+        f"JOIN pg_publication p ON p.oid = pr.prpubid "
+        f"WHERE p.pubname = '{publication_name}';"
+    )
+    try:
+        indiv_out = _run_publisher_sql(publisher_connstr, indiv_sql)
+        indiv_set = {l.strip() for l in indiv_out.splitlines() if l.strip()}
+    except Exception:
+        indiv_set = pub_set  # fallback: treat all as individually added
+
     # 3) Tables on subscriber
     sub_sql = (
         "SELECT table_schema, table_name "
         "FROM information_schema.tables "
-        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE';"
+        "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') AND table_type = 'BASE TABLE';"
     )
     try:
         sub_out = _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sub_sql)
@@ -318,10 +333,12 @@ def list_replication_tables(
         table = parts[1]
         estimated_rows = int(parts[2]) if parts[2] else 0
         fqn = f"{schema}.{table}"
+        in_pub = fqn in pub_set
         result.append({
             "schema": schema,
             "table": table,
-            "in_publication": fqn in pub_set,
+            "in_publication": in_pub,
+            "pub_via": ("table" if fqn in indiv_set else "schema") if in_pub else None,
             "in_subscriber": fqn in sub_set,
             "estimated_rows": estimated_rows,
         })
@@ -364,17 +381,46 @@ def remove_tables_from_publication(
     pub_out = _run_publisher_sql(publisher_connstr, pub_sql)
     existing = {line.strip() for line in pub_out.splitlines() if line.strip()}
 
-    to_remove = [t for t in tables if t in existing]
+    # Check which tables are individually registered (can be DROP-ed)
+    indiv_sql = (
+        f"SELECT c.relnamespace::regnamespace || '.' || c.relname "
+        f"FROM pg_publication_rel pr "
+        f"JOIN pg_class c ON c.oid = pr.prrelid "
+        f"JOIN pg_publication p ON p.oid = pr.prpubid "
+        f"WHERE p.pubname = '{publication_name}';"
+    )
+    try:
+        indiv_out = _run_publisher_sql(publisher_connstr, indiv_sql)
+        indiv_set = {l.strip() for l in indiv_out.splitlines() if l.strip()}
+    except Exception:
+        indiv_set = existing  # fallback
+
+    to_remove = [t for t in tables if t in existing and t in indiv_set]
     skipped = [t for t in tables if t not in existing]
+    schema_level = [t for t in tables if t in existing and t not in indiv_set]
+    skipped.extend(schema_level)
 
     if not to_remove:
-        return {"removed": [], "skipped": skipped, "message": "None of the tables are in publication"}
+        msg = "None of the tables are in publication"
+        if schema_level:
+            msg = f"Tables included via schema-level publication cannot be individually removed: {schema_level}"
+        return {"removed": [], "skipped": skipped, "message": msg}
 
-    table_list = ", ".join(to_remove)
-    alter_sql = f"ALTER PUBLICATION {publication_name} DROP TABLE {table_list};"
-    _run_publisher_sql(publisher_connstr, alter_sql)
+    # Remove one at a time to handle race conditions gracefully
+    removed = []
+    for t in to_remove:
+        alter_sql = f"ALTER PUBLICATION {publication_name} DROP TABLE {t};"
+        try:
+            _run_publisher_sql(publisher_connstr, alter_sql)
+            removed.append(t)
+        except subprocess.CalledProcessError as e:
+            err_msg = (e.stderr or e.stdout or str(e)).strip()
+            if "is not part of the publication" in err_msg:
+                skipped.append(t)
+            else:
+                raise
 
-    return {"removed": to_remove, "skipped": skipped}
+    return {"removed": removed, "skipped": skipped}
 
 
 
@@ -397,7 +443,7 @@ def sync_table_schemas_to_subscriber(
     sub_sql = (
         "SELECT table_schema || '.' || table_name "
         "FROM information_schema.tables "
-        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE';"
+        "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') AND table_type = 'BASE TABLE';"
     )
     try:
         sub_out = _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sub_sql)
@@ -491,7 +537,7 @@ def auto_sync_new_tables(
     sub_sql = (
         "SELECT table_schema || '.' || table_name "
         "FROM information_schema.tables "
-        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE';"
+        "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') AND table_type = 'BASE TABLE';"
     )
     try:
         sub_out = _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sub_sql)
@@ -586,7 +632,7 @@ def sync_column_changes(
         "JOIN pg_attribute a ON a.attrelid = c.oid "
         "JOIN pg_type t ON t.oid = a.atttypid "
         "LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum "
-        "WHERE n.nspname = 'public' "
+        "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') "
         "AND a.attnum > 0 AND NOT a.attisdropped "
         f"AND c.relname IN ({','.join(repr(t) for t in table_names)}) "
         "ORDER BY c.relname, a.attnum;"
@@ -736,3 +782,120 @@ def verify_trigger_installed(publisher_connstr: str) -> bool:
     sql = "SELECT 1 FROM pg_event_trigger WHERE evtname = '_snaplicator_auto_pub_add';"
     out = _run_publisher_sql(publisher_connstr, sql)
     return out.strip() == "1"
+
+
+def sync_check_constraints(
+    publisher_connstr: str,
+    publication_name: str,
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> Dict | None:
+    """Compare CHECK constraints between publisher and subscriber for published tables.
+
+    Detects CHECK constraints that differ and applies DROP + ADD to match publisher.
+    Returns None if no changes, otherwise dict with details.
+    """
+    # Get published table names
+    pub_tables_sql = (
+        f"SELECT tablename FROM pg_publication_tables WHERE pubname = '{publication_name}' "
+        "AND schemaname = 'public';"
+    )
+    pub_out = _run_publisher_sql(publisher_connstr, pub_tables_sql)
+    pub_tables = [line.strip() for line in pub_out.splitlines() if line.strip()]
+
+    if not pub_tables:
+        return None
+
+    table_filter = ",".join(repr(t) for t in pub_tables)
+
+    # Query CHECK constraints from publisher
+    check_sql = (
+        "SELECT c.relname, con.conname, "
+        "pg_get_constraintdef(con.oid) "
+        "FROM pg_constraint con "
+        "JOIN pg_class c ON c.oid = con.conrelid "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE con.contype = 'c' "
+        "AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+        f"AND c.relname IN ({table_filter}) "
+        "ORDER BY c.relname, con.conname;"
+    )
+
+    try:
+        pub_checks_out = _run_publisher_sql(publisher_connstr, check_sql)
+    except Exception:
+        return None
+
+    # Parse: {(table, conname): constraintdef}
+    pub_checks: dict[tuple[str, str], str] = {}
+    for line in pub_checks_out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(",", 2)
+        if len(parts) < 3:
+            continue
+        table, conname, condef = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        pub_checks[(table, conname)] = condef
+
+    # Query CHECK constraints from subscriber
+    try:
+        sub_checks_out = _run_subscriber_sql(
+            subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+            check_sql,
+        )
+    except Exception:
+        return None
+
+    sub_checks: dict[tuple[str, str], str] = {}
+    for line in sub_checks_out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(",", 2)
+        if len(parts) < 3:
+            continue
+        table, conname, condef = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        sub_checks[(table, conname)] = condef
+
+    updated = []
+    errors = []
+
+    # Find constraints that differ or are missing on subscriber
+    for (table, conname), pub_def in pub_checks.items():
+        sub_def = sub_checks.get((table, conname))
+
+        if sub_def == pub_def:
+            continue  # Already in sync
+
+        # Drop existing constraint if present, then add publisher version
+        alter_statements = []
+        if sub_def is not None:
+            alter_statements.append(
+                f"ALTER TABLE public.{table} DROP CONSTRAINT {conname};"
+            )
+        alter_statements.append(
+            f"ALTER TABLE public.{table} ADD CONSTRAINT {conname} {pub_def};"
+        )
+        alter_sql = " ".join(alter_statements)
+
+        try:
+            _run_subscriber_sql(
+                subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+                alter_sql,
+            )
+            action = "updated" if sub_def is not None else "added"
+            updated.append({"table": table, "constraint": conname, "action": action, "definition": pub_def})
+        except subprocess.CalledProcessError as e:
+            errors.append({
+                "table": table,
+                "constraint": conname,
+                "error": (e.stderr or e.stdout or str(e)).strip(),
+            })
+
+    if not updated and not errors:
+        return None
+
+    return {"constraints_synced": updated, "errors": errors}

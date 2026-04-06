@@ -38,6 +38,7 @@ class Settings(BaseSettings):
 	publication_name: Optional[str] = None
 	subscription_name: Optional[str] = None
 	ddl_sync_interval: Optional[int] = 30  # seconds, 0 to disable
+	replication_schemas: Optional[str] = None  # comma-separated schemas to monitor, e.g. "public,deprecated,etl"
 
 	model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
