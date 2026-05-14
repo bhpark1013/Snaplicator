@@ -1,0 +1,22 @@
+# Single source of truth for postgres_fdw management on this snaplicator replica.
+#
+# Edit via the Replication UI (preferred) or by hand.
+# When edited by hand: POST /replication/fdw/regenerate after saving to re-apply.
+#
+# Server connection (host/port/db) is reused from .env PRIMARY_* values.
+# Credentials are read from .env FDW_USER and FDW_PASSWORD.
+
+server:
+  name: prod_fdw
+  options:
+    sslmode: require
+    fetch_size: '10000'
+    use_remote_estimate: 'true'
+schemas: []
+
+tables:
+  - { schema: etl, name: curator_profile__curators_v1 }
+  - { schema: etl, name: curator_profile__brand_curators_v1 }
+  - { schema: etl, name: curator_profile__brand_curators__iv_raw_v1 }
+  - { schema: etl, name: curator_profile__brand_curators__iv_scaled_v1 }
+  - { schema: etl, name: curator_profile__brand_curators__iv_normalized_v1 }

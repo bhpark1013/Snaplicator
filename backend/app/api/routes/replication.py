@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from ...core.config import settings
 from ...services.replication import (
@@ -408,3 +408,234 @@ def get_subscription_logs(tail: int = Query(default=500, le=5000)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get subscription logs: {e}")
+
+
+# ── FDW (postgres_fdw) Management Endpoints ────────────────────────────
+
+
+from ...services import fdw as fdw_svc
+
+
+class FdwTableRef(BaseModel):
+    schema_: str = Field(alias="schema")
+    name: str
+    model_config = {"populate_by_name": True}
+
+
+class FdwTablesRequest(BaseModel):
+    tables: List[FdwTableRef]
+
+
+class FdwSchemasRequest(BaseModel):
+    schemas: List[str]
+
+
+def _require_fdw_credentials():
+    if not settings.fdw_user or not settings.fdw_password:
+        raise HTTPException(
+            status_code=400,
+            detail="FDW_USER / FDW_PASSWORD not configured in .env",
+        )
+
+
+def _require_primary():
+    if not (settings.primary_host and settings.primary_port and settings.primary_db):
+        raise HTTPException(
+            status_code=400,
+            detail="PRIMARY_HOST / PRIMARY_PORT / PRIMARY_DB not configured in .env",
+        )
+
+
+def _build_fdw_apply_args() -> dict:
+    _require_subscriber_settings()
+    _require_primary()
+    _require_fdw_credentials()
+    return {
+        "container": settings.container_name,
+        "pg_user": settings.postgres_user,
+        "pg_db": settings.postgres_db,
+        "pg_password": settings.postgres_password,
+        "primary_host": settings.effective_fdw_host(),
+        "primary_port": settings.effective_fdw_port(),
+        "primary_db": settings.effective_fdw_db(),
+        "fdw_user": settings.fdw_user,
+        "fdw_password": settings.fdw_password,
+    }
+
+
+@router.get("/fdw")
+def get_fdw_state():
+    """Return yaml config + live foreign-table state on the replica."""
+    try:
+        cfg = fdw_svc.load_yaml(settings.fdw_yaml_abs())
+        live = []
+        try:
+            _require_subscriber_settings()
+            live = fdw_svc.list_foreign_tables_on_replica(
+                settings.container_name,
+                settings.postgres_user,
+                settings.postgres_db,
+                settings.postgres_password,
+            )
+        except HTTPException:
+            pass
+        return {
+            "server": cfg.server.model_dump(),
+            "schemas": [s.model_dump() for s in cfg.schemas],
+            "tables": [{"schema": t.schema_name, "name": t.name} for t in cfg.tables],
+            "live_foreign_tables": live,
+            "yaml_path": str(settings.fdw_yaml_abs()),
+            "sql_path": str(settings.fdw_sql_abs()),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read fdw state: {e}")
+
+
+@router.post("/fdw/tables")
+def post_fdw_tables(body: FdwTablesRequest):
+    """Add tables to FDW. Validates against publication overlap; rejects if any
+    requested table is currently a published replicated table."""
+    try:
+        if not body.tables:
+            raise HTTPException(status_code=400, detail="No tables specified")
+
+        cfg = fdw_svc.load_yaml(settings.fdw_yaml_abs())
+        new = [(t.schema_, t.name) for t in body.tables]
+
+        result = fdw_svc.add_tables(
+            cfg,
+            settings.fdw_yaml_abs(),
+            settings.fdw_sql_abs(),
+            new,
+            apply_args=_build_fdw_apply_args(),
+            publisher_connstr=_build_publisher_connstr(),
+            publication_name=settings.publication_name,
+        )
+        if result.get("errors"):
+            raise HTTPException(status_code=400, detail={"errors": result["errors"]})
+        if result.get("applied") is False:
+            raise HTTPException(
+                status_code=500,
+                detail={"message": "Apply failed", "result": result.get("result", {})},
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add fdw tables: {e}")
+
+
+@router.delete("/fdw/tables")
+def delete_fdw_tables(body: FdwTablesRequest):
+    """Remove tables from FDW. Foreign tables and yaml entries are both removed."""
+    try:
+        if not body.tables:
+            raise HTTPException(status_code=400, detail="No tables specified")
+        cfg = fdw_svc.load_yaml(settings.fdw_yaml_abs())
+        targets = [(t.schema_, t.name) for t in body.tables]
+        result = fdw_svc.remove_tables(
+            cfg,
+            settings.fdw_yaml_abs(),
+            settings.fdw_sql_abs(),
+            targets,
+            apply_args=_build_fdw_apply_args(),
+        )
+        if result.get("applied") is False:
+            raise HTTPException(
+                status_code=500,
+                detail={"message": "Apply failed", "result": result.get("result", {})},
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to remove fdw tables: {e}")
+
+
+@router.post("/fdw/schemas")
+def post_fdw_schemas(body: FdwSchemasRequest):
+    """Add schemas to FDW (IMPORT FOREIGN SCHEMA on the whole schema)."""
+    try:
+        if not body.schemas:
+            raise HTTPException(status_code=400, detail="No schemas specified")
+        cfg = fdw_svc.load_yaml(settings.fdw_yaml_abs())
+        result = fdw_svc.add_schemas(
+            cfg,
+            settings.fdw_yaml_abs(),
+            settings.fdw_sql_abs(),
+            body.schemas,
+            apply_args=_build_fdw_apply_args(),
+            publisher_connstr=_build_publisher_connstr(),
+            publication_name=settings.publication_name,
+        )
+        if result.get("errors"):
+            raise HTTPException(status_code=400, detail={"errors": result["errors"]})
+        if result.get("applied") is False:
+            raise HTTPException(
+                status_code=500,
+                detail={"message": "Apply failed", "result": result.get("result", {})},
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add fdw schemas: {e}")
+
+
+@router.delete("/fdw/schemas")
+def delete_fdw_schemas(body: FdwSchemasRequest):
+    """Remove schemas from FDW."""
+    try:
+        if not body.schemas:
+            raise HTTPException(status_code=400, detail="No schemas specified")
+        cfg = fdw_svc.load_yaml(settings.fdw_yaml_abs())
+        result = fdw_svc.remove_schemas(
+            cfg,
+            settings.fdw_yaml_abs(),
+            settings.fdw_sql_abs(),
+            body.schemas,
+            apply_args=_build_fdw_apply_args(),
+        )
+        if result.get("applied") is False:
+            raise HTTPException(
+                status_code=500,
+                detail={"message": "Apply failed", "result": result.get("result", {})},
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to remove fdw schemas: {e}")
+
+
+@router.post("/fdw/regenerate")
+def post_fdw_regenerate():
+    """Re-render fdw_setup.generated.sql from current yaml and re-apply to replica.
+    Useful after manual yaml edits or to recover from drift."""
+    try:
+        cfg = fdw_svc.load_yaml(settings.fdw_yaml_abs())
+        val_errs = fdw_svc.validate_config(cfg)
+        if val_errs:
+            raise HTTPException(status_code=400, detail={"errors": val_errs})
+        pub_errs = fdw_svc.validate_against_publication(
+            cfg, _build_publisher_connstr(), settings.publication_name or "",
+        ) if settings.publication_name else []
+        if pub_errs:
+            raise HTTPException(status_code=400, detail={"errors": pub_errs})
+
+        result = fdw_svc._regenerate_and_apply(
+            cfg,
+            settings.fdw_yaml_abs(),
+            settings.fdw_sql_abs(),
+            _build_fdw_apply_args(),
+        )
+        if not result.get("applied"):
+            raise HTTPException(
+                status_code=500,
+                detail={"message": "Apply failed", "result": result.get("result", {})},
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to regenerate fdw: {e}")
