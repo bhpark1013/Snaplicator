@@ -5,3 +5,4 @@ backend/.venv/
 frontend/node_modules/
 
 *.logconfigs/anonymize.sql
+mcp-server/.venv/

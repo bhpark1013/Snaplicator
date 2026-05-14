@@ -10,6 +10,7 @@ from .api.routes.snapshots import router as snapshots_router
 from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
 from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, sync_table_schema_moves, install_auto_add_trigger, verify_trigger_installed
+from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, install_auto_add_trigger, verify_trigger_installed
 
 logger = logging.getLogger("snaplicator.ddl_sync")
 
