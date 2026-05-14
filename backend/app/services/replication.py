@@ -899,3 +899,161 @@ def sync_check_constraints(
         return None
 
     return {"constraints_synced": updated, "errors": errors}
+
+
+def sync_table_schema_moves(
+    publisher_connstr: str,
+    publication_name: str,
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+    subscription_name: str,
+) -> Dict | None:
+    """Detect tables that have been moved to a different schema on publisher
+    (e.g. ALTER TABLE ... SET SCHEMA "deprecated") and apply the same move on
+    subscriber. Tables are matched by name; cases where the same table name
+    exists in multiple schemas on either side are skipped as ambiguous.
+    """
+    tables_sql = (
+        "SELECT schemaname, tablename FROM pg_tables "
+        "WHERE schemaname NOT IN ('pg_catalog', 'information_schema') "
+        "AND schemaname NOT LIKE 'pg_%';"
+    )
+
+    try:
+        pub_out = _run_publisher_sql(publisher_connstr, tables_sql)
+    except Exception:
+        return None
+
+    pub_table_to_schemas: dict[str, set[str]] = {}
+    for line in pub_out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 2:
+            continue
+        schema, table = parts[0], parts[1]
+        pub_table_to_schemas.setdefault(table, set()).add(schema)
+
+    try:
+        sub_out = _run_subscriber_sql(
+            subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+            tables_sql,
+        )
+    except Exception:
+        return None
+
+    sub_table_to_schemas: dict[str, set[str]] = {}
+    for line in sub_out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 2:
+            continue
+        schema, table = parts[0], parts[1]
+        sub_table_to_schemas.setdefault(table, set()).add(schema)
+
+    pending_moves: list[dict] = []
+    orphans: list[dict] = []
+    skipped: list[dict] = []
+    schemas_to_create: set[str] = set()
+
+    for tname, pub_schemas in pub_table_to_schemas.items():
+        sub_schemas = sub_table_to_schemas.get(tname)
+        if not sub_schemas:
+            continue
+        sub_only = sub_schemas - pub_schemas
+        pub_only = pub_schemas - sub_schemas
+        if not sub_only and not pub_only:
+            continue
+        if len(sub_only) == 1 and len(pub_only) == 1:
+            from_schema = next(iter(sub_only))
+            to_schema = next(iter(pub_only))
+            schemas_to_create.add(to_schema)
+            pending_moves.append({"table": tname, "from": from_schema, "to": to_schema})
+            continue
+        if sub_only and not pub_only:
+            orphans.append({
+                "table": tname,
+                "publisher_schemas": sorted(pub_schemas),
+                "subscriber_orphan_schemas": sorted(sub_only),
+            })
+            continue
+        if pub_only and not sub_only:
+            # missing on subscriber; auto_sync_new_tables handles this
+            continue
+        skipped.append({
+            "table": tname,
+            "publisher_schemas": sorted(pub_schemas),
+            "subscriber_schemas": sorted(sub_schemas),
+            "reason": "ambiguous (multi-schema diff)",
+        })
+
+    if not pending_moves and not skipped and not orphans:
+        return None
+
+    moved: list[dict] = []
+    errors: list[dict] = []
+
+    for schema in schemas_to_create:
+        try:
+            _run_subscriber_sql(
+                subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+                f'CREATE SCHEMA IF NOT EXISTS "{schema}";',
+            )
+        except subprocess.CalledProcessError as e:
+            errors.append({"schema": schema, "error": (e.stderr or e.stdout or str(e)).strip()})
+
+    failed_schemas = {err["schema"] for err in errors if "schema" in err}
+
+    for entry in pending_moves:
+        if entry["to"] in failed_schemas:
+            errors.append({
+                "table": entry["table"],
+                "from": entry["from"],
+                "to": entry["to"],
+                "error": "target schema creation failed; skipping move",
+            })
+            continue
+        sql = (
+            f'ALTER TABLE "{entry["from"]}"."{entry["table"]}" '
+            f'SET SCHEMA "{entry["to"]}";'
+        )
+        try:
+            _run_subscriber_sql(
+                subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+                sql,
+            )
+            moved.append(entry)
+        except subprocess.CalledProcessError as e:
+            errors.append({
+                "table": entry["table"],
+                "from": entry["from"],
+                "to": entry["to"],
+                "error": (e.stderr or e.stdout or str(e)).strip(),
+            })
+
+    refreshed = False
+    if moved:
+        try:
+            _run_subscriber_sql(
+                subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+                f"ALTER SUBSCRIPTION {subscription_name} REFRESH PUBLICATION;",
+            )
+            refreshed = True
+        except subprocess.CalledProcessError as e:
+            errors.append({"_refresh": (e.stderr or e.stdout or str(e)).strip()})
+
+    if not moved and not skipped and not errors and not orphans:
+        return None
+
+    return {
+        "moved": moved,
+        "skipped": skipped,
+        "orphans": orphans,
+        "errors": errors,
+        "refreshed": refreshed,
+    }

@@ -9,6 +9,7 @@ from .api.routes.health import router as health_router
 from .api.routes.snapshots import router as snapshots_router
 from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
+from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, sync_table_schema_moves, install_auto_add_trigger, verify_trigger_installed
 from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, install_auto_add_trigger, verify_trigger_installed
 
 logger = logging.getLogger("snaplicator.ddl_sync")
@@ -65,6 +66,32 @@ async def ddl_sync_loop():
                         logger.info("Auto-add trigger reinstalled successfully")
                 except Exception as e:
                     logger.warning(f"Trigger verification failed: {e}")
+
+                # Sync table schema moves (ALTER TABLE ... SET SCHEMA) FIRST,
+                # before auto_sync_new_tables so a moved table is relocated on
+                # the subscriber instead of being re-created in its new schema
+                # while the old copy lingers as an orphan.
+                try:
+                    move_result = await asyncio.to_thread(
+                        sync_table_schema_moves,
+                        connstr, pub_name, container, user, password, db, sub_name,
+                    )
+                    if move_result and move_result.get("moved"):
+                        logger.info(
+                            f"Schema move sync: moved={move_result['moved']}, "
+                            f"refreshed={move_result.get('refreshed')}"
+                        )
+                    if move_result and move_result.get("orphans"):
+                        logger.warning(
+                            f"Schema move orphans (subscriber-only schemas, "
+                            f"manual cleanup required): {move_result['orphans']}"
+                        )
+                    if move_result and move_result.get("skipped"):
+                        logger.warning(f"Schema move skipped: {move_result['skipped']}")
+                    if move_result and move_result.get("errors"):
+                        logger.warning(f"Schema move errors: {move_result['errors']}")
+                except Exception as e:
+                    logger.warning(f"Schema move sync failed: {e}")
 
                 result = await asyncio.to_thread(
                     auto_sync_new_tables,
