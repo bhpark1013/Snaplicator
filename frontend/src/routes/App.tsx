@@ -660,8 +660,8 @@ export function App() {
                             ? (c.is_running ? '#22c55e' : '#9ca3af')
                             : undefined
                         return (
-                            <li key={c.path} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center' }}>
-                                <div style={{ display: 'grid', gap: 4 }}>
+                            <li key={c.path} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
                                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                                         <span style={{ fontWeight: 700 }}>{c.name}</span>
                                         <span className="badge" style={statusColor ? { color: statusColor } : undefined}>
@@ -677,7 +677,7 @@ export function App() {
                                         {c.container_started_at && <span>started at: {new Date(c.container_started_at).toLocaleString()}</span>}
                                     </div>
                                 </div>
-                                <div style={{ display: 'flex', gap: 8 }}>
+                                <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
                                     <Link className="btn" to={`/clones/${encodeURIComponent(targetName)}`}>View</Link>
                                     <button className="btn"
                                         onClick={() => onRefreshClone(c)}
