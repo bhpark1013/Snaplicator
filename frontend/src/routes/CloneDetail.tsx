@@ -341,12 +341,12 @@ export function CloneDetail() {
                 ) : (
                     <ul className="list" style={{ marginTop: 8 }}>
                         {cloneSnapshots.map((snap) => (
-                            <li key={snap.name} style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 }}>
-                                <div style={{ display: 'grid', gap: 4 }}>
+                            <li key={snap.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
                                     <div style={{ fontWeight: 600 }}>{snap.name}</div>
                                     <div className="subtle">{snap.description || '(no description)'}</div>
                                 </div>
-                                <div style={{ display: 'flex', gap: 8 }}>
+                                <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
                                     <button className="btn" onClick={() => onReset(snap.name)} disabled={actionBusy}>Reset to this snapshot</button>
                                 </div>
                             </li>
@@ -362,12 +362,12 @@ export function CloneDetail() {
                 ) : (
                     <ul className="list" style={{ marginTop: 8 }}>
                         {allSnapshots.map((snap) => (
-                            <li key={snap.name} style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 }}>
-                                <div style={{ display: 'grid', gap: 4 }}>
+                            <li key={snap.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
                                     <div style={{ fontWeight: 600 }}>{snap.name}</div>
                                     <div className="subtle">{snap.description || '(no description)'}</div>
                                 </div>
-                                <span className="badge">{snap.readonly ? 'readonly' : 'writable'}</span>
+                                <span className="badge" style={{ flexShrink: 0, marginLeft: 'auto' }}>{snap.readonly ? 'readonly' : 'writable'}</span>
                             </li>
                         ))}
                     </ul>
