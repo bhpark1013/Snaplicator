@@ -9,6 +9,8 @@ from .api.routes.health import router as health_router
 from .api.routes.snapshots import router as snapshots_router
 from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
+from .services import fdw as fdw_svc
+from .services import sync_log
 from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, sync_table_schema_moves, install_auto_add_trigger, verify_trigger_installed
 from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, install_auto_add_trigger, verify_trigger_installed
 
@@ -64,6 +66,7 @@ async def ddl_sync_loop():
                         logger.warning("Auto-add trigger missing on publisher, reinstalling...")
                         await asyncio.to_thread(install_auto_add_trigger, connstr, pub_name)
                         logger.info("Auto-add trigger reinstalled successfully")
+                        sync_log.record("trigger_reinstalled", {"publication": pub_name})
                 except Exception as e:
                     logger.warning(f"Trigger verification failed: {e}")
 
@@ -76,6 +79,7 @@ async def ddl_sync_loop():
                         sync_table_schema_moves,
                         connstr, pub_name, container, user, password, db, sub_name,
                     )
+                    sync_log.record_if("schema_move", move_result)
                     if move_result and move_result.get("moved"):
                         logger.info(
                             f"Schema move sync: moved={move_result['moved']}, "
@@ -97,6 +101,7 @@ async def ddl_sync_loop():
                     auto_sync_new_tables,
                     connstr, pub_name, container, user, password, db, sub_name,
                 )
+                sync_log.record_if("table_added", result)
                 if result and result.get("synced"):
                     logger.info(f"DDL auto-sync: synced {result['synced']}, refreshed={result.get('refreshed')}")
                 if result and result.get("errors"):
@@ -108,6 +113,7 @@ async def ddl_sync_loop():
                         sync_column_changes,
                         connstr, pub_name, container, user, password, db,
                     )
+                    sync_log.record_if("column_added", col_result)
                     if col_result and col_result.get("columns_added"):
                         logger.info(f"Column sync: added {col_result['columns_added']}")
                     if col_result and col_result.get("errors"):
@@ -121,14 +127,68 @@ async def ddl_sync_loop():
                         sync_check_constraints,
                         connstr, pub_name, container, user, password, db,
                     )
+                    sync_log.record_if("check_constraint", chk_result)
                     if chk_result and chk_result.get("constraints_synced"):
                         logger.info(f"Constraint sync: {chk_result['constraints_synced']}")
                     if chk_result and chk_result.get("errors"):
                         logger.warning(f"Constraint sync errors: {chk_result['errors']}")
                 except Exception as e:
                     logger.warning(f"Constraint sync failed: {e}")
+
+            # ── FDW remote column-drift auto-sync ──
+            # Independent of the publication gate above: FDW can be in use
+            # even when logical replication is not fully configured.
+            try:
+                if (
+                    settings.container_name
+                    and settings.postgres_user
+                    and settings.postgres_db
+                    and settings.fdw_user
+                    and settings.fdw_password
+                    and settings.effective_fdw_host()
+                    and settings.effective_fdw_port()
+                    and settings.effective_fdw_db()
+                ):
+                    yaml_abs = settings.fdw_yaml_abs()
+                    if yaml_abs.exists():
+                        fdw_cfg = await asyncio.to_thread(
+                            fdw_svc.load_yaml, yaml_abs
+                        )
+                        if fdw_cfg.tables or fdw_cfg.schemas:
+                            fdw_apply_args = {
+                                "container": settings.container_name,
+                                "pg_user": settings.postgres_user,
+                                "pg_db": settings.postgres_db,
+                                "pg_password": settings.postgres_password,
+                                "primary_host": settings.effective_fdw_host(),
+                                "primary_port": settings.effective_fdw_port(),
+                                "primary_db": settings.effective_fdw_db(),
+                                "fdw_user": settings.fdw_user,
+                                "fdw_password": settings.fdw_password,
+                            }
+                            fdw_res = await asyncio.to_thread(
+                                fdw_svc.sync_fdw_drift,
+                                fdw_cfg,
+                                yaml_abs,
+                                settings.fdw_sql_abs(),
+                                fdw_apply_args,
+                            )
+                            sync_log.record_if("fdw_drift", fdw_res)
+                            if fdw_res.get("reapplied"):
+                                logger.info(
+                                    "FDW drift sync: re-imported "
+                                    f"{fdw_res.get('drifted')}"
+                                )
+                            elif fdw_res.get("error"):
+                                logger.warning(
+                                    f"FDW drift sync error: {fdw_res.get('error')}"
+                                )
+            except Exception as e:
+                logger.warning(f"FDW drift sync failed: {e}")
+
         except Exception as e:
             logger.error(f"DDL auto-sync error: {e}")
+            sync_log.record("loop_error", {"error": str(e)})
 
         await asyncio.sleep(interval)
 

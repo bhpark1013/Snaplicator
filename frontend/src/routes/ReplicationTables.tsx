@@ -42,6 +42,82 @@ function tableMode(t: TableInfo, fdwSet: Set<string>): TableMode {
     return 'none'
 }
 
+const SYNC_KIND_LABEL: Record<string, string> = {
+    table_added: 'Table added',
+    column_added: 'Column added',
+    check_constraint: 'CHECK constraint synced',
+    schema_move: 'Schema move',
+    fdw_drift: 'FDW re-import',
+    trigger_reinstalled: 'Trigger reinstalled',
+    loop_error: 'Sync error',
+}
+
+function fmtSync(e: any): { label: string; tone: 'ok' | 'warn' | 'err'; lines: string[] } {
+    const d = (e && e.detail) || {}
+    const label = SYNC_KIND_LABEL[e.kind] || e.kind
+    const lines: string[] = []
+    let tone: 'ok' | 'warn' | 'err' = 'ok'
+    const errCount = Array.isArray(d.errors) ? d.errors.length : 0
+    switch (e.kind) {
+        case 'table_added': {
+            const ss = d.synced || []
+            lines.push(`${ss.length} table(s) reflected: ${ss.join(', ')}`)
+            if (d.refreshed) lines.push('Subscription refreshed')
+            break
+        }
+        case 'column_added': {
+            const cc = d.columns_added || []
+            lines.push(`${cc.length} column(s) added`)
+            for (const x of cc) lines.push(`\u00b7 ${x.table}.${x.column} (${x.type})`)
+            break
+        }
+        case 'check_constraint': {
+            const cs = d.constraints_synced || []
+            lines.push(`${cs.length} constraint(s) synced`)
+            for (const x of cs) lines.push(`\u00b7 ${x.table}.${x.constraint} \u2014 ${x.action}`)
+            break
+        }
+        case 'schema_move': {
+            const moved = d.moved || []
+            const orph = d.orphans || []
+            const skip = d.skipped || []
+            for (const m of moved) lines.push(`Moved: ${m.table} (${m.from} \u2192 ${m.to})`)
+            if (orph.length) {
+                tone = 'warn'
+                for (const o of orph) lines.push(`Orphan (manual cleanup): ${o.table} \u2014 ${(o.subscriber_orphan_schemas || []).join(', ')}`)
+            }
+            if (skip.length) {
+                tone = 'warn'
+                for (const sk of skip) lines.push(`Skipped: ${sk.table} \u2014 ${sk.reason}`)
+            }
+            if (!lines.length) lines.push('No change')
+            break
+        }
+        case 'fdw_drift': {
+            const dr = d.drifted || []
+            lines.push(`FDW re-IMPORT: ${dr.join(', ')}`)
+            if (d.reapplied) lines.push('Re-applied')
+            break
+        }
+        case 'trigger_reinstalled': {
+            lines.push(`Auto-add trigger reinstalled (publication: ${d.publication || '-'})`)
+            break
+        }
+        case 'loop_error': {
+            tone = 'err'
+            lines.push(String(d.error || 'Unknown error'))
+            break
+        }
+        default:
+            lines.push(JSON.stringify(d))
+    }
+    if (errCount) {
+        tone = 'err'
+        lines.push(`${errCount} error(s)`)
+    }
+    return { label, tone, lines }
+}
+
 export function ReplicationTables() {
     const [tables, setTables] = useState<TableInfo[]>([])
     const [info, setInfo] = useState<ConnInfo | null>(null)
@@ -59,6 +135,7 @@ export function ReplicationTables() {
 
     // Foreign tables managed via configs/fdw.yaml
     const [fdwSet, setFdwSet] = useState<Set<string>>(new Set())
+    const [syncEvents, setSyncEvents] = useState<any[]>([])
 
     const api = import.meta.env.VITE_API_BASE_URL || ''
     const base = api ? api : '/api'
@@ -100,10 +177,20 @@ export function ReplicationTables() {
             .catch(() => {})
     }
 
+    const loadSyncLog = () => {
+        fetch(`${base}/replication/sync-log?limit=50`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d && d.events) setSyncEvents(d.events) })
+            .catch(() => {})
+    }
+
     useEffect(() => {
         loadTables()
         loadInfo()
         loadFdw()
+        loadSyncLog()
+        const id = setInterval(loadSyncLog, 15000)
+        return () => clearInterval(id)
     }, [])
 
     const filtered = useMemo(() => {
@@ -344,6 +431,36 @@ export function ReplicationTables() {
                 </div>
             </div>
 
+            <div className="card" style={{ marginTop: 12, padding: '12px 16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <div style={{ fontWeight: 600 }}>Auto-Sync Activity</div>
+                    <span className="subtle" style={{ fontSize: 12 }}>{syncEvents.length} recent · auto-refresh 15s</span>
+                </div>
+                {syncEvents.length === 0 && (
+                    <div className="subtle" style={{ fontSize: 13 }}>No auto-sync events recorded yet.</div>
+                )}
+                {syncEvents.length > 0 && (
+                    <div style={{ maxHeight: 300, overflow: 'auto' }}>
+                        {syncEvents.map((e, i) => {
+                            const f = fmtSync(e)
+                            const c = f.tone === 'err' ? '#f87171' : f.tone === 'warn' ? '#fbbf24' : '#4ade80'
+                            return (
+                                <div key={i} style={{ borderBottom: '1px solid var(--border)', padding: '8px 0' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                                        <span style={{ fontSize: 11, fontWeight: 700, color: c, border: `1px solid ${c}`, borderRadius: 4, padding: '1px 6px' }}>{f.label}</span>
+                                        <span className="subtle" style={{ fontSize: 12, marginLeft: 'auto' }} title={e.ts}>{new Date(e.ts).toLocaleString()}</span>
+                                    </div>
+                                    <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+                                        {f.lines.map((ln, j) => (
+                                            <div key={j} style={{ color: j === 0 ? 'inherit' : '#9ca3af', paddingLeft: ln.startsWith('\u00b7') ? 10 : 0 }}>{ln}</div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )
+                        })}
+                    </div>
+                )}
+            </div>
             <div className="card" style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
                 <div style={{
                     display: 'grid',

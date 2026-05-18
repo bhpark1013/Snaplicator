@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from ...core.config import settings
 from ...services.sql_guard import assert_read_only_sql, ReadOnlyViolation
+from ...services import sync_log
 from ...services.replication import (
     get_replication_lag_seconds,
     get_initial_copy_progress,
@@ -701,3 +702,10 @@ def post_fdw_regenerate():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to regenerate fdw: {e}")
+
+
+@router.get("/sync-log")
+def get_sync_log(limit: int = 100):
+    """Recent auto-sync activity (new tables, column/constraint adds, schema
+    moves, FDW drift re-imports, errors) recorded by the background loop."""
+    return {"events": sync_log.read_events(limit)}

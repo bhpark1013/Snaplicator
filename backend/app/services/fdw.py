@@ -562,3 +562,179 @@ def remove_schemas(
     not_found = sorted(target_set - before)
     apply_result = _regenerate_and_apply(cfg, yaml_path, sql_path, apply_args)
     return {"removed": removed, "not_found": not_found, **apply_result}
+
+
+# ─── FDW remote column-drift detection ─────────────────────────────────
+#
+# postgres_fdw foreign tables are a *static* local snapshot captured at
+# IMPORT FOREIGN SCHEMA time. If the remote source gains/alters a column the
+# local foreign table silently goes stale. We detect drift cheaply by mapping
+# a helper foreign table onto the remote `information_schema.columns` view
+# (its own shape never drifts) and comparing per-table column signatures
+# against the local foreign-table definition. On any drift — or if the
+# foreign server vanished — we reuse the idempotent full re-render/re-import.
+
+_DRIFT_HELPER_SCHEMA = "_snaplicator"
+_DRIFT_HELPER_TABLE = "remote_cols"
+
+
+def _docker_psql_capture(
+    container: str,
+    pg_user: str,
+    pg_db: str,
+    sql: str,
+    pg_password: Optional[str] = None,
+    timeout: int = 90,
+):
+    cmd = [
+        "docker", "exec", "-i", container,
+        "psql", "-U", pg_user, "-d", pg_db,
+        "-v", "ON_ERROR_STOP=1", "-At", "-F", "|", "-f", "-",
+    ]
+    env = os.environ.copy()
+    if pg_password:
+        env["PGPASSWORD"] = pg_password
+    return subprocess.run(
+        cmd, input=sql, capture_output=True, text=True, env=env, timeout=timeout
+    )
+
+
+def detect_fdw_drift(
+    cfg: FdwConfig,
+    container: str,
+    pg_user: str,
+    pg_db: str,
+    pg_password: Optional[str] = None,
+) -> Dict:
+    """Compare remote vs local column signatures for every configured FDW table.
+
+    Returns dict: server_ok(bool), targets(int), drifted(list[(sch,tbl)]),
+    error(str|None).
+    """
+    if not cfg.tables and not cfg.schemas:
+        return {"server_ok": True, "targets": 0, "drifted": [], "error": None}
+
+    server = cfg.server.name
+    targets: set = {(t.schema_name, t.name) for t in cfg.tables}
+    if cfg.schemas:
+        sch_names = {s.name for s in cfg.schemas}
+        for ft in list_foreign_tables_on_replica(container, pg_user, pg_db, pg_password):
+            if ft.get("server") == server and ft.get("schema") in sch_names:
+                targets.add((ft["schema"], ft["table"]))
+    if not targets:
+        return {"server_ok": True, "targets": 0, "drifted": [], "error": None}
+
+    helper_sch = _q_ident(_DRIFT_HELPER_SCHEMA)
+    helper_tbl = _q_ident(_DRIFT_HELPER_TABLE)
+    helper_fqn = f"{helper_sch}.{helper_tbl}"
+    server_ident = _q_ident(server)
+    server_lit = _q_lit(server)
+    pairs_sql = ", ".join(
+        f"({_q_lit(s)}::text, {_q_lit(t)}::text)" for s, t in sorted(targets)
+    )
+
+    sql = rf"""\set ON_ERROR_STOP on
+DO $chk$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname = {server_lit}) THEN
+    RAISE EXCEPTION 'snaplicator_fdw_server_missing';
+  END IF;
+END $chk$;
+CREATE SCHEMA IF NOT EXISTS {helper_sch};
+DROP FOREIGN TABLE IF EXISTS {helper_fqn};
+CREATE FOREIGN TABLE {helper_fqn} (
+  table_schema text,
+  table_name text,
+  column_name text,
+  data_type text,
+  ordinal_position int
+) SERVER {server_ident}
+  OPTIONS (schema_name 'information_schema', table_name 'columns');
+WITH tgt(sch, tbl) AS (VALUES {pairs_sql}),
+remote AS (
+  SELECT rc.table_schema AS sch, rc.table_name AS tbl,
+         string_agg(rc.column_name || ':' || rc.data_type,
+                    ',' ORDER BY rc.ordinal_position) AS sig
+  FROM {helper_fqn} rc
+  JOIN tgt ON tgt.sch = rc.table_schema AND tgt.tbl = rc.table_name
+  GROUP BY 1, 2
+),
+loc AS (
+  SELECT c.table_schema AS sch, c.table_name AS tbl,
+         string_agg(c.column_name || ':' || c.data_type,
+                    ',' ORDER BY c.ordinal_position) AS sig
+  FROM information_schema.columns c
+  JOIN information_schema.foreign_tables ft
+    ON ft.foreign_table_schema = c.table_schema
+   AND ft.foreign_table_name = c.table_name
+   AND ft.foreign_server_name = {server_lit}
+  JOIN tgt ON tgt.sch = c.table_schema AND tgt.tbl = c.table_name
+  GROUP BY 1, 2
+)
+SELECT COALESCE(r.sch, l.sch) || '|' || COALESCE(r.tbl, l.tbl)
+FROM remote r
+FULL JOIN loc l ON r.sch = l.sch AND r.tbl = l.tbl
+WHERE r.sig IS DISTINCT FROM l.sig;
+"""
+
+    try:
+        proc = _docker_psql_capture(container, pg_user, pg_db, sql, pg_password)
+    except Exception as e:  # noqa: BLE001
+        return {"server_ok": True, "targets": len(targets), "drifted": [],
+                "error": f"psql invocation failed: {e}"}
+
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip()
+        if "snaplicator_fdw_server_missing" in err:
+            return {"server_ok": False, "targets": len(targets),
+                    "drifted": [], "error": None}
+        return {"server_ok": True, "targets": len(targets),
+                "drifted": [], "error": err[:800]}
+
+    drifted = []
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if "|" in line:
+            s, t = line.split("|", 1)
+            drifted.append((s, t))
+    return {"server_ok": True, "targets": len(targets),
+            "drifted": drifted, "error": None}
+
+
+def sync_fdw_drift(
+    cfg: FdwConfig,
+    yaml_path,
+    sql_path,
+    apply_args: Dict,
+) -> Dict:
+    """Detect remote column drift on FDW tables and, if found (or if the
+    foreign server is gone), re-render + re-import via the idempotent path.
+
+    Returns: checked(int), drifted(list[str]), reapplied(bool), error.
+    """
+    det = detect_fdw_drift(
+        cfg,
+        apply_args["container"],
+        apply_args["pg_user"],
+        apply_args["pg_db"],
+        apply_args.get("pg_password"),
+    )
+    if det.get("error"):
+        return {"checked": det["targets"], "drifted": [],
+                "reapplied": False, "error": det["error"]}
+
+    server_missing = not det["server_ok"]
+    drifted_pairs = det["drifted"]
+    if not server_missing and not drifted_pairs:
+        return {"checked": det["targets"], "drifted": [],
+                "reapplied": False, "error": None}
+
+    res = _regenerate_and_apply(cfg, yaml_path, sql_path, apply_args)
+    drifted_names = [f"{s}.{t}" for s, t in drifted_pairs]
+    if server_missing and not drifted_names:
+        drifted_names = ["<foreign-server-missing>"]
+    return {
+        "checked": det["targets"],
+        "drifted": drifted_names,
+        "reapplied": bool(res.get("applied")),
+        "error": None if res.get("applied") else res.get("result"),
+    }
