@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from ...core.config import settings
+from ...services.sql_guard import assert_read_only_sql, ReadOnlyViolation
 from ...services.replication import (
     get_replication_lag_seconds,
     get_initial_copy_progress,
@@ -15,6 +16,7 @@ from ...services.replication import (
     verify_trigger_installed,
 )
 from pathlib import Path
+import os
 
 router = APIRouter()
 
@@ -74,8 +76,7 @@ def get_replication_check():
         connstr = _build_publisher_connstr()
         _require_subscriber_settings()
 
-        repo_root = Path(__file__).resolve().parents[4]
-        sql_path = repo_root / "configs/replication_check.sql"
+        sql_path = _effective_sql_path()
         res = run_replication_check_sql(
             str(sql_path),
             connstr,
@@ -89,10 +90,71 @@ def get_replication_check():
         except Exception:
             sql_text = None
         return {"sql": sql_text, **res}
+    except ReadOnlyViolation as e:
+        raise HTTPException(status_code=400, detail=f"Rejected (not read-only): {e}")
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to run replication check: {e}")
+
+
+
+class CheckSqlBody(BaseModel):
+    sql: str = Field(..., description="Replication-check SQL (read-only only)")
+
+
+def _seed_sql_path() -> Path:
+    """Repo-tracked default, used only to seed first run."""
+    return Path(__file__).resolve().parents[4] / "configs/replication_check.sql"
+
+
+def _check_sql_path() -> Path:
+    """Persistent store, OUTSIDE the repo and the reset scope so a custom
+    check query survives full re-initialization. Override with CHECK_SQL_PATH.
+    """
+    env = os.environ.get("CHECK_SQL_PATH")
+    if env:
+        return Path(env).expanduser()
+    return Path.home() / ".snaplicator" / "replication_check.sql"
+
+
+def _effective_sql_path() -> Path:
+    p = _check_sql_path()
+    return p if p.exists() else _seed_sql_path()
+
+
+@router.get("/check-sql")
+def get_check_sql():
+    """Return the current replication-check SQL text (persistent if saved,
+    otherwise the repo default seed)."""
+    persist = _check_sql_path()
+    eff = _effective_sql_path()
+    try:
+        text = eff.read_text(encoding="utf-8") if eff.exists() else ""
+        return {"sql": text, "persisted": persist.exists(), "path": str(persist)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read check SQL: {e}")
+
+
+@router.put("/check-sql")
+def put_check_sql(body: CheckSqlBody):
+    """Validate (read-only) and save the replication-check SQL.
+
+    Rejects anything that is not provably read-only. This is the mandatory
+    write-prevention gate on save; execution is additionally wrapped in a
+    READ ONLY transaction.
+    """
+    try:
+        assert_read_only_sql(body.sql)
+    except ReadOnlyViolation as e:
+        raise HTTPException(status_code=400, detail=f"Rejected (not read-only): {e}")
+    p = _check_sql_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body.sql, encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save check SQL: {e}")
+    return {"ok": True, "sql": body.sql}
 
 
 # ── Replication Table Management Endpoints ──────────────────────

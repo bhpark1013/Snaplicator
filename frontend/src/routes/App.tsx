@@ -69,6 +69,13 @@ export function App() {
     const [check, setCheck] = useState<ReplicationCheckResult | null>(null)
     const [checkLoading, setCheckLoading] = useState(false)
     const [checkError, setCheckError] = useState<string | null>(null)
+    const [editSql, setEditSql] = useState<string>('')
+    const [sqlLoading, setSqlLoading] = useState(false)
+    const [savingSql, setSavingSql] = useState(false)
+    const [sqlMsg, setSqlMsg] = useState<string | null>(null)
+    const [sqlErr, setSqlErr] = useState<string | null>(null)
+    const [sqlLocked, setSqlLocked] = useState(true)
+    const [sqlPersisted, setSqlPersisted] = useState(false)
 
     const [deleting, setDeleting] = useState<string | null>(null)
     const [deletingBusy, setDeletingBusy] = useState(false)
@@ -179,6 +186,45 @@ export function App() {
             .finally(() => setCheckLoading(false))
     }
 
+    const loadCheckSql = () => {
+        setSqlLoading(true)
+        setSqlErr(null)
+        fetch(`${base}/replication/check-sql`)
+            .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+            .then((data: { sql: string; persisted?: boolean }) => { setEditSql(data.sql ?? ''); setSqlPersisted(!!data.persisted); setSqlLocked(true) })
+            .catch(async (e) => {
+                const text = e?.status ? `${e.status} ${await e.text()}` : String(e)
+                setSqlErr(text)
+            })
+            .finally(() => setSqlLoading(false))
+    }
+
+    const saveCheckSql = async () => {
+        setSavingSql(true)
+        setSqlErr(null)
+        setSqlMsg(null)
+        try {
+            const r = await fetch(`${base}/replication/check-sql`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sql: editSql }),
+            })
+            if (!r.ok) {
+                let detail = `${r.status}`
+                try { const j = await r.json(); detail = j.detail || detail } catch { /* ignore */ }
+                setSqlErr(String(detail))
+                return
+            }
+            setSqlMsg('Saved. Read-only validated.')
+            setSqlPersisted(true)
+            setSqlLocked(true)
+        } catch (e) {
+            setSqlErr(String(e))
+        } finally {
+            setSavingSql(false)
+        }
+    }
+
     useEffect(() => {
         loadClones()
         loadSnapshots()
@@ -186,6 +232,7 @@ export function App() {
         loadFsUsage()
         loadSubLogs()
         loadSubStatus()
+        loadCheckSql()
         // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
 
@@ -502,6 +549,38 @@ export function App() {
 
             <section className="card" style={{ marginTop: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2>Replication Check</h2><Link to="/replication" className="btn" style={{ fontSize: 13, padding: "6px 12px" }}>Manage Tables</Link></div>
+                <div style={{ margin: '8px 0' }}>
+                    <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>
+                        Read-only check SQL (publisher vs subscriber). Only SELECT / WITH / SHOW / EXPLAIN — writes are rejected on save and blocked at execution inside a READ ONLY transaction.{sqlPersisted ? '' : ' (showing default — not saved yet)'}
+                    </div>
+                    <textarea
+                        value={editSql}
+                        onChange={(e) => setEditSql(e.target.value)}
+                        readOnly={sqlLocked}
+                        spellCheck={false}
+                        placeholder="select count(*) from your_table;"
+                        style={{ width: '100%', minHeight: 120, fontFamily: 'monospace', fontSize: 13, boxSizing: 'border-box', opacity: sqlLocked ? 0.6 : 1, background: sqlLocked ? 'rgba(127,127,127,0.10)' : undefined }}
+                    />
+                    <div className="row" style={{ marginTop: 6 }}>
+                        {sqlLocked ? (
+                            <button className="btn" onClick={() => { setSqlErr(null); setSqlMsg(null); setSqlLocked(false) }}>Edit SQL</button>
+                        ) : (
+                            <>
+                                <button className="btn" onClick={saveCheckSql} disabled={savingSql}>
+                                    {savingSql ? 'Saving...' : 'Save'}
+                                </button>
+                                <button className="btn" onClick={() => { loadCheckSql(); setSqlLocked(true); setSqlErr(null); setSqlMsg(null) }} disabled={savingSql}>
+                                    Cancel
+                                </button>
+                            </>
+                        )}
+                        <button className="btn" onClick={loadCheckSql} disabled={sqlLoading || !sqlLocked}>
+                            {sqlLoading ? 'Loading...' : 'Reload'}
+                        </button>
+                    </div>
+                    {sqlErr && <p style={{ color: '#fca5a5', whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>{sqlErr}</p>}
+                    {sqlMsg && <p style={{ color: '#86efac', margin: '6px 0 0' }}>{sqlMsg}</p>}
+                </div>
                 <div className="row" style={{ margin: '8px 0' }}>
                     <button className="btn" onClick={runCheck} disabled={checkLoading}>
                         {checkLoading ? 'Running...' : 'Run Check SQL'}

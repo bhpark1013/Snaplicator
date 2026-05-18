@@ -459,12 +459,7 @@ for i in {1..60}; do
         TRIES=${POST_INIT_TRIES:-5}
         DELAY=${POST_INIT_DELAY:-2}
         # Determine which scripts to run based on replication mode
-        if [ "${USE_PGSTREAM:-0}" = "1" ]; then
-          INIT_SCRIPTS=(03_install_extensions.sh 05_clone_schema.sh 25_start_pgstream.sh 06_setup_fdw.sh)
-          echo "[pgstream] Using pgstream for replication (skipping native subscription)"
-        else
-          INIT_SCRIPTS=(05_clone_schema.sh 20_create_subscription.sh 06_setup_fdw.sh)
-        fi
+        INIT_SCRIPTS=(05_clone_schema.sh 20_create_subscription.sh 06_setup_fdw.sh)
         for s in "${INIT_SCRIPTS[@]}"; do
           n=1
           while [ $n -le $TRIES ]; do

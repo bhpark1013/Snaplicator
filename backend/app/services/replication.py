@@ -167,61 +167,53 @@ def run_replication_check_sql(
     subscriber_password: str | None,
     subscriber_db: str,
 ) -> Dict:
-    """Run the same SQL file on publisher (host) and subscriber (inside container).
+    """Run the check SQL on publisher and subscriber, strictly read-only.
 
-    Returns status and outputs separately. Always returns 200-level result to allow FE to show both sides,
-    with ok flags and error messages included.
+    The SQL is statically validated (assert_read_only_sql) and then executed
+    inside a `BEGIN READ ONLY; ... ROLLBACK;` wrapper so PostgreSQL itself
+    rejects any write and nothing persists. Returns both sides separately.
     """
+    from .sql_guard import assert_read_only_sql, wrap_read_only
+
     sql_path = Path(sql_file)
     if not sql_path.exists():
         raise FileNotFoundError(f"SQL file not found: {sql_path}")
 
-    # Publisher: direct psql with libpq connstr
+    raw_sql = sql_path.read_text(encoding="utf-8")
+    assert_read_only_sql(raw_sql)            # layer 1: static validation
+    wrapped = wrap_read_only(raw_sql)        # layer 2: DB-enforced READ ONLY tx
+
     pub_ok = False
     pub_out = ""
     pub_err = ""
     try:
         p_pub = subprocess.run(
-            [
-                "psql", publisher_connstr,
-                "-v", "ON_ERROR_STOP=1",
-                "-At", "-F", ",",
-                "-f", str(sql_path),
-            ],
-            text=True, capture_output=True, check=True,
+            ["psql", publisher_connstr, "-q", "-v", "ON_ERROR_STOP=1",
+             "-At", "-F", ",", "-f", "-"],
+            input=wrapped, text=True, capture_output=True, check=True,
         )
         pub_ok = True
         pub_out = (p_pub.stdout or "").strip()
-    except subprocess.CalledProcessError as e:  # noqa: PERF203
+    except subprocess.CalledProcessError as e:
         pub_err = (e.stderr or e.stdout or "").strip()
 
-    # Subscriber: copy file into container and run psql locally
     sub_ok = False
     sub_out = ""
     sub_err = ""
     try:
-        # Copy SQL into container
-        cp = subprocess.run(["docker", "cp", str(sql_path), f"{subscriber_container}:/tmp/replication_check.sql"], text=True, capture_output=True)
-        if cp.returncode != 0:
-            raise RuntimeError((cp.stderr or cp.stdout or "").strip())
-
-        # Build exec command with PGPASSWORD if provided
-        exec_cmd: List[str] = [
-            "docker", "exec", subscriber_container,
-        ]
+        exec_cmd: List[str] = ["docker", "exec", "-i", subscriber_container]
         if subscriber_password:
             exec_cmd += ["env", f"PGPASSWORD={subscriber_password}"]
         exec_cmd += [
             "psql", "-h", "localhost",
             "-U", subscriber_user, "-d", subscriber_db,
-            "-v", "ON_ERROR_STOP=1",
-            "-At", "-F", ",",
-            "-f", "/tmp/replication_check.sql",
+            "-q", "-v", "ON_ERROR_STOP=1", "-At", "-F", ",", "-f", "-",
         ]
-        p_sub = subprocess.run(exec_cmd, text=True, capture_output=True, check=True)
+        p_sub = subprocess.run(exec_cmd, input=wrapped, text=True,
+                               capture_output=True, check=True)
         sub_ok = True
         sub_out = (p_sub.stdout or "").strip()
-    except subprocess.CalledProcessError as e:  # noqa: PERF203
+    except subprocess.CalledProcessError as e:
         sub_err = (e.stderr or e.stdout or "").strip()
     except Exception as e:
         sub_err = str(e)
