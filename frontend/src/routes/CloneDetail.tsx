@@ -367,7 +367,10 @@ export function CloneDetail() {
                                     <div style={{ fontWeight: 600 }}>{snap.name}</div>
                                     <div className="subtle">{snap.description || '(no description)'}</div>
                                 </div>
-                                <span className="badge" style={{ flexShrink: 0, marginLeft: 'auto' }}>{snap.readonly ? 'readonly' : 'writable'}</span>
+                                <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto', alignItems: 'center' }}>
+                                    <span className="badge">{snap.readonly ? 'readonly' : 'writable'}</span>
+                                    <button className="btn" onClick={() => onReset(snap.name)} disabled={actionBusy}>Reset to this snapshot</button>
+                                </div>
                             </li>
                         ))}
                     </ul>

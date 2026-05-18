@@ -9,6 +9,7 @@ from .api.routes.health import router as health_router
 from .api.routes.snapshots import router as snapshots_router
 from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
+from .api.routes.setup import router as setup_router
 from .services import fdw as fdw_svc
 from .services import sync_log
 from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, sync_table_schema_moves, install_auto_add_trigger, verify_trigger_installed
@@ -228,3 +229,4 @@ app.include_router(health_router, prefix="/health", tags=["health"])
 app.include_router(snapshots_router, prefix="/snapshots", tags=["snapshots"]) 
 app.include_router(clones_router, prefix="/clones", tags=["clones"]) 
 app.include_router(replication_router, prefix="/replication", tags=["replication"])
+app.include_router(setup_router, prefix="/setup", tags=["setup"])
