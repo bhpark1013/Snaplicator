@@ -105,8 +105,12 @@ class CheckSqlBody(BaseModel):
 
 
 def _seed_sql_path() -> Path:
-    """Repo-tracked default, used only to seed first run."""
-    return Path(__file__).resolve().parents[4] / "configs/replication_check.sql"
+    """Seed used only when no persistent custom query exists. Prefer a
+    local (gitignored, environment-specific) replication_check.sql if
+    present; otherwise fall back to the tracked example template."""
+    cfg = Path(__file__).resolve().parents[4] / "configs"
+    local = cfg / "replication_check.sql"
+    return local if local.exists() else cfg / "replication_check.example.sql"
 
 
 def _check_sql_path() -> Path:
