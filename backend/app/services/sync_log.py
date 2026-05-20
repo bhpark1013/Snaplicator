@@ -19,7 +19,7 @@ _LAST_INIT = {"done": False}
 _NOTABLE = (
     "synced", "refreshed", "errors", "moved", "orphans", "skipped",
     "columns_added", "constraints_synced", "drifted", "reapplied",
-    "error",
+    "changes", "error",
 )
 
 

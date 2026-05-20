@@ -12,6 +12,7 @@ are NOT baked into the generated SQL. They are passed at apply time via
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 import subprocess
@@ -599,6 +600,60 @@ def _docker_psql_capture(
     )
 
 
+def _parse_sig(sig: str) -> list[tuple[str, str]]:
+    """Parse an ordered ``name:type,name:type,...`` signature string into a list
+    of (column_name, data_type) tuples. Order is preserved.
+    """
+    if not sig:
+        return []
+    out: list[tuple[str, str]] = []
+    for item in sig.split(","):
+        if not item:
+            continue
+        # First ':' separates name from type. Postgres type strings don't
+        # themselves contain ':' so partition is safe.
+        name, sep, dtype = item.partition(":")
+        if not sep:
+            continue
+        out.append((name, dtype))
+    return out
+
+
+def _build_column_diff(sch: str, tbl: str, local_sig: str, remote_sig: str) -> dict:
+    """Build a per-table diff payload from two sig strings.
+
+    Returns a dict shaped for inclusion in the ``fdw_drift`` sync-log detail so
+    that dedup distinguishes different column changes even on the same table.
+    """
+    local = _parse_sig(local_sig)
+    remote = _parse_sig(remote_sig)
+    local_map = dict(local)
+    remote_map = dict(remote)
+    added = sorted(
+        [[n, t] for n, t in remote if n not in local_map]
+    )
+    removed = sorted(
+        [[n, t] for n, t in local if n not in remote_map]
+    )
+    type_changed = sorted(
+        [
+            [n, local_map[n], remote_map[n]]
+            for n in set(local_map) & set(remote_map)
+            if local_map[n] != remote_map[n]
+        ]
+    )
+    remote_sig_hash = hashlib.sha256(
+        (remote_sig or "").encode("utf-8")
+    ).hexdigest()[:12]
+    return {
+        "table": f"{sch}.{tbl}",
+        "added": added,
+        "removed": removed,
+        "type_changed": type_changed,
+        "remote_sig_hash": remote_sig_hash,
+    }
+
+
 def detect_fdw_drift(
     cfg: FdwConfig,
     container: str,
@@ -609,10 +664,13 @@ def detect_fdw_drift(
     """Compare remote vs local column signatures for every configured FDW table.
 
     Returns dict: server_ok(bool), targets(int), drifted(list[(sch,tbl)]),
-    error(str|None).
+    changes(list[dict]), error(str|None). Each ``changes`` entry carries the
+    per-table column-level diff (added/removed/type_changed/remote_sig_hash)
+    so callers can surface it without re-querying.
     """
     if not cfg.tables and not cfg.schemas:
-        return {"server_ok": True, "targets": 0, "drifted": [], "error": None}
+        return {"server_ok": True, "targets": 0, "drifted": [],
+                "changes": [], "error": None}
 
     server = cfg.server.name
     targets: set = {(t.schema_name, t.name) for t in cfg.tables}
@@ -622,7 +680,8 @@ def detect_fdw_drift(
             if ft.get("server") == server and ft.get("schema") in sch_names:
                 targets.add((ft["schema"], ft["table"]))
     if not targets:
-        return {"server_ok": True, "targets": 0, "drifted": [], "error": None}
+        return {"server_ok": True, "targets": 0, "drifted": [],
+                "changes": [], "error": None}
 
     helper_sch = _q_ident(_DRIFT_HELPER_SCHEMA)
     helper_tbl = _q_ident(_DRIFT_HELPER_TABLE)
@@ -671,6 +730,7 @@ loc AS (
   GROUP BY 1, 2
 )
 SELECT COALESCE(r.sch, l.sch) || '|' || COALESCE(r.tbl, l.tbl)
+       || '|' || COALESCE(l.sig, '') || '|' || COALESCE(r.sig, '')
 FROM remote r
 FULL JOIN loc l ON r.sch = l.sch AND r.tbl = l.tbl
 WHERE r.sig IS DISTINCT FROM l.sig;
@@ -680,24 +740,33 @@ WHERE r.sig IS DISTINCT FROM l.sig;
         proc = _docker_psql_capture(container, pg_user, pg_db, sql, pg_password)
     except Exception as e:  # noqa: BLE001
         return {"server_ok": True, "targets": len(targets), "drifted": [],
+                "changes": [],
                 "error": f"psql invocation failed: {e}"}
 
     if proc.returncode != 0:
         err = (proc.stderr or "").strip()
         if "snaplicator_fdw_server_missing" in err:
             return {"server_ok": False, "targets": len(targets),
-                    "drifted": [], "error": None}
+                    "drifted": [], "changes": [], "error": None}
         return {"server_ok": True, "targets": len(targets),
-                "drifted": [], "error": err[:800]}
+                "drifted": [], "changes": [], "error": err[:800]}
 
-    drifted = []
+    drifted: list = []
+    changes: list = []
     for line in (proc.stdout or "").splitlines():
-        line = line.strip()
-        if "|" in line:
-            s, t = line.split("|", 1)
-            drifted.append((s, t))
+        line = line.rstrip("\n")
+        if not line or "|" not in line:
+            continue
+        # 4 fields: sch|tbl|local_sig|remote_sig. Sigs are name:type pairs joined
+        # by ',' — no '|' inside — so split(maxsplit=3) is safe.
+        parts = line.split("|", 3)
+        if len(parts) < 4:
+            continue
+        s, t, lsig, rsig = parts
+        drifted.append((s, t))
+        changes.append(_build_column_diff(s, t, lsig, rsig))
     return {"server_ok": True, "targets": len(targets),
-            "drifted": drifted, "error": None}
+            "drifted": drifted, "changes": changes, "error": None}
 
 
 def sync_fdw_drift(
@@ -709,7 +778,11 @@ def sync_fdw_drift(
     """Detect remote column drift on FDW tables and, if found (or if the
     foreign server is gone), re-render + re-import via the idempotent path.
 
-    Returns: checked(int), drifted(list[str]), reapplied(bool), error.
+    Returns: checked(int), drifted(list[str]), changes(list[dict]),
+    reapplied(bool), error. ``changes`` is the per-table column diff payload
+    from ``detect_fdw_drift``; the sync-log dedup key is derived from it so
+    distinct column changes on the same table no longer collapse into a single
+    entry.
     """
     det = detect_fdw_drift(
         cfg,
@@ -719,22 +792,27 @@ def sync_fdw_drift(
         apply_args.get("pg_password"),
     )
     if det.get("error"):
-        return {"checked": det["targets"], "drifted": [],
+        return {"checked": det["targets"], "drifted": [], "changes": [],
                 "reapplied": False, "error": det["error"]}
 
     server_missing = not det["server_ok"]
     drifted_pairs = det["drifted"]
+    changes = det.get("changes") or []
     if not server_missing and not drifted_pairs:
-        return {"checked": det["targets"], "drifted": [],
+        return {"checked": det["targets"], "drifted": [], "changes": [],
                 "reapplied": False, "error": None}
 
     res = _regenerate_and_apply(cfg, yaml_path, sql_path, apply_args)
     drifted_names = [f"{s}.{t}" for s, t in drifted_pairs]
     if server_missing and not drifted_names:
         drifted_names = ["<foreign-server-missing>"]
+        # Server-missing case has no per-column diff; mark it explicitly so the
+        # dedup signature still differs from a normal column-drift reapply.
+        changes = [{"reason": "foreign_server_missing"}]
     return {
         "checked": det["targets"],
         "drifted": drifted_names,
+        "changes": changes,
         "reapplied": bool(res.get("applied")),
         "error": None if res.get("applied") else res.get("result"),
     }
