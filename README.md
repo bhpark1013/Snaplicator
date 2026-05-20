@@ -5,8 +5,11 @@ Snaplicator is a Postgres test-data provisioning toolkit that combines logical r
 ### Project map
 - `backend/`: FastAPI services plus Docker/btrfs orchestration
 - `frontend/`: management UI (Vite + React, powered by `pnpm`)
+- `cli/`: `snaplicator` CLI — psql-style remote client for the REST API
+- `mcp-server/`: MCP server that wraps the REST API for agentic clients
+- `replication/replica-init/`: container init scripts (schema clone, extensions, FDW, subscription)
 - `scripts/`: helper utilities for running the replica container and managing snapshots/clones
-- `configs/`: `.env`, anonymization script, and misc SQL helpers
+- `configs/`: `.env`, `anonymize.sql`, `fdw.yaml`, and misc SQL helpers
 
 ### Prerequisites
 - Linux host (native, WSL2, or a Linux VM) with `btrfs-progs`, Docker, and `make`
@@ -17,22 +20,16 @@ Snaplicator is a Postgres test-data provisioning toolkit that combines logical r
 
 ---
 
-## Replication Modes
+## How replication works
 
-Snaplicator supports two replication modes:
+Snaplicator uses two complementary paths to keep the replica current, with the FastAPI backend running a 30s loop that reconciles drift automatically:
 
-| Mode | DDL Support | Setup Complexity | Use Case |
-|------|-------------|------------------|----------|
-| **Native PostgreSQL** | No | Simple | Standard DML-only replication |
-| **pgstream** | Yes | Medium | Full DDL + DML replication |
+| Path | Source of truth | What it covers | Auto-sync |
+|------|-----------------|----------------|-----------|
+| Native logical replication | `CREATE PUBLICATION` on the primary | All tables in the publication (DML + selected DDL) | new tables (event trigger on publisher), added columns, CHECK constraints, schema moves |
+| `postgres_fdw` foreign tables | `configs/fdw.yaml` | Tables that can't go through the publication (e.g. no PRIMARY KEY, or read-only-by-FDW by design) | remote column drift (added / removed / type-changed) re-imports automatically |
 
-### Native PostgreSQL Replication (Default)
-Uses PostgreSQL's built-in logical replication with `CREATE SUBSCRIPTION`. Simple and reliable, but does not replicate DDL changes (ALTER TABLE, CREATE INDEX, etc.).
-
-### pgstream Replication
-Uses [pgstream](https://github.com/xataio/pgstream) for CDC with DDL support. Requires:
-- `wal2json` plugin on the publisher (natively available in AWS Aurora PostgreSQL)
-- All tables must have a PRIMARY KEY
+Reflected changes — and any loop errors — are appended to `~/.snaplicator/sync_events.jsonl` (also exposed at `GET /replication/sync-log` and surfaced in the "Auto-Sync Activity" panel of the UI).
 
 ---
 
@@ -43,42 +40,29 @@ Copy the sample file and edit it with real values:
 ```bash
 cp configs/.env.test configs/.env
 ```
-`configs/.env.test` documents every required section (replica container, primary DB connection, subscription/publication names, etc.), so walk through it line by line and fill in the blanks for your environment.
+`configs/.env.test` documents every required section (replica container, primary DB connection, subscription/publication names, FDW credentials, etc.), so walk through it line by line and fill in the blanks for your environment.
 
-**For pgstream mode**, add these settings:
-```bash
-# Enable pgstream mode (set to 1 to use pgstream instead of native replication)
-USE_PGSTREAM=1
-
-# pgstream settings (optional, defaults shown)
-PGSTREAM_SLOT_NAME=pgstream_slot
-PGSTREAM_LOG_LEVEL=info
-```
-
-### 2. Publisher Setup
-
-#### For Native Replication
+### 2. Publisher setup
 Create the publication on the primary instance:
 ```sql
 CREATE PUBLICATION snaplicator_pub FOR TABLES IN SCHEMA public;
 ```
 
-#### For pgstream
-Ensure the publisher has:
-1. `wal_level = logical` (required)
-2. `wal2json` plugin available (Aurora PostgreSQL has this by default)
-3. All tables must have PRIMARY KEY constraints
+The backend installs an event trigger on the publisher at startup that auto-adds new `public.*` tables to this publication (see `GET /replication/trigger-status`). New tables therefore start replicating without manual `ALTER PUBLICATION`.
 
-Check wal2json availability:
-```sql
--- Should return 'wal2json' in the list
-SHOW shared_preload_libraries;
--- Or try creating a test slot
-SELECT pg_create_logical_replication_slot('test_wal2json', 'wal2json');
-SELECT pg_drop_replication_slot('test_wal2json');
+### 3. (Optional) Configure `postgres_fdw` targets
+For tables that should be exposed as foreign tables instead of logically replicated, edit `configs/fdw.yaml`:
+```yaml
+server:
+  name: prod_fdw
+  options: { sslmode: require, fetch_size: '10000', use_remote_estimate: 'true' }
+schemas: []
+tables:
+  - { schema: etl, name: some_view_v1 }
 ```
+The yaml is the single source of truth; saving via the UI or `POST /replication/fdw/regenerate` re-renders `configs/fdw_setup.generated.sql` and applies it to the live replica idempotently. The same SQL is what `replication/replica-init/06_setup_fdw.sh` runs on container init. Connection host/port/db and credentials are passed at apply-time from `.env` (`PRIMARY_*`, `FDW_USER`, `FDW_PASSWORD`) and never baked into the file.
 
-### 3. Install dependencies
+### 4. Install dependencies
 ```bash
 # Backend virtualenv + Python deps
 cd /path/to/Snaplicator
@@ -90,22 +74,17 @@ cd /path/to/Snaplicator/frontend
 pnpm install
 ```
 
-### 4. Prepare Docker and btrfs
+### 5. Prepare Docker and btrfs
 1. Create the Docker network once: `docker network create snaplicator-net`
 2. Ensure `ROOT_DATA_DIR` resides on btrfs. If not, run `scripts/run-replica-postgres.sh`; it can provision an LVM-backed btrfs volume interactively.
 
-### 5. Start the replica container
+### 6. Start the replica container
 ```bash
-# Native replication (default)
 make replica
-
-# pgstream replication
-USE_PGSTREAM=1 make replica
-# Or set USE_PGSTREAM=1 in configs/.env
 ```
 If the script fails, inspect `replica-init.log` and fix issues before moving on.
 
-### 6. Run backend and frontend
+### 7. Run backend and frontend
 ```bash
 # FastAPI server (defaults to 0.0.0.0:8888)
 make server-prepare   # first run only
@@ -120,54 +99,25 @@ make dev
 
 ---
 
-## pgstream Operations
-
-### Check pgstream status
-```bash
-# Inside the replica container
-docker exec -it snaplicator_replica bash
-ps aux | grep pgstream
-tail -f /var/lib/postgresql/pgstream.log
-```
-
-### Restart pgstream manually
-```bash
-# Inside the replica container
-pkill -f "pgstream run"
-pgstream run --config /var/lib/postgresql/pgstream.env --log-level info
-```
-
-### Check replication slot on publisher
-```sql
-SELECT slot_name, active, restart_lsn, confirmed_flush_lsn 
-FROM pg_replication_slots 
-WHERE slot_name = 'pgstream_slot';
-```
-
-### Drop and recreate pgstream slot
-```sql
--- On publisher
-SELECT pg_drop_replication_slot('pgstream_slot');
--- Then restart the replica container to reinitialize
-```
-
----
-
 ## API smoke test
 ```bash
 # Health
 curl -s http://localhost:8888/health | jq .
 
-# List snapshots
+# Replication state
+curl -s http://localhost:8888/replication/check         | jq .
+curl -s http://localhost:8888/replication/lag           | jq .
+curl -s http://localhost:8888/replication/sync-log      | jq .
+
+# FDW yaml inspection
+curl -s http://localhost:8888/replication/fdw           | jq .
+
+# Snapshots / clones
 curl -s http://localhost:8888/snapshots | jq .
-
-# Create a new snapshot
 curl -s -X POST http://localhost:8888/snapshots | jq .
-
-# Launch a clone from a snapshot (replace name)
 curl -s -X POST http://localhost:8888/snapshots/<snapshot_name>/clone | jq .
 ```
-To clone directly from the main replica, open the frontend and use "Clone from Main".
+To clone directly from the main replica, open the frontend and use "Clone from Main" (or `POST /clones`).
 
 ---
 
@@ -178,25 +128,22 @@ To clone directly from the main replica, open the frontend and use "Clone from M
 ---
 
 ## Handy scripts
+- `scripts/run-replica-postgres.sh`: provision the replica container (and optionally an LVM-backed btrfs volume)
 - `scripts/create_main_snapshot.sh`: take a snapshot from the main replica
 - `scripts/create-clone-from-snapshot-postgres.sh`: CLI helper for launching a clone container
 - `scripts/maintenance/cleanup_all.sh`: prune stale clones and containers
-- `replication/replica-init/*.sh`: initialization scripts for native and pgstream replication
+- `replication/replica-init/*.sh`: container init steps run inside the replica image (schema clone, extensions, FDW setup, subscription create)
 
 ---
 
 ## Troubleshooting
 
-### General
 - Replica initialization log: `replica-init.log`
 - Clone container failures: `docker logs <container>`
+- Auto-sync history / errors: `cat ~/.snaplicator/sync_events.jsonl` or `GET /replication/sync-log`
+- Auto-add event trigger missing on publisher: hit `POST /replication/trigger-install` (also reinstalled automatically by the 30s loop if it goes missing)
+- FDW table looks stale: confirm the table is listed in `configs/fdw.yaml`; the drift detector only reconciles configured targets. Schema-level entries pick up new tables on the next re-import.
 - Running out of btrfs space: delete old subvolumes under `MAIN_DATA_DIR` with `sudo btrfs subvolume delete ...`
 - macOS reminder: keep actual data on the Linux VM's btrfs mount; Docker Desktop alone cannot host btrfs snapshots.
 
-### pgstream-specific
-- pgstream log: `/var/lib/postgresql/pgstream.log` inside the container
-- "No primary key" error: All tables need a PRIMARY KEY for pgstream to work
-- Empty queries in logs: Check `PGSTREAM_INJECTOR_STORE_POSTGRES_URL` is set correctly
-- Slot doesn't exist: pgstream will auto-create the slot on init
-
-Keep `.env` and `configs/anonymize.sql` in sync with your environment, and feel free to extend the Makefile/scripts to automate your own workflows.
+Keep `configs/.env`, `configs/anonymize.sql`, and `configs/fdw.yaml` in sync with your environment, and feel free to extend the Makefile/scripts to automate your own workflows.
