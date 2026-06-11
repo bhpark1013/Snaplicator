@@ -17,6 +17,8 @@ router = APIRouter()
 class CreateCloneBody(BaseModel):
 	description: str | None = None
 	port: int | None = None
+	username: str | None = None
+	password: str | None = None
 
 
 class CloneSnapshotBody(BaseModel):
@@ -55,6 +57,11 @@ def create_clone_from_main(body: CreateCloneBody | None = None):
 			if is_port_in_use(specified_port):
 				raise HTTPException(status_code=400, detail=f"Port {specified_port} is already in use")
 
+		specified_user = (body.username or '').strip() if body else ''
+		specified_password = (body.password or '') if body else ''
+		if bool(specified_user) != bool(specified_password):
+			raise HTTPException(status_code=400, detail="username and password must be provided together")
+
 		opts = CloneOptions(
 			root_data_dir=settings.root_data_dir,
 			main_data_dir=settings.main_data_dir,
@@ -68,7 +75,7 @@ def create_clone_from_main(body: CreateCloneBody | None = None):
 			postgres_image=settings.postgres_image,
 			description=(body.description if body else None),
 		)
-		return clone_from_main_and_run(opts, host_port_override=specified_port)
+		return clone_from_main_and_run(opts, host_port_override=specified_port, db_user=specified_user or None, db_password=specified_password or None)
 	except HTTPException:
 		raise
 	except FileNotFoundError as e:
