@@ -62,6 +62,24 @@ export function App() {
     const [clonesLoading, setClonesLoading] = useState(false)
     const [clonesError, setClonesError] = useState<string | null>(null)
 
+    const FAV_KEY = 'snaplicator.favoriteClones'
+    const [favorites, setFavorites] = useState<Set<string>>(() => {
+        try {
+            return new Set<string>(JSON.parse(localStorage.getItem(FAV_KEY) || '[]'))
+        } catch {
+            return new Set<string>()
+        }
+    })
+    const toggleFavorite = (name: string) => {
+        setFavorites((prev) => {
+            const next = new Set(prev)
+            if (next.has(name)) next.delete(name)
+            else next.add(name)
+            localStorage.setItem(FAV_KEY, JSON.stringify(Array.from(next)))
+            return next
+        })
+    }
+
 
     const [copy, setCopy] = useState<CopyProgress | null>(null)
     const [copyError, setCopyError] = useState<string | null>(null)
@@ -408,6 +426,56 @@ export function App() {
         }
     }
 
+    const renderClone = (c: CloneItem) => {
+        const targetName = c.container_name || c.name
+        const statusLabel = c.has_container
+            ? (c.container_status || (c.is_running ? 'running' : 'stopped'))
+            : 'no-container'
+        const statusColor = c.has_container
+            ? (c.is_running ? 'var(--green)' : 'var(--muted)')
+            : undefined
+        const isFav = favorites.has(c.name)
+        return (
+            <li key={c.path} className={isFav ? 'fav' : undefined} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                <button
+                    className={isFav ? 'star-btn active' : 'star-btn'}
+                    onClick={() => toggleFavorite(c.name)}
+                    title={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                    aria-label="toggle favorite"
+                >
+                    {isFav ? '\u2605' : '\u2606'}
+                </button>
+                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700 }}>{c.name}</span>
+                        <span className="badge" style={statusColor ? { color: statusColor } : undefined}>
+                            {statusLabel}
+                        </span>
+                    </div>
+                    <div className="subtle" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        {c.description && <span title={c.description}>{c.description}</span>}
+                        <span>status: {statusLabel}</span>
+                    </div>
+                    <div className="subtle" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        {typeof c.host_port === 'number' && <span>port: {c.host_port}</span>}
+                        {c.container_started_at && <span>started at: {new Date(c.container_started_at).toLocaleString()}</span>}
+                    </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
+                    <Link className="btn" to={`/clones/${encodeURIComponent(targetName)}`}>View</Link>
+                    <button className="btn"
+                        onClick={() => onRefreshClone(c)}
+                        disabled={refreshingClone === targetName || !c.has_container}
+                        title={c.has_container ? '컨테이너를 최신 데이터로 교체' : '컨테이너가 없어 최신화할 수 없습니다.'}
+                    >
+                        {refreshingClone === targetName ? 'Refreshing...' : 'Refresh'}
+                    </button>
+                    <button className="btn btn-danger" onClick={() => onDelete(targetName)} disabled={deletingBusy}>Delete</button>
+                </div>
+            </li>
+        )
+    }
+
     return (
         <div className="container">
             <div className="header">
@@ -649,48 +717,18 @@ export function App() {
                     </button>
                 </div>
                 {clonesError && <p style={{ color: 'var(--red)' }}>{clonesError}</p>}
+                {clones.some((c) => favorites.has(c.name)) && (
+                    <>
+                        <div className="list-group-label" style={{ marginTop: 10 }}>Favorites</div>
+                        <ul className="list">
+                            {clones.filter((c) => favorites.has(c.name)).map(renderClone)}
+                        </ul>
+                        <div className="list-group-label" style={{ marginTop: 14 }}>All clones</div>
+                    </>
+                )}
                 <ul className="list" style={{ marginTop: 8 }}>
                     {clones.length === 0 && <li style={{ opacity: 0.7 }}>No clones</li>}
-                    {clones.map((c) => {
-                        const targetName = c.container_name || c.name
-                        const statusLabel = c.has_container
-                            ? (c.container_status || (c.is_running ? 'running' : 'stopped'))
-                            : 'no-container'
-                        const statusColor = c.has_container
-                            ? (c.is_running ? 'var(--green)' : 'var(--muted)')
-                            : undefined
-                        return (
-                            <li key={c.path} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                                        <span style={{ fontWeight: 700 }}>{c.name}</span>
-                                        <span className="badge" style={statusColor ? { color: statusColor } : undefined}>
-                                            {statusLabel}
-                                        </span>
-                                    </div>
-                                    <div className="subtle" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                                        {c.description && <span title={c.description}>{c.description}</span>}
-                                        <span>status: {statusLabel}</span>
-                                    </div>
-                                    <div className="subtle" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                                        {typeof c.host_port === 'number' && <span>port: {c.host_port}</span>}
-                                        {c.container_started_at && <span>started at: {new Date(c.container_started_at).toLocaleString()}</span>}
-                                    </div>
-                                </div>
-                                <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
-                                    <Link className="btn" to={`/clones/${encodeURIComponent(targetName)}`}>View</Link>
-                                    <button className="btn"
-                                        onClick={() => onRefreshClone(c)}
-                                        disabled={refreshingClone === targetName || !c.has_container}
-                                        title={c.has_container ? '컨테이너를 최신 데이터로 교체' : '컨테이너가 없어 최신화할 수 없습니다.'}
-                                    >
-                                        {refreshingClone === targetName ? 'Refreshing...' : 'Refresh'}
-                                    </button>
-                                    <button className="btn btn-danger" onClick={() => onDelete(targetName)} disabled={deletingBusy}>Delete</button>
-                                </div>
-                            </li>
-                        )
-                    })}
+                    {clones.filter((c) => !favorites.has(c.name)).map(renderClone)}
                 </ul>
             </section>
 

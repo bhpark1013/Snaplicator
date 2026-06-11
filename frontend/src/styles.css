@@ -241,6 +241,37 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .list li:hover { background: var(--surface-3); border-color: var(--border-strong); }
 
+/* ---- Favorites ---- */
+.list-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.star-btn {
+  flex: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  transition: color 0.1s ease, background 0.1s ease;
+}
+.star-btn:hover { color: var(--amber); background: var(--surface-3); }
+.star-btn.active { color: var(--amber); }
+.star-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+.list li.fav { border-color: var(--amber-border); }
+
 /* ---- Badges ---- */
 .badge {
   display: inline-flex;
