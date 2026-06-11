@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "snaplicator": {
+      "command": "/home/bhpark-dev/Snaplicator/mcp-server/.venv/bin/python",
+      "args": ["/home/bhpark-dev/Snaplicator/mcp-server/server.py"]
+    }
+  }
+}
