@@ -277,16 +277,16 @@ export function Clones() {
                     <Star className="size-3.5" fill={isFav ? 'currentColor' : 'none'} />
                 </button>
                 <div className="grid min-w-0 flex-1 gap-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
                         <span
                             className={cn('size-1.5 flex-none rounded-full', running ? 'bg-success' : 'bg-zinc-600')}
                             title={running ? 'running' : 'stopped'}
                         />
-                        <span className="truncate text-[13px] font-medium text-zinc-100">
+                        <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
                             {c.description?.trim() ? c.description : <span className="text-muted-foreground">(no description)</span>}
                         </span>
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex min-w-0 items-center gap-1.5">
                         <code className="min-w-0 truncate font-mono text-[12px] text-muted-foreground">{buildConnUrl(c, true)}</code>
                         <button
                             onClick={(e) => { e.stopPropagation(); onCopyUrl(c) }}
