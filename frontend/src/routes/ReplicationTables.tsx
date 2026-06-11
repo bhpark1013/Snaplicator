@@ -1,6 +1,19 @@
 import { useEffect, useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
+
 interface TableInfo {
     schema: string
     table: string
@@ -68,27 +81,27 @@ function fmtSync(e: any): { label: string; tone: 'ok' | 'warn' | 'err'; lines: s
         case 'column_added': {
             const cc = d.columns_added || []
             lines.push(`${cc.length} column(s) added`)
-            for (const x of cc) lines.push(`\u00b7 ${x.table}.${x.column} (${x.type})`)
+            for (const x of cc) lines.push(`· ${x.table}.${x.column} (${x.type})`)
             break
         }
         case 'check_constraint': {
             const cs = d.constraints_synced || []
             lines.push(`${cs.length} constraint(s) synced`)
-            for (const x of cs) lines.push(`\u00b7 ${x.table}.${x.constraint} \u2014 ${x.action}`)
+            for (const x of cs) lines.push(`· ${x.table}.${x.constraint} — ${x.action}`)
             break
         }
         case 'schema_move': {
             const moved = d.moved || []
             const orph = d.orphans || []
             const skip = d.skipped || []
-            for (const m of moved) lines.push(`Moved: ${m.table} (${m.from} \u2192 ${m.to})`)
+            for (const m of moved) lines.push(`Moved: ${m.table} (${m.from} → ${m.to})`)
             if (orph.length) {
                 tone = 'warn'
-                for (const o of orph) lines.push(`Orphan (manual cleanup): ${o.table} \u2014 ${(o.subscriber_orphan_schemas || []).join(', ')}`)
+                for (const o of orph) lines.push(`Orphan (manual cleanup): ${o.table} — ${(o.subscriber_orphan_schemas || []).join(', ')}`)
             }
             if (skip.length) {
                 tone = 'warn'
-                for (const sk of skip) lines.push(`Skipped: ${sk.table} \u2014 ${sk.reason}`)
+                for (const sk of skip) lines.push(`Skipped: ${sk.table} — ${sk.reason}`)
             }
             if (!lines.length) lines.push('No change')
             break
@@ -117,6 +130,8 @@ function fmtSync(e: any): { label: string; tone: 'ok' | 'warn' | 'err'; lines: s
     }
     return { label, tone, lines }
 }
+
+const TONE_VARIANT = { ok: 'success', warn: 'warning', err: 'destructive' } as const
 
 export function ReplicationTables() {
     const [tables, setTables] = useState<TableInfo[]>([])
@@ -191,6 +206,7 @@ export function ReplicationTables() {
         loadSyncLog()
         const id = setInterval(loadSyncLog, 15000)
         return () => clearInterval(id)
+        // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
 
     const filtered = useMemo(() => {
@@ -350,28 +366,32 @@ export function ReplicationTables() {
 
     const allFilteredSelected = filtered.length > 0 && filtered.every((t) => selected.has(`${t.schema}.${t.table}`))
 
+    const gridCols = 'grid grid-cols-[40px_1fr_100px_100px_100px_100px] items-center'
+
     return (
-        <div className="container">
-            <div className="header">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <Link to="/" className="btn" style={{ padding: '6px 10px' }}>&larr; Back</Link>
-                    <div className="title">Replication Tables</div>
+        <div className="mx-auto max-w-5xl animate-page-in px-6 pb-20 pt-6">
+            <div className="mb-2 flex items-center justify-between gap-4 border-b border-border pb-4">
+                <div className="flex items-center gap-3">
+                    <Button asChild size="sm">
+                        <Link to="/config">&larr; Back</Link>
+                    </Button>
+                    <h1 className="text-base font-semibold tracking-tight">Replication Tables</h1>
                 </div>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                    <span className="subtle">
+                <div className="flex items-center gap-3">
+                    <span className="text-[13px] text-muted-foreground">
                         {stats.replicated} replicated · {stats.fdw} FDW · {stats.none} none · {stats.total} total
                     </span>
-                    <button className="btn" onClick={loadTables} disabled={loading}>
+                    <Button onClick={loadTables} disabled={loading}>
                         {loading ? 'Loading...' : 'Reload'}
-                    </button>
+                    </Button>
                 </div>
             </div>
 
             {info && (
-                <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
-                    <div className="card" style={{ flex: 1, minWidth: 280, padding: '12px 16px' }}>
-                        <div style={{ fontWeight: 600, marginBottom: 8, color: 'var(--blue)' }}>Publisher</div>
-                        <div style={{ fontSize: 13, lineHeight: 1.8, fontFamily: 'monospace' }}>
+                <div className="mt-4 flex flex-wrap gap-3">
+                    <Card className="min-w-72 flex-1 px-4 py-3">
+                        <div className="mb-2 text-[13px] font-semibold text-info">Publisher</div>
+                        <div className="font-mono text-[13px] leading-7">
                             <div>Host: {info.publisher.host}</div>
                             <div>Port: {info.publisher.port}</div>
                             <div>DB: {info.publisher.db}</div>
@@ -379,10 +399,10 @@ export function ReplicationTables() {
                             <div>Password: {info.publisher.password}</div>
                             <div>Publication: {info.publication_name}</div>
                         </div>
-                    </div>
-                    <div className="card" style={{ flex: 1, minWidth: 280, padding: '12px 16px' }}>
-                        <div style={{ fontWeight: 600, marginBottom: 8, color: 'var(--green)' }}>Subscriber</div>
-                        <div style={{ fontSize: 13, lineHeight: 1.8, fontFamily: 'monospace' }}>
+                    </Card>
+                    <Card className="min-w-72 flex-1 px-4 py-3">
+                        <div className="mb-2 text-[13px] font-semibold text-success">Subscriber</div>
+                        <div className="font-mono text-[13px] leading-7">
                             <div>Container: {info.subscriber.container}</div>
                             <div>Host: {info.subscriber.host}</div>
                             <div>Port: {info.subscriber.port}</div>
@@ -391,68 +411,59 @@ export function ReplicationTables() {
                             <div>Password: {info.subscriber.password}</div>
                             <div>Subscription: {info.subscription_name}</div>
                         </div>
-                    </div>
+                    </Card>
                 </div>
             )}
 
-            {message && <p style={{ color: 'var(--green)', marginTop: 12 }}>{message}</p>}
-            {error && <p style={{ color: 'var(--red)', marginTop: 12 }}>{error}</p>}
+            {message && <p className="mt-3 text-[13px] text-success">{message}</p>}
+            {error && <p className="mt-3 text-[13px] text-destructive">{error}</p>}
 
-            <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-                <input
-                    className="input"
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+                <Input
                     placeholder="Search tables..."
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    style={{ minWidth: 200, flex: 1, maxWidth: 400 }}
+                    className="max-w-96 flex-1"
                 />
-                <div style={{ display: 'flex', gap: 4 }}>
+                <div className="flex gap-1">
                     {([
                         ['all', `All (${stats.total})`],
                         ['replicated', `Replicated (${stats.replicated})`],
                         ['fdw', `FDW (${stats.fdw})`],
                         ['none', `None (${stats.none})`],
                     ] as [FilterTab, string][]).map(([key, label]) => (
-                        <button
+                        <Button
                             key={key}
-                            className="btn"
-                            style={{
-                                background: filter === key ? 'var(--primary)' : 'transparent',
-                                color: filter === key ? '#fff' : 'var(--text)',
-                                border: `1px solid ${filter === key ? 'transparent' : 'var(--border)'}`,
-                                padding: '6px 12px',
-                                fontSize: 13,
-                            }}
+                            variant={filter === key ? 'primary' : 'ghost'}
                             onClick={() => setFilter(key)}
                         >
                             {label}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             </div>
 
-            <div className="card" style={{ marginTop: 12, padding: '12px 16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <div style={{ fontWeight: 600 }}>Auto-Sync Activity</div>
-                    <span className="subtle" style={{ fontSize: 12 }}>{syncEvents.length} recent · auto-refresh 15s</span>
+            <Card className="mt-3 px-4 py-3">
+                <div className="mb-2 flex items-center justify-between">
+                    <div className="text-[13px] font-semibold">Auto-Sync Activity</div>
+                    <span className="text-xs text-muted-foreground">{syncEvents.length} recent · auto-refresh 15s</span>
                 </div>
                 {syncEvents.length === 0 && (
-                    <div className="subtle" style={{ fontSize: 13 }}>No auto-sync events recorded yet.</div>
+                    <div className="text-[13px] text-muted-foreground">No auto-sync events recorded yet.</div>
                 )}
                 {syncEvents.length > 0 && (
-                    <div style={{ maxHeight: 300, overflow: 'auto' }}>
+                    <div className="max-h-72 overflow-auto">
                         {syncEvents.map((e, i) => {
                             const f = fmtSync(e)
-                            const c = f.tone === 'err' ? 'var(--red)' : f.tone === 'warn' ? 'var(--amber)' : 'var(--green)'
                             return (
-                                <div key={i} style={{ borderBottom: '1px solid var(--border)', padding: '8px 0' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                                        <span style={{ fontSize: 11, fontWeight: 700, color: c, border: `1px solid ${c}`, borderRadius: 4, padding: '1px 6px' }}>{f.label}</span>
-                                        <span className="subtle" style={{ fontSize: 12, marginLeft: 'auto' }} title={e.ts}>{new Date(e.ts).toLocaleString()}</span>
+                                <div key={i} className="border-b border-border py-2 last:border-b-0">
+                                    <div className="mb-1 flex items-center gap-2">
+                                        <Badge variant={TONE_VARIANT[f.tone]}>{f.label}</Badge>
+                                        <span className="ml-auto text-xs text-muted-foreground" title={e.ts}>{new Date(e.ts).toLocaleString()}</span>
                                     </div>
-                                    <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+                                    <div className="text-[13px] leading-relaxed">
                                         {f.lines.map((ln, j) => (
-                                            <div key={j} style={{ color: j === 0 ? 'inherit' : 'var(--muted)', paddingLeft: ln.startsWith('\u00b7') ? 10 : 0 }}>{ln}</div>
+                                            <div key={j} className={cn(j !== 0 && 'text-muted-foreground', ln.startsWith('·') && 'pl-2.5')}>{ln}</div>
                                         ))}
                                     </div>
                                 </div>
@@ -460,58 +471,46 @@ export function ReplicationTables() {
                         })}
                     </div>
                 )}
-            </div>
-            <div className="card" style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
-                <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: '40px 1fr 100px 100px 100px 100px',
-                    padding: '10px 12px',
-                    borderBottom: '1px solid var(--border)',
-                    fontWeight: 600,
-                    fontSize: 13,
-                    alignItems: 'center',
-                }}>
+            </Card>
+
+            <Card className="mt-3 overflow-hidden p-0">
+                <div className={cn(gridCols, 'border-b border-border-strong px-3 py-2.5 text-[13px] font-semibold')}>
                     <div>
                         <input
                             type="checkbox"
                             checked={allFilteredSelected}
                             onChange={toggleSelectAll}
-                            style={{ cursor: 'pointer' }}
+                            className="cursor-pointer accent-primary"
                         />
                     </div>
                     <div>Table</div>
-                    <div style={{ textAlign: 'center' }}>Publication</div>
-                    <div style={{ textAlign: 'center' }}>Subscriber</div>
-                    <div style={{ textAlign: 'center' }} title="Foreign Data Wrapper (live remote read)">FDW</div>
-                    <div style={{ textAlign: 'right' }}>Est. Rows</div>
+                    <div className="text-center">Publication</div>
+                    <div className="text-center">Subscriber</div>
+                    <div className="text-center" title="Foreign Data Wrapper (live remote read)">FDW</div>
+                    <div className="text-right">Est. Rows</div>
                 </div>
 
                 {loading && filtered.length === 0 && (
-                    <div style={{ padding: 24, textAlign: 'center', opacity: 0.7 }}>Loading...</div>
+                    <div className="p-6 text-center text-muted-foreground">Loading...</div>
                 )}
                 {!loading && filtered.length === 0 && (
-                    <div style={{ padding: 24, textAlign: 'center', opacity: 0.7 }}>No tables found</div>
+                    <div className="p-6 text-center text-muted-foreground">No tables found</div>
                 )}
 
-                <div style={{ maxHeight: 'calc(100vh - 360px)', overflowY: 'auto' }}>
+                <div className="max-h-[calc(100vh-360px)] overflow-y-auto">
                     {filtered.map((t) => {
                         const fqn = `${t.schema}.${t.table}`
                         const isSelected = selected.has(fqn)
+                        const mode = tableMode(t, fdwSet)
                         return (
                             <div
                                 key={fqn}
                                 onClick={() => toggleSelect(fqn)}
-                                style={{
-                                    display: 'grid',
-                                    gridTemplateColumns: '40px 1fr 100px 100px 100px 100px',
-                                    padding: '8px 12px',
-                                    borderBottom: '1px solid var(--border)',
-                                    cursor: 'pointer',
-                                    alignItems: 'center',
-                                    fontSize: 13,
-                                    background: isSelected ? 'rgba(255,255,255,0.04)' : 'transparent',
-                                    transition: 'background .1s',
-                                }}
+                                className={cn(
+                                    gridCols,
+                                    'cursor-pointer border-b border-border px-3 py-2 text-[13px] transition-colors last:border-b-0',
+                                    isSelected ? 'bg-white/[0.04]' : 'hover:bg-white/[0.02]',
+                                )}
                             >
                                 <div>
                                     <input
@@ -519,168 +518,134 @@ export function ReplicationTables() {
                                         checked={isSelected}
                                         onChange={() => toggleSelect(fqn)}
                                         onClick={(e) => e.stopPropagation()}
-                                        style={{ cursor: 'pointer' }}
+                                        className="cursor-pointer accent-primary"
                                     />
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'monospace' }}>
-                                    {(() => {
-                                        const mode = tableMode(t, fdwSet)
-                                        const label = mode === 'replicated' ? 'Replicated' : mode === 'fdw' ? 'FDW' : 'None'
-                                        const color = mode === 'replicated' ? 'var(--green)' : mode === 'fdw' ? 'var(--purple)' : 'var(--muted)'
-                                        const borderColor = mode === 'replicated' ? 'var(--green-border)' : mode === 'fdw' ? 'var(--purple-border)' : 'var(--border)'
-                                        return (
-                                            <span className="badge" style={{ color, borderColor, minWidth: 76, textAlign: 'center' }}>
-                                                {label}
-                                            </span>
-                                        )
-                                    })()}
-                                    <span>{fqn}</span>
+                                <div className="flex items-center gap-2">
+                                    <Badge
+                                        variant={mode === 'replicated' ? 'success' : mode === 'fdw' ? 'purple' : 'neutral'}
+                                        className="min-w-[84px] justify-center"
+                                    >
+                                        {mode === 'replicated' ? 'Replicated' : mode === 'fdw' ? 'FDW' : 'None'}
+                                    </Badge>
+                                    <span className="font-mono">{fqn}</span>
                                 </div>
-                                <div style={{ textAlign: 'center' }}>
-                                    <span className="badge" style={{
-                                        color: t.in_publication
-                                            ? (t.pub_via === 'schema' ? 'var(--amber)' : 'var(--green)')
-                                            : 'var(--muted)',
-                                        borderColor: t.in_publication
-                                            ? (t.pub_via === 'schema' ? 'var(--amber-border)' : 'var(--green-border)')
-                                            : 'var(--border)',
-                                    }}>
+                                <div className="text-center">
+                                    <Badge variant={t.in_publication ? (t.pub_via === 'schema' ? 'warning' : 'success') : 'neutral'}>
                                         {t.in_publication ? (t.pub_via === 'schema' ? 'Schema' : 'Yes') : 'No'}
-                                    </span>
+                                    </Badge>
                                 </div>
-                                <div style={{ textAlign: 'center' }}>
-                                    <span className="badge" style={{
-                                        color: t.in_subscriber ? 'var(--blue)' : 'var(--muted)',
-                                        borderColor: t.in_subscriber ? 'var(--blue-border)' : 'var(--border)',
-                                    }}>
+                                <div className="text-center">
+                                    <Badge variant={t.in_subscriber ? 'info' : 'neutral'}>
                                         {t.in_subscriber ? 'Yes' : 'No'}
-                                    </span>
+                                    </Badge>
                                 </div>
-                                <div style={{ textAlign: 'center' }}>
-                                    {fdwSet.has(fqn) ? (
-                                        <span className="badge" style={{ color: 'var(--purple)', borderColor: 'var(--purple-border)' }}>FDW</span>
-                                    ) : (
-                                        <span className="badge" style={{ color: 'var(--muted)', borderColor: 'var(--border)' }}>No</span>
-                                    )}
+                                <div className="text-center">
+                                    <Badge variant={fdwSet.has(fqn) ? 'purple' : 'neutral'}>
+                                        {fdwSet.has(fqn) ? 'FDW' : 'No'}
+                                    </Badge>
                                 </div>
-                                <div style={{ textAlign: 'right', fontFamily: 'monospace', opacity: 0.8 }}>
+                                <div className="text-right font-mono opacity-80">
                                     {formatRows(t.estimated_rows)}
                                 </div>
                             </div>
                         )
                     })}
                 </div>
-            </div>
+            </Card>
 
             {/* Action bar */}
-            <div style={{
-                display: 'flex',
-                gap: 8,
-                marginTop: 12,
-                alignItems: 'center',
-                flexWrap: 'wrap',
-            }}>
-                <span className="subtle">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="text-[13px] text-muted-foreground">
                     {selected.size} selected
                 </span>
-                <button
-                    className="btn"
+                <Button
                     disabled={selectedNotInPub.length === 0 || actionLoading}
                     onClick={() => setConfirmAction({ type: 'add', tables: selectedNotInPub })}
                 >
                     Add to Publication ({selectedNotInPub.length})
-                </button>
-                <button
-                    className="btn btn-danger"
+                </Button>
+                <Button
+                    variant="destructive"
                     disabled={selectedInPub.length === 0 || actionLoading}
                     onClick={() => setConfirmAction({ type: 'remove', tables: selectedInPub })}
                     title={selectedSchemaLevel.length > 0 ? `${selectedSchemaLevel.length} schema-level table(s) cannot be removed individually` : undefined}
                 >
                     Remove from Publication ({selectedInPub.length})
                     {selectedSchemaLevel.length > 0 && (
-                        <span style={{ color: 'var(--amber)', marginLeft: 4, fontSize: 12 }}>
+                        <span className="ml-1 text-xs text-warning">
                             ({selectedSchemaLevel.length} schema-level excluded)
                         </span>
                     )}
-                </button>
-                <button
-                    className="btn"
-                    disabled={refreshLoading}
-                    onClick={onRefresh}
-                >
+                </Button>
+                <Button disabled={refreshLoading} onClick={onRefresh}>
                     {refreshLoading ? 'Refreshing...' : 'Refresh Subscription'}
-                </button>
-                <span style={{ width: 1, height: 24, background: 'var(--border)', margin: '0 4px' }} />
-                <button
-                    className="btn"
+                </Button>
+                <span className="mx-1 h-6 w-px bg-border-strong" />
+                <Button
                     disabled={selectedFdwAddable.length === 0 || actionLoading}
                     onClick={() => setConfirmAction({ type: 'fdw_add', tables: selectedFdwAddable })}
                     title="Map selected tables as postgres_fdw foreign tables (live remote read). Cannot coexist with publication for the same table."
                 >
                     Add to FDW ({selectedFdwAddable.length})
-                </button>
-                <button
-                    className="btn btn-danger"
+                </Button>
+                <Button
+                    variant="destructive"
                     disabled={selectedFdwRemovable.length === 0 || actionLoading}
                     onClick={() => setConfirmAction({ type: 'fdw_remove', tables: selectedFdwRemovable })}
                 >
                     Remove from FDW ({selectedFdwRemovable.length})
-                </button>
+                </Button>
             </div>
 
             {/* Confirm dialog */}
-            {confirmAction && (
-                <div style={{
-                    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-                    display: 'grid', placeItems: 'center', zIndex: 50,
-                }}>
-                    <div className="card" style={{ minWidth: 400, maxWidth: 560 }}>
-                        <h3 style={{ marginTop: 0 }}>
-                            {confirmAction.type === 'add' && 'Add Tables to Publication'}
-                            {confirmAction.type === 'remove' && 'Remove Tables from Publication'}
-                            {confirmAction.type === 'fdw_add' && 'Add Tables to FDW'}
-                            {confirmAction.type === 'fdw_remove' && 'Remove Tables from FDW'}
-                        </h3>
-                        <p className="subtle" style={{ margin: '8px 0' }}>
-                            {confirmAction.type === 'add' &&
-                                'The following tables will be added to the publication and the subscription will be refreshed.'}
-                            {confirmAction.type === 'remove' &&
-                                'The following tables will be removed from the publication and the subscription will be refreshed.'}
-                            {confirmAction.type === 'fdw_add' &&
-                                'The following tables will be mapped as live foreign tables. Existing local tables with the same names will be dropped (their row data is presumed empty). configs/fdw.yaml will be updated.'}
-                            {confirmAction.type === 'fdw_remove' &&
-                                'The following foreign-table mappings will be removed. configs/fdw.yaml will be updated.'}
-                        </p>
-                        <div style={{
-                            maxHeight: 200, overflowY: 'auto',
-                            background: 'var(--surface-2)', borderRadius: 8, padding: 8, margin: '8px 0',
-                            fontFamily: 'monospace', fontSize: 13,
-                        }}>
-                            {confirmAction.tables.map((t) => (
-                                <div key={t}>{t}</div>
-                            ))}
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
-                            <button className="btn" onClick={() => setConfirmAction(null)} disabled={actionLoading}>
-                                Cancel
-                            </button>
-                            <button
-                                className={confirmAction.type === 'remove' || confirmAction.type === 'fdw_remove' ? 'btn btn-danger' : 'btn'}
-                                onClick={() => {
-                                    if (confirmAction.type === 'fdw_add' || confirmAction.type === 'fdw_remove') {
-                                        executeFdwAction(confirmAction.type, confirmAction.tables)
-                                    } else {
-                                        executeAction(confirmAction.type, confirmAction.tables)
-                                    }
-                                }}
-                                disabled={actionLoading}
-                            >
-                                {actionLoading ? 'Processing...' : 'Confirm'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <Dialog open={!!confirmAction} onOpenChange={(open) => { if (!open && !actionLoading) setConfirmAction(null) }}>
+                <DialogContent className="max-w-lg">
+                    {confirmAction && (
+                        <>
+                            <DialogTitle>
+                                {confirmAction.type === 'add' && 'Add Tables to Publication'}
+                                {confirmAction.type === 'remove' && 'Remove Tables from Publication'}
+                                {confirmAction.type === 'fdw_add' && 'Add Tables to FDW'}
+                                {confirmAction.type === 'fdw_remove' && 'Remove Tables from FDW'}
+                            </DialogTitle>
+                            <DialogDescription>
+                                {confirmAction.type === 'add' &&
+                                    'The following tables will be added to the publication and the subscription will be refreshed.'}
+                                {confirmAction.type === 'remove' &&
+                                    'The following tables will be removed from the publication and the subscription will be refreshed.'}
+                                {confirmAction.type === 'fdw_add' &&
+                                    'The following tables will be mapped as live foreign tables. Existing local tables with the same names will be dropped (their row data is presumed empty). configs/fdw.yaml will be updated.'}
+                                {confirmAction.type === 'fdw_remove' &&
+                                    'The following foreign-table mappings will be removed. configs/fdw.yaml will be updated.'}
+                            </DialogDescription>
+                            <div className="my-2 max-h-52 overflow-y-auto rounded-md border border-border bg-secondary p-2 font-mono text-[13px]">
+                                {confirmAction.tables.map((t) => (
+                                    <div key={t}>{t}</div>
+                                ))}
+                            </div>
+                            <DialogFooter>
+                                <Button onClick={() => setConfirmAction(null)} disabled={actionLoading}>
+                                    Cancel
+                                </Button>
+                                <Button
+                                    variant={confirmAction.type === 'remove' || confirmAction.type === 'fdw_remove' ? 'destructive' : 'primary'}
+                                    onClick={() => {
+                                        if (confirmAction.type === 'fdw_add' || confirmAction.type === 'fdw_remove') {
+                                            executeFdwAction(confirmAction.type, confirmAction.tables)
+                                        } else {
+                                            executeAction(confirmAction.type, confirmAction.tables)
+                                        }
+                                    }}
+                                    disabled={actionLoading}
+                                >
+                                    {actionLoading ? 'Processing...' : 'Confirm'}
+                                </Button>
+                            </DialogFooter>
+                        </>
+                    )}
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

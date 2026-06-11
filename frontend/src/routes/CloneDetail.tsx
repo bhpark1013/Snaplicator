@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardTitle } from '@/components/ui/card'
+
 interface CloneDetailResponse {
     name: string
     path: string
@@ -154,10 +158,10 @@ export function CloneDetail() {
     const onRefresh = useCallback(async () => {
         if (!detail) return
         if (!detail.container_name) {
-            setError('컨테이너가 존재하지 않아 최신화할 수 없습니다.')
+            setError('Cannot refresh: the clone has no container.')
             return
         }
-        const input = window.prompt('새 description을 입력하세요. 변경하지 않으려면 그대로 두고 OK를 누르세요.', detail.description || '')
+        const input = window.prompt('Enter a new description, or press OK to keep the current one.', detail.description || '')
         if (input === null) return
         const trimmed = input.trim()
 
@@ -184,7 +188,7 @@ export function CloneDetail() {
 
     const onDelete = useCallback(async () => {
         if (!detail) return
-        if (!window.confirm('정말 이 클론을 삭제할까요? 컨테이너와 서브볼륨이 모두 삭제됩니다.')) return
+        if (!window.confirm('Delete this clone? Its container and subvolume will both be removed.')) return
         setActionBusy(true)
         setError(null)
         setMessage(null)
@@ -202,11 +206,11 @@ export function CloneDetail() {
 
     const onCreateSnapshot = useCallback(async () => {
         if (!cloneId) return
-        let input = window.prompt('스냅샷 description을 입력하세요 (필수).', detail?.description || '')
+        let input = window.prompt('Enter a snapshot description (required).', detail?.description || '')
         if (input === null) return
         input = input.trim()
         if (!input) {
-            alert('설명을 입력해 주세요.')
+            alert('Description is required.')
             return
         }
 
@@ -229,10 +233,10 @@ export function CloneDetail() {
         } finally {
             setActionBusy(false)
         }
-    }, [base, cloneId, fetchCloneSnapshots, fetchAllSnapshots])
+    }, [base, cloneId, fetchCloneSnapshots, fetchAllSnapshots, detail])
 
     const onReset = useCallback(async (snapshotName: string) => {
-        const ok = window.confirm(`스냅샷 ${snapshotName} 으로 클론을 되돌릴까요? 컨테이너가 재기동됩니다.`)
+        const ok = window.confirm(`Reset this clone to snapshot ${snapshotName}? The container will be recreated.`)
         if (!ok) return
 
         setActionBusy(true)
@@ -262,121 +266,113 @@ export function CloneDetail() {
     }, [detail])
 
     return (
-        <div className="container">
-            <div className="header">
-                <div className="title">Clone Detail</div>
-                <div className="row">
-                    <Link className="btn" to="/">← Back</Link>
-                    <button className="btn" onClick={() => { fetchDetail(); fetchCloneSnapshots(); fetchAllSnapshots(); }}>
+        <div className="mx-auto max-w-5xl animate-page-in px-6 pb-20 pt-6">
+            <div className="mb-2 flex items-center justify-between gap-4 border-b border-border pb-4">
+                <h1 className="text-base font-semibold tracking-tight">Clone Detail</h1>
+                <div className="flex items-center gap-2">
+                    <Button asChild>
+                        <Link to="/">← Back</Link>
+                    </Button>
+                    <Button onClick={() => { fetchDetail(); fetchCloneSnapshots(); fetchAllSnapshots() }}>
                         Refresh Data
-                    </button>
+                    </Button>
                 </div>
             </div>
 
-            {loading && <p>Loading...</p>}
-            {error && <p style={{ color: 'var(--red)' }}>{error}</p>}
-            {message && <p style={{ color: 'var(--green)' }}>{message}</p>}
+            {loading && <p className="mt-4 text-[13px] text-muted-foreground">Loading...</p>}
+            {error && <p className="mt-4 text-[13px] text-destructive">{error}</p>}
+            {message && <p className="mt-4 text-[13px] text-success">{message}</p>}
 
             {detail && (
-                <section className="card" style={{ marginTop: 16 }}>
-                    <h2>Overview</h2>
+                <Card className="mt-4">
+                    <CardTitle>Overview</CardTitle>
                     <div
                         role="button"
                         tabIndex={0}
                         onClick={toggleOverview}
                         onKeyDown={handleOverviewKeyDown}
-                        style={{
-                            marginTop: 8,
-                            padding: 12,
-                            borderRadius: 8,
-                            border: '1px solid var(--border)',
-                            background: 'var(--surface-2)',
-                            display: 'grid',
-                            gap: 6,
-                            cursor: 'pointer',
-                            transition: 'box-shadow 0.15s ease, border-color 0.15s ease',
-                            boxShadow: overviewExpanded ? '0 4px 16px rgba(0, 0, 0, 0.35)' : 'none',
-                        }}
+                        className="mt-2 grid cursor-pointer gap-1.5 rounded-md border border-border bg-secondary p-3 transition-colors hover:border-border-strong"
                     >
-                        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>{detail.name}</div>
-                        <div style={{ color: 'var(--text-secondary)' }}>{detail.description?.trim() ? detail.description : '(no description)'}</div>
-                        <div style={{ color: 'var(--text-secondary)' }}>Port: {detail.host_port ?? 'N/A'}</div>
-                        <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        <div className="text-[15px] font-semibold">{detail.name}</div>
+                        <div className="text-[13px] text-zinc-300">{detail.description?.trim() ? detail.description : '(no description)'}</div>
+                        <div className="text-[13px] text-zinc-300">Port: {detail.host_port ?? 'N/A'}</div>
+                        <div className="text-xs text-muted-foreground">
                             {overviewExpanded ? 'Click to collapse details' : 'Click to expand details'}
                         </div>
                     </div>
 
                     {overviewExpanded && (
-                        <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
-                            <div><strong>Container:</strong> {detail.container_name || '없음'}</div>
-                            <div><strong>Subvolume:</strong> {detail.name}</div>
-                            <div><strong>Path:</strong> {detail.path}</div>
-                            <div><strong>Status:</strong> {detail.container_status || 'unknown'}</div>
-                            <div><strong>Created:</strong> {detail.created_at ? new Date(detail.created_at).toLocaleString() : 'N/A'}</div>
-                            <div><strong>Usage:</strong> {formatBytes(usage?.usage_bytes)}</div>
+                        <div className="mt-3 grid gap-2 text-[13px]">
+                            <div><strong className="font-semibold">Container:</strong> {detail.container_name || 'none'}</div>
+                            <div><strong className="font-semibold">Subvolume:</strong> {detail.name}</div>
+                            <div><strong className="font-semibold">Path:</strong> {detail.path}</div>
+                            <div><strong className="font-semibold">Status:</strong> {detail.container_status || 'unknown'}</div>
+                            <div><strong className="font-semibold">Created:</strong> {detail.created_at ? new Date(detail.created_at).toLocaleString() : 'N/A'}</div>
+                            <div><strong className="font-semibold">Usage:</strong> {formatBytes(usage?.usage_bytes)}</div>
                             {usage?.calculated_at && (
-                                <div><strong>Measured:</strong> {new Date(usage.calculated_at).toLocaleString()}</div>
+                                <div><strong className="font-semibold">Measured:</strong> {new Date(usage.calculated_at).toLocaleString()}</div>
                             )}
                             {metadataEntries.length > 0 && (
                                 <div>
-                                    <h3 style={{ marginTop: 8, marginBottom: 4 }}>Metadata</h3>
-                                    <pre style={{ maxHeight: 200, overflow: 'auto' }}>{JSON.stringify(detail.metadata, null, 2)}</pre>
+                                    <h3 className="mb-1 mt-2 text-[13px] font-semibold">Metadata</h3>
+                                    <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-secondary p-3 font-mono text-xs leading-relaxed text-zinc-300">
+                                        {JSON.stringify(detail.metadata, null, 2)}
+                                    </pre>
                                 </div>
                             )}
                         </div>
                     )}
 
-                    <div className="row" style={{ marginTop: 16, gap: 8, flexWrap: 'wrap' }}>
-                        <button className="btn" onClick={onRefresh} disabled={actionBusy || !detail.has_container}>Refresh</button>
-                        <button className="btn" onClick={onCreateSnapshot} disabled={actionBusy}>Create Snapshot</button>
-                        <button className="btn btn-danger" onClick={onDelete} disabled={actionBusy}>Delete</button>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                        <Button onClick={onRefresh} disabled={actionBusy || !detail.has_container}>Refresh</Button>
+                        <Button onClick={onCreateSnapshot} disabled={actionBusy}>Create Snapshot</Button>
+                        <Button variant="destructive" onClick={onDelete} disabled={actionBusy}>Delete</Button>
                     </div>
-                </section>
+                </Card>
             )}
 
-            <section className="card" style={{ marginTop: 16 }}>
-                <h2>Snapshots from this Clone</h2>
+            <Card className="mt-4">
+                <CardTitle>Snapshots from this Clone</CardTitle>
                 {cloneSnapshots.length === 0 ? (
-                    <p style={{ opacity: 0.7 }}>No snapshots derived from this clone.</p>
+                    <p className="mt-2 text-[13px] text-muted-foreground">No snapshots derived from this clone.</p>
                 ) : (
-                    <ul className="list" style={{ marginTop: 8 }}>
+                    <ul className="mt-3 grid gap-2">
                         {cloneSnapshots.map((snap) => (
-                            <li key={snap.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                                    <div style={{ fontWeight: 600 }}>{snap.name}</div>
-                                    <div className="subtle">{snap.description || '(no description)'}</div>
+                            <li key={snap.name} className="flex items-center justify-between gap-3 rounded-md border border-border bg-secondary px-3.5 py-2.5 transition-colors hover:border-border-strong hover:bg-accent">
+                                <div className="grid min-w-0 gap-1">
+                                    <div className="font-medium">{snap.name}</div>
+                                    <div className="text-[13px] text-muted-foreground">{snap.description || '(no description)'}</div>
                                 </div>
-                                <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
-                                    <button className="btn" onClick={() => onReset(snap.name)} disabled={actionBusy}>Reset to this snapshot</button>
+                                <div className="ml-auto flex flex-shrink-0 gap-2">
+                                    <Button onClick={() => onReset(snap.name)} disabled={actionBusy}>Reset to this snapshot</Button>
                                 </div>
                             </li>
                         ))}
                     </ul>
                 )}
-            </section>
+            </Card>
 
-            <section className="card" style={{ marginTop: 16 }}>
-                <h2>All Snapshots</h2>
+            <Card className="mt-4">
+                <CardTitle>All Snapshots</CardTitle>
                 {allSnapshots.length === 0 ? (
-                    <p style={{ opacity: 0.7 }}>No snapshots found.</p>
+                    <p className="mt-2 text-[13px] text-muted-foreground">No snapshots found.</p>
                 ) : (
-                    <ul className="list" style={{ marginTop: 8 }}>
+                    <ul className="mt-3 grid gap-2">
                         {allSnapshots.map((snap) => (
-                            <li key={snap.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                                    <div style={{ fontWeight: 600 }}>{snap.name}</div>
-                                    <div className="subtle">{snap.description || '(no description)'}</div>
+                            <li key={snap.name} className="flex items-center justify-between gap-3 rounded-md border border-border bg-secondary px-3.5 py-2.5 transition-colors hover:border-border-strong hover:bg-accent">
+                                <div className="grid min-w-0 gap-1">
+                                    <div className="font-medium">{snap.name}</div>
+                                    <div className="text-[13px] text-muted-foreground">{snap.description || '(no description)'}</div>
                                 </div>
-                                <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 'auto', alignItems: 'center' }}>
-                                    <span className="badge">{snap.readonly ? 'readonly' : 'writable'}</span>
-                                    <button className="btn" onClick={() => onReset(snap.name)} disabled={actionBusy}>Reset to this snapshot</button>
+                                <div className="ml-auto flex flex-shrink-0 items-center gap-2">
+                                    <Badge variant="neutral">{snap.readonly ? 'readonly' : 'writable'}</Badge>
+                                    <Button onClick={() => onReset(snap.name)} disabled={actionBusy}>Reset to this snapshot</Button>
                                 </div>
                             </li>
                         ))}
                     </ul>
                 )}
-            </section>
+            </Card>
         </div>
     )
 }
-
