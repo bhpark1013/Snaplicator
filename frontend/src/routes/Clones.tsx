@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Star } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Check, Copy, Star } from 'lucide-react'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import {
@@ -13,7 +12,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { cn } from '@/lib/utils'
+import { cn, copyText } from '@/lib/utils'
 
 interface CloneItem {
     name: string
@@ -27,9 +26,13 @@ interface CloneItem {
     is_running: boolean
     container_started_at: string | null
     description?: string | null
+    db_user?: string | null
+    db_password?: string | null
+    db_name?: string | null
 }
 
 export function Clones() {
+    const navigate = useNavigate()
     const [clones, setClones] = useState<CloneItem[]>([])
     const [clonesLoading, setClonesLoading] = useState(false)
     const [clonesError, setClonesError] = useState<string | null>(null)
@@ -48,6 +51,60 @@ export function Clones() {
     const [mainCloning, setMainCloning] = useState(false)
     const defaultUser = 'snaplicator'
     const [refreshingClone, setRefreshingClone] = useState<string | null>(null)
+    const [copiedClone, setCopiedClone] = useState<string | null>(null)
+
+    const [snapshotFor, setSnapshotFor] = useState<CloneItem | null>(null)
+    const [snapshotDesc, setSnapshotDesc] = useState('')
+    const [snapshotBusy, setSnapshotBusy] = useState(false)
+    const [snapshotError, setSnapshotError] = useState<string | null>(null)
+
+    const connHost = (typeof window !== 'undefined' && window.location.hostname) || 'localhost'
+    const buildConnUrl = (c: CloneItem, masked: boolean) =>
+        `postgresql://${c.db_user ?? ''}:${masked ? '••••••••' : (c.db_password ?? '')}@${connHost}:${c.host_port ?? ''}/${c.db_name ?? ''}`
+
+    const onCopyUrl = async (c: CloneItem) => {
+        const ok = await copyText(buildConnUrl(c, false))
+        if (!ok) {
+            setError('Copy failed. Select the connection string and copy manually.')
+            return
+        }
+        setCopiedClone(c.name)
+        setTimeout(() => setCopiedClone((v) => (v === c.name ? null : v)), 1500)
+    }
+
+    const openSnapshot = (c: CloneItem) => {
+        setSnapshotFor(c)
+        setSnapshotDesc(c.description ?? '')
+        setSnapshotError(null)
+    }
+
+    const confirmSnapshot = async () => {
+        if (!snapshotFor) return
+        const desc = snapshotDesc.trim()
+        if (!desc) {
+            setSnapshotError('Description is required.')
+            return
+        }
+        setSnapshotBusy(true)
+        setSnapshotError(null)
+        setMessage(null)
+        setError(null)
+        try {
+            const r = await fetch(`${base}/clones/${encodeURIComponent(snapshotFor.name)}/snapshots`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description: desc }),
+            })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            const res = await r.json()
+            setMessage(`Snapshot created: ${res.name}`)
+            setSnapshotFor(null)
+        } catch (e: any) {
+            setSnapshotError(String(e?.message || e))
+        } finally {
+            setSnapshotBusy(false)
+        }
+    }
 
     const FAV_KEY = 'snaplicator.favoriteClones'
     const [favorites, setFavorites] = useState<Set<string>>(() => {
@@ -188,16 +245,23 @@ export function Clones() {
 
     const renderClone = (c: CloneItem) => {
         const targetName = c.container_name || c.name
-        const statusLabel = c.has_container
-            ? (c.container_status || (c.is_running ? 'running' : 'stopped'))
-            : 'no-container'
-        const statusVariant = c.has_container && c.is_running ? 'success' : 'neutral'
         const isFav = favorites.has(c.name)
+        const running = c.has_container && c.is_running
+        const goDetail = () => navigate(`/clones/${encodeURIComponent(targetName)}`)
         return (
             <li
                 key={c.path}
+                role="button"
+                tabIndex={0}
+                onClick={goDetail}
+                onKeyDown={(e) => {
+                    if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+                        e.preventDefault()
+                        goDetail()
+                    }
+                }}
                 className={cn(
-                    'flex items-center justify-between gap-3 rounded-md border bg-secondary px-3.5 py-2.5 transition-colors hover:bg-accent',
+                    'flex cursor-pointer items-center gap-3 rounded-md border bg-secondary px-3.5 py-2.5 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                     isFav ? 'border-warning/35' : 'border-border hover:border-border-strong',
                 )}
             >
@@ -206,35 +270,50 @@ export function Clones() {
                         'flex-none rounded p-1 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                         isFav ? 'text-warning' : 'text-muted-foreground hover:text-warning',
                     )}
-                    onClick={() => toggleFavorite(c.name)}
+                    onClick={(e) => { e.stopPropagation(); toggleFavorite(c.name) }}
                     title={isFav ? 'Remove from favorites' : 'Add to favorites'}
                     aria-label="toggle favorite"
                 >
                     <Star className="size-3.5" fill={isFav ? 'currentColor' : 'none'} />
                 </button>
-                <div className="grid min-w-0 gap-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-semibold">{c.name}</span>
-                        <Badge variant={statusVariant}>{statusLabel}</Badge>
+                <div className="grid min-w-0 flex-1 gap-1">
+                    <div className="flex items-center gap-2">
+                        <span
+                            className={cn('size-1.5 flex-none rounded-full', running ? 'bg-success' : 'bg-zinc-600')}
+                            title={running ? 'running' : 'stopped'}
+                        />
+                        <span className="truncate text-[13px] font-medium text-zinc-100">
+                            {c.description?.trim() ? c.description : <span className="text-muted-foreground">(no description)</span>}
+                        </span>
                     </div>
-                    <div className="flex flex-wrap gap-3 text-[13px] text-muted-foreground">
-                        {c.description && <span title={c.description}>{c.description}</span>}
-                        {typeof c.host_port === 'number' && <span>port: {c.host_port}</span>}
-                        {c.container_started_at && <span>started at: {new Date(c.container_started_at).toLocaleString()}</span>}
+                    <div className="flex items-center gap-1.5">
+                        <code className="min-w-0 truncate font-mono text-[12px] text-muted-foreground">{buildConnUrl(c, true)}</code>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); onCopyUrl(c) }}
+                            title="Copy connection string"
+                            aria-label="Copy connection string"
+                            className="flex-none rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                            {copiedClone === c.name ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
+                        </button>
                     </div>
                 </div>
-                <div className="ml-auto flex flex-shrink-0 gap-2">
-                    <Button asChild>
-                        <Link to={`/clones/${encodeURIComponent(targetName)}`}>View</Link>
+                <div className="ml-auto flex flex-none gap-2">
+                    <Button
+                        onClick={(e) => { e.stopPropagation(); openSnapshot(c) }}
+                        disabled={!c.has_container}
+                        title={c.has_container ? 'Create a snapshot from this clone' : 'No container to snapshot.'}
+                    >
+                        Snapshot
                     </Button>
                     <Button
-                        onClick={() => onRefreshClone(c)}
+                        onClick={(e) => { e.stopPropagation(); onRefreshClone(c) }}
                         disabled={refreshingClone === targetName || !c.has_container}
                         title={c.has_container ? 'Replace the container data with the latest from main' : 'No container to refresh.'}
                     >
                         {refreshingClone === targetName ? 'Refreshing...' : 'Refresh'}
                     </Button>
-                    <Button variant="destructive" onClick={() => onDelete(targetName)} disabled={deletingBusy}>
+                    <Button variant="destructive" onClick={(e) => { e.stopPropagation(); onDelete(targetName) }} disabled={deletingBusy}>
                         Delete
                     </Button>
                 </div>
@@ -339,6 +418,32 @@ export function Clones() {
                         <Button onClick={() => setCreateOpen(false)} disabled={mainCloning}>Cancel</Button>
                         <Button variant="primary" onClick={onCreateClone} disabled={mainCloning || !createDesc.trim()}>
                             {mainCloning ? 'Cloning...' : 'Create Clone'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={!!snapshotFor} onOpenChange={(open) => { if (!open && !snapshotBusy) setSnapshotFor(null) }}>
+                <DialogContent>
+                    <DialogTitle>Create snapshot</DialogTitle>
+                    <DialogDescription>
+                        A read-only btrfs snapshot is captured from this clone's current state.
+                    </DialogDescription>
+                    <label className="mt-1 grid gap-1.5">
+                        <span className="text-[13px] text-muted-foreground">Description (required)</span>
+                        <Input
+                            autoFocus
+                            value={snapshotDesc}
+                            onChange={(e) => setSnapshotDesc(e.target.value)}
+                            placeholder="e.g. before-migration"
+                            className="w-full"
+                        />
+                    </label>
+                    {snapshotError && <p className="whitespace-pre-wrap text-[13px] text-destructive">{snapshotError}</p>}
+                    <DialogFooter>
+                        <Button onClick={() => setSnapshotFor(null)} disabled={snapshotBusy}>Cancel</Button>
+                        <Button variant="primary" onClick={confirmSnapshot} disabled={snapshotBusy || !snapshotDesc.trim()}>
+                            {snapshotBusy ? 'Creating...' : 'Create Snapshot'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
