@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -469,7 +470,32 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     }
 
 
-def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int] = None) -> Dict:
+def _create_db_user(container_name: str, opts: CloneOptions, username: str, password: str) -> None:
+    """Create (or update) an additional login role inside a freshly launched clone."""
+    if not re.fullmatch(r"[A-Za-z0-9_]+", username):
+        raise ValueError("Invalid username: only letters, digits and underscore are allowed")
+    escaped_pw = password.replace("'", "''")
+    sql = (
+        "DO $$ BEGIN "
+        f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{username}') THEN "
+        f"CREATE ROLE \"{username}\" WITH LOGIN SUPERUSER PASSWORD '{escaped_pw}'; "
+        f"ELSE ALTER ROLE \"{username}\" WITH LOGIN SUPERUSER PASSWORD '{escaped_pw}'; "
+        "END IF; END $$;"
+    )
+    last_err = ""
+    for _ in range(10):
+        res = subprocess.run(
+            ["docker", "exec", container_name, "psql", "-U", opts.postgres_user, "-d", opts.postgres_db, "-c", sql],
+            capture_output=True, text=True,
+        )
+        if res.returncode == 0:
+            return
+        last_err = (res.stderr or res.stdout or "").strip()
+        time.sleep(1)
+    raise RuntimeError(f"Clone started but creating user '{username}' failed: {last_err}")
+
+
+def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int] = None, db_user: Optional[str] = None, db_password: Optional[str] = None) -> Dict:
     root = Path(opts.root_data_dir)
     src_main = root / opts.main_data_dir
     if not src_main.exists() or not _is_btrfs_subvolume(src_main):
@@ -527,8 +553,12 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
         description=opts.description,
     )
 
+    if db_user and db_password:
+        _create_db_user(container_name, opts, db_user, db_password)
+
     return {
         "source_main": str(src_main),
+        "db_user": db_user or opts.postgres_user,
         "clone_subvolume": str(clone_path),
         "container_name": container_name,
         "host_port": host_port,
