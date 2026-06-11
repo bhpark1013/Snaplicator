@@ -408,6 +408,10 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     snap_path = root / opts.snapshot_name
     if not snap_path.exists() or not _is_btrfs_subvolume(snap_path):
         raise FileNotFoundError(f"Snapshot not found or not a subvolume: {snap_path}")
+    snap_meta = read_snaplicator_metadata(snap_path)
+    # Main snapshots hold raw (non-anonymized) data; only clone snapshots are
+    # already anonymized. Fail safe: anonymize unless provably a clone snapshot.
+    run_anonymize = snap_meta.get("type") != "clone_snapshot"
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     clone_name = f"{opts.main_data_dir}-clone-{ts}"
@@ -450,7 +454,7 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
         container_name=container_name,
         host_port_hint=None,
         description=opts.description,
-        run_anonymize=False,
+        run_anonymize=run_anonymize,
     )
 
     return {
@@ -773,7 +777,7 @@ def reset_clone_to_snapshot(
             host_port_hint=host_port_hint,
             description=description,
             remove_existing=False,
-            run_anonymize=False,
+            run_anonymize=(snapshot_meta.get("type") != "clone_snapshot"),
         )
         reset_success = True
     finally:
