@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { DatabaseBackup } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
@@ -20,7 +21,9 @@ export function Layout() {
         <div className="flex min-h-screen">
             <aside className="sticky top-0 flex h-screen w-[210px] flex-none flex-col gap-4 border-r border-border bg-background px-3 py-4">
                 <div className="flex items-center gap-2.5 px-2 text-sm font-semibold tracking-tight">
-                    <span className="size-[18px] flex-none rounded-[5px] bg-gradient-to-br from-primary to-[#8a93e8] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.15)]" />
+                    <span className="flex size-[18px] flex-none items-center justify-center rounded-[5px] border border-primary/40 bg-primary/15">
+                        <DatabaseBackup className="size-3 text-[#9aa3ee]" />
+                    </span>
                     Snaplicator
                 </div>
                 <nav className="flex flex-col gap-0.5">
