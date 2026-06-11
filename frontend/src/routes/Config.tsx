@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardTitle } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 
 interface CopyProgress {
@@ -37,13 +38,13 @@ type CheckStatus = 'checking' | 'ok' | 'mismatch' | 'error'
 
 export function Config() {
     const [copy, setCopy] = useState<CopyProgress | null>(null)
-    const [copyError, setCopyError] = useState<string | null>(null)
     const [fsUsage, setFsUsage] = useState<FsUsageSummary | null>(null)
 
     const [check, setCheck] = useState<ReplicationCheckResult | null>(null)
     const [checkLoading, setCheckLoading] = useState(false)
     const [checkError, setCheckError] = useState<string | null>(null)
     const [checkExpanded, setCheckExpanded] = useState(false)
+    const [logsExpanded, setLogsExpanded] = useState(false)
 
     const [editSql, setEditSql] = useState<string>('')
     const [sqlLoading, setSqlLoading] = useState(false)
@@ -105,10 +106,7 @@ export function Config() {
         fetch(`${base}/replication/copy-progress`)
             .then((r) => (r.ok ? r.json() : Promise.reject(r)))
             .then((data: CopyProgress) => setCopy(data))
-            .catch(async (e) => {
-                const text = e?.status ? `${e.status} ${await e.text()}` : String(e)
-                setCopyError(text)
-            })
+            .catch(() => { /* banner simply stays hidden */ })
     }
 
     const runCheck = () => {
@@ -203,155 +201,129 @@ export function Config() {
 
     const checkBadge = {
         checking: { variant: 'neutral' as const, label: 'Checking…' },
-        ok: { variant: 'success' as const, label: 'Replication OK · values match' },
-        mismatch: { variant: 'destructive' as const, label: 'Mismatch · publisher ≠ subscriber' },
+        ok: { variant: 'success' as const, label: 'OK · values match' },
+        mismatch: { variant: 'destructive' as const, label: 'Mismatch' },
         error: { variant: 'destructive' as const, label: 'Check failed' },
     }[checkStatus]
+
+    const lastSync = subStatus?.subscriptions?.find((s) => s.latest_end_time)?.latest_end_time
+    const copyInProgress = !!copy && copy.status !== 'complete' && copy.total_tables > 0
+
+    const usagePercent =
+        typeof fsUsage?.fs_used_bytes === 'number' && typeof fsUsage?.fs_size_bytes === 'number' && fsUsage.fs_size_bytes > 0
+            ? Math.min(100, (fsUsage.fs_used_bytes / fsUsage.fs_size_bytes) * 100)
+            : null
+
+    const statLabel = 'text-[11px] font-semibold uppercase tracking-wide text-muted-foreground'
 
     return (
         <div className="mx-auto max-w-5xl animate-page-in px-6 pb-20 pt-6">
             <div className="mb-2 flex items-center justify-between gap-4 border-b border-border pb-4">
                 <h1 className="text-base font-semibold tracking-tight">Config</h1>
+                <Button asChild>
+                    <Link to="/replication">Manage Tables →</Link>
+                </Button>
             </div>
 
-            <div className="mt-4 grid items-stretch gap-4 md:grid-cols-[minmax(320px,1fr)_minmax(240px,320px)]">
-                <Card>
-                    <CardTitle>Initial Copy</CardTitle>
-                    {copy ? (
-                        <div className="mt-2 text-[13px]">
-                            <div>Initial copy status: <strong className="font-semibold">{copy.status}</strong></div>
-                            {copy.total_tables > 0 && (
-                                <div className="mt-1">
-                                    <div>{copy.finished_tables} / {copy.total_tables} tables ({copy.percent.toFixed(1)}%)</div>
-                                    {copy.active && copy.active.length > 0 && (
-                                        <ul className="mt-1">
-                                            {copy.active.slice(0, 3).map((a, i) => (
-                                                <li key={i} className="opacity-80">
-                                                    {a.schema}.{a.table}
-                                                    {typeof a.percent === 'number' ? ` – ${a.percent.toFixed(1)}%` : ''}
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    )}
-                                </div>
-                            )}
-                            {copyError && <p className="text-destructive">{copyError}</p>}
-                        </div>
-                    ) : (
-                        <p className="mt-2 text-[13px] text-muted-foreground">No copy progress available.</p>
-                    )}
+            {/* ── Health strip: three equal status blocks ── */}
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <Card className="flex flex-col gap-2">
+                    <div className={statLabel}>Subscription</div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        {subStatus ? (
+                            <Badge variant={subStatus.status === 'ok' ? 'success' : 'destructive'}>
+                                {subStatus.status === 'ok' ? 'healthy' : 'down'}
+                            </Badge>
+                        ) : (
+                            <Badge variant="neutral">loading…</Badge>
+                        )}
+                    </div>
+                    <div className="mt-auto text-xs text-muted-foreground">
+                        {lastSync ? `last sync ${new Date(lastSync).toLocaleString()}` : '—'}
+                    </div>
                 </Card>
 
-                <Card>
-                    <CardTitle>Btrfs Usage</CardTitle>
-                    {fsUsage ? (
-                        <div className="mt-2 grid gap-1.5 text-[13px]">
-                            <div>
-                                <span className="font-semibold">Used:</span>{' '}
-                                {`${formatBytes(fsUsage.fs_used_bytes)} / ${formatBytes(fsUsage.fs_size_bytes)}`}
-                            </div>
-                            {typeof fsUsage.fs_used_bytes === 'number' && typeof fsUsage.fs_size_bytes === 'number' && fsUsage.fs_size_bytes > 0 && (
-                                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-accent">
-                                    <div
-                                        className="h-full rounded-full bg-info"
-                                        style={{ width: `${Math.min(100, (fsUsage.fs_used_bytes / fsUsage.fs_size_bytes) * 100).toFixed(2)}%` }}
-                                    />
-                                </div>
-                            )}
-                            {fsUsage.calculated_at && (
-                                <div className="text-muted-foreground">
-                                    Measured {new Date(fsUsage.calculated_at).toLocaleString()}
-                                </div>
-                            )}
+                <Card className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                        <div className={statLabel}>Replication</div>
+                        <Button
+                            size="icon"
+                            variant="ghost"
+                            className="-m-1 h-6 w-6"
+                            onClick={runCheck}
+                            disabled={checkLoading}
+                            title="Re-run check"
+                        >
+                            <RefreshCw className={`size-3.5 ${checkLoading ? 'animate-spin' : ''}`} />
+                        </Button>
+                    </div>
+                    <div>
+                        <Badge variant={checkBadge.variant}>{checkBadge.label}</Badge>
+                    </div>
+                    <div className="mt-auto text-xs text-muted-foreground">
+                        publisher vs subscriber, auto-checked
+                    </div>
+                </Card>
+
+                <Card className="flex flex-col gap-2">
+                    <div className={statLabel}>Storage</div>
+                    <div className="text-[13px]">
+                        <span className="font-semibold">{formatBytes(fsUsage?.fs_used_bytes)}</span>
+                        <span className="text-muted-foreground"> / {formatBytes(fsUsage?.fs_size_bytes)}</span>
+                    </div>
+                    {usagePercent !== null && (
+                        <div className="h-1.5 overflow-hidden rounded-full bg-accent">
+                            <div
+                                className={`h-full rounded-full ${usagePercent > 85 ? 'bg-destructive' : usagePercent > 70 ? 'bg-warning' : 'bg-info'}`}
+                                style={{ width: `${usagePercent.toFixed(2)}%` }}
+                            />
                         </div>
-                    ) : (
-                        <p className="mt-2 text-[13px] text-muted-foreground">Usage unavailable.</p>
                     )}
+                    <div className="mt-auto text-xs text-muted-foreground">
+                        {fsUsage?.calculated_at ? `measured ${new Date(fsUsage.calculated_at).toLocaleString()}` : '—'}
+                    </div>
                 </Card>
             </div>
 
-            <Card className="mt-4">
-                <div className="flex flex-wrap items-center gap-2">
-                    <CardTitle>Subscription Status</CardTitle>
-                    {subStatus && (
-                        <Badge variant={subStatus.status === 'ok' ? 'success' : 'destructive'}>
-                            {subStatus.status === 'ok' ? 'DB subscription healthy' : 'subscription down'}
-                        </Badge>
-                    )}
-                    {subLogs && subLogs.has_errors && subStatus?.status === 'ok' && (
-                        <Badge variant="warning">resolved (past errors in log)</Badge>
-                    )}
-                </div>
-
-                {subStatus && subStatus.subscriptions.length > 0 && (
-                    <div className="mt-2 grid gap-1 text-[13px]">
-                        {subStatus.subscriptions.map((s) => (
-                            <div key={s.name} className="flex flex-wrap items-center gap-3">
-                                <span className="font-semibold">{s.name}</span>
-                                <span>worker: {s.worker_running ? `running (pid ${s.pid})` : 'stopped'}</span>
-                                {s.latest_end_time && <span>last sync: {new Date(s.latest_end_time).toLocaleString()}</span>}
-                            </div>
-                        ))}
+            {/* ── Initial copy banner: only while a copy is in progress ── */}
+            {copyInProgress && (
+                <Card className="mt-3 border-info/35 bg-info/10">
+                    <div className="flex items-center gap-3">
+                        <RefreshCw className="size-4 animate-spin text-info" />
+                        <div className="text-[13px]">
+                            <span className="font-semibold">Initial copy in progress</span>
+                            {' — '}
+                            {copy!.finished_tables} / {copy!.total_tables} tables ({copy!.percent.toFixed(1)}%)
+                        </div>
                     </div>
-                )}
+                    {copy!.active && copy!.active.length > 0 && (
+                        <ul className="ml-7 mt-1.5 text-xs text-muted-foreground">
+                            {copy!.active.slice(0, 3).map((a, i) => (
+                                <li key={i}>
+                                    {a.schema}.{a.table}
+                                    {typeof a.percent === 'number' ? ` – ${a.percent.toFixed(1)}%` : ''}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </Card>
+            )}
 
-                <div className="my-2 flex flex-wrap items-center gap-2">
-                    <Button onClick={() => { loadSubLogs(); loadSubStatus() }} disabled={subLogsLoading}>
-                        {subLogsLoading ? 'Loading...' : 'Refresh'}
-                    </Button>
-                    {subLogs && <span className="text-xs text-muted-foreground">{subLogs.total_matched} matched lines (deduped to {subLogs.lines.length})</span>}
-                </div>
-                {subLogsError && <p className="text-[13px] text-destructive">{subLogsError}</p>}
-                {subLogs && subLogs.lines.length > 0 && (
-                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-secondary p-3 font-mono text-xs leading-normal text-zinc-300">
-                        {subLogs.lines.map((line, i) => {
-                            const isError = /\b(ERROR|FATAL)\b/.test(line)
-                            return (
-                                <div key={i} className={isError ? 'font-semibold text-destructive' : undefined}>
-                                    {line}
-                                </div>
-                            )
-                        })}
-                    </pre>
-                )}
-                {subLogs && subLogs.lines.length === 0 && (
-                    <p className="text-[13px] text-muted-foreground">No replication-related log lines found.</p>
-                )}
-                {subLogs?.filters && (
-                    <div className="mt-2 text-[11px] leading-relaxed text-muted-foreground/70">
-                        <div>include: {subLogs.filters.include.map((f: string) => `"${f}"`).join(', ')}</div>
-                        <div>exclude: {subLogs.filters.exclude.map((f: string) => `"${f}"`).join(', ')}</div>
-                        <div>source: docker logs --tail {subLogs.filters.tail} {subLogs.container_name}</div>
-                    </div>
-                )}
-            </Card>
-
-            <Card className="mt-4">
-                <div
-                    role="button"
-                    tabIndex={0}
+            {/* ── Collapsible detail: Replication Check ── */}
+            <Card className="mt-3">
+                <button
                     onClick={() => setCheckExpanded((v) => !v)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCheckExpanded((v) => !v) } }}
-                    className="flex cursor-pointer select-none items-center gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                    <CardTitle>Replication Check</CardTitle>
-                    <Badge variant={checkBadge.variant}>{checkBadge.label}</Badge>
-                    <Button
-                        className="ml-auto"
-                        onClick={(e) => { e.stopPropagation(); runCheck() }}
-                        disabled={checkLoading}
-                    >
-                        {checkLoading ? 'Checking...' : 'Re-run'}
-                    </Button>
-                    <span aria-hidden className="text-xs text-muted-foreground">
-                        {checkExpanded ? '▾ collapse' : '▸ details'}
-                    </span>
-                </div>
+                    {checkExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                    <span className="text-[13px] font-semibold tracking-tight">Replication Check</span>
+                    <span className="text-xs text-muted-foreground">— check SQL · publisher/subscriber outputs</span>
+                </button>
 
                 {checkError && <p className="mt-2 text-[13px] text-destructive">{checkError}</p>}
 
                 {checkExpanded && (
-                    <div className="mt-3">
+                    <div className="mt-3 pl-6">
                         <div className="mb-1 text-xs text-muted-foreground">
                             Read-only check SQL (publisher vs subscriber). Only SELECT / WITH / SHOW / EXPLAIN — writes are rejected on save and blocked at execution inside a READ ONLY transaction.{sqlPersisted ? '' : ' (showing default — not saved yet)'}
                         </div>
@@ -413,16 +385,58 @@ export function Config() {
                 )}
             </Card>
 
-            <Card className="mt-4">
-                <div className="flex items-center gap-2.5">
-                    <CardTitle>Manage Tables</CardTitle>
-                    <Button asChild className="ml-auto">
-                        <Link to="/replication">Open</Link>
-                    </Button>
-                </div>
-                <p className="mt-2 text-[13px] text-muted-foreground">
-                    Add or remove tables in the publication / FDW mappings, and refresh the subscription.
-                </p>
+            {/* ── Collapsible detail: Subscription Logs ── */}
+            <Card className="mt-3">
+                <button
+                    onClick={() => setLogsExpanded((v) => !v)}
+                    className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                    {logsExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                    <span className="text-[13px] font-semibold tracking-tight">Subscription Logs</span>
+                    <span className="text-xs text-muted-foreground">
+                        {subLogs ? `— ${subLogs.total_matched} matched lines (deduped to ${subLogs.lines.length})` : ''}
+                    </span>
+                </button>
+
+                {logsExpanded && (
+                    <div className="mt-3 pl-6">
+                        <div className="mb-2 flex flex-wrap items-center gap-3">
+                            <Button onClick={() => { loadSubLogs(); loadSubStatus() }} disabled={subLogsLoading}>
+                                {subLogsLoading ? 'Loading...' : 'Refresh'}
+                            </Button>
+                            {subStatus && subStatus.subscriptions.length > 0 && (
+                                <span className="text-xs text-muted-foreground">
+                                    {subStatus.subscriptions.map((s) =>
+                                        `${s.name}: worker ${s.worker_running ? `running (pid ${s.pid})` : 'stopped'}`,
+                                    ).join(' · ')}
+                                </span>
+                            )}
+                        </div>
+                        {subLogsError && <p className="text-[13px] text-destructive">{subLogsError}</p>}
+                        {subLogs && subLogs.lines.length > 0 && (
+                            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-secondary p-3 font-mono text-xs leading-normal text-zinc-300">
+                                {subLogs.lines.map((line, i) => {
+                                    const isError = /\b(ERROR|FATAL)\b/.test(line)
+                                    return (
+                                        <div key={i} className={isError ? 'font-semibold text-destructive' : undefined}>
+                                            {line}
+                                        </div>
+                                    )
+                                })}
+                            </pre>
+                        )}
+                        {subLogs && subLogs.lines.length === 0 && (
+                            <p className="text-[13px] text-muted-foreground">No replication-related log lines found.</p>
+                        )}
+                        {subLogs?.filters && (
+                            <div className="mt-2 text-[11px] leading-relaxed text-muted-foreground/70">
+                                <div>include: {subLogs.filters.include.map((f: string) => `"${f}"`).join(', ')}</div>
+                                <div>exclude: {subLogs.filters.exclude.map((f: string) => `"${f}"`).join(', ')}</div>
+                                <div>source: docker logs --tail {subLogs.filters.tail} {subLogs.container_name}</div>
+                            </div>
+                        )}
+                    </div>
+                )}
             </Card>
         </div>
     )
