@@ -226,7 +226,11 @@ def get_fs_usage():
 @router.get("/{clone_id}")
 def get_clone_detail_api(clone_id: str = Path(..., description="Clone identifier (subvolume name or container name)")):
 	try:
-		return get_clone_detail(settings.root_data_dir, settings.main_data_dir, clone_id)
+		detail = get_clone_detail(settings.root_data_dir, settings.main_data_dir, clone_id)
+		detail["db_user"] = settings.postgres_user
+		detail["db_password"] = settings.postgres_password
+		detail["db_name"] = settings.postgres_db
+		return detail
 	except FileNotFoundError as e:
 		raise HTTPException(status_code=404, detail=str(e))
 	except Exception as e:
