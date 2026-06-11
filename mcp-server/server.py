@@ -8,7 +8,14 @@ BASE_URL = os.environ.get("SNAPLICATOR_URL", "http://localhost:8888")
 
 mcp = FastMCP(
     "snaplicator",
-    instructions="Snaplicator manages PostgreSQL replicas, clones, and snapshots. Use these tools to manage database clones for development/testing.",
+    instructions=(
+        "Snaplicator manages PostgreSQL replicas, clones, and snapshots. "
+        "Read-only tools (list_*, get_*, run_replication_check) are safe to call freely. "
+        "Tools whose description starts with ⚠️ mutate real state: clone/snapshot create "
+        "and delete, reset/refresh (which discard data), and publication/trigger changes that "
+        "act on the upstream PRIMARY database. Confirm any " "⚠️" " operation with the user "
+        "before calling, especially on a production deployment."
+    ),
 )
 
 
@@ -100,16 +107,25 @@ def list_clones() -> str:
 
 
 @mcp.tool()
-def create_clone(description: str, port: int | None = None) -> str:
+def create_clone(description: str, port: int | None = None, username: str | None = None, password: str | None = None) -> str:
     """Create a new database clone from the main replica.
+
+    ⚠️ Mutates state: launches a new container and consumes disk.
 
     Args:
         description: What this clone is for (e.g. "feature-xyz testing")
         port: Optional host port. Auto-assigned if not specified.
+        username: Optional extra DB login to create in the clone. Must be given
+            together with password. If omitted, connect with the default
+            account (snaplicator on prod).
+        password: Password for the extra DB login (required when username is set).
     """
     body = {"description": description}
     if port is not None:
         body["port"] = port
+    if username:
+        body["username"] = username
+        body["password"] = password
     return json.dumps(_post("/clones", body), ensure_ascii=False)
 
 
@@ -128,6 +144,8 @@ def get_clone_detail(clone_id: str) -> str:
 def delete_clone(clone_id: str) -> str:
     """Delete a clone and its container.
 
+    ⚠️ Destructive & irreversible: removes the container AND its btrfs subvolume (all clone data). Confirm with the user before running.
+
     Args:
         clone_id: Clone identifier - subvolume name, container name, host port (e.g. "5435"), or connection URL/DSN (e.g. "postgresql://user:pass@host:5435/db")
     """
@@ -139,6 +157,8 @@ def delete_clone(clone_id: str) -> str:
 @mcp.tool()
 def refresh_clone(clone_id: str, description: str | None = None) -> str:
     """Refresh a clone with the latest data from main.
+
+    ⚠️ Destructive: replaces the clone's current data with the latest from main. Confirm with the user before running.
 
     Args:
         clone_id: Clone identifier - subvolume name, container name, host port (e.g. "5435"), or connection URL/DSN (e.g. "postgresql://user:pass@host:5435/db")
@@ -153,6 +173,8 @@ def refresh_clone(clone_id: str, description: str | None = None) -> str:
 @mcp.tool()
 def reset_clone_to_snapshot(clone_id: str, snapshot_name: str, description: str | None = None) -> str:
     """Reset (switch) an existing clone to a snapshot's state, keeping its port.
+
+    ⚠️ Destructive: discards the clone's current data and recreates its container on the snapshot. Confirm with the user before running.
 
     The clone's container is recreated on top of the snapshot data. Works with
     both main snapshots and clone snapshots (any snapshot under the data root).
@@ -172,6 +194,8 @@ def reset_clone_to_snapshot(clone_id: str, snapshot_name: str, description: str 
 @mcp.tool()
 def create_clone_snapshot(clone_id: str, description: str | None = None) -> str:
     """Create a snapshot of a specific clone's current state (not the main replica).
+
+    ⚠️ Mutates state: creates a new snapshot subvolume.
 
     Useful before risky operations on a clone; restore later with reset_clone_to_snapshot.
 
@@ -224,6 +248,8 @@ def list_snapshots() -> str:
 def create_snapshot(description: str) -> str:
     """Create a snapshot of the current main replica state.
 
+    ⚠️ Mutates state: creates a new btrfs snapshot of main.
+
     Args:
         description: What this snapshot captures (e.g. "before migration")
     """
@@ -234,6 +260,8 @@ def create_snapshot(description: str) -> str:
 def delete_snapshot(snapshot_name: str) -> str:
     """Delete a snapshot.
 
+    ⚠️ Destructive & irreversible: deletes the snapshot subvolume. Confirm with the user before running.
+
     Args:
         snapshot_name: Snapshot directory name
     """
@@ -243,6 +271,8 @@ def delete_snapshot(snapshot_name: str) -> str:
 @mcp.tool()
 def clone_from_snapshot(snapshot_name: str, description: str | None = None) -> str:
     """Create a new clone from a specific snapshot.
+
+    ⚠️ Mutates state: launches a new container and consumes disk.
 
     Args:
         snapshot_name: Snapshot to clone from
@@ -276,6 +306,8 @@ def list_replication_tables() -> str:
 def add_tables_to_replication(tables: list[str], refresh: bool = False) -> str:
     """Add tables to the publication for replication.
 
+    ⚠️ Acts on the publisher (the upstream PRIMARY database). On a production deployment this ALTERs the live primary's publication — confirm with the user first.
+
     Args:
         tables: List of table names to add
         refresh: Whether to refresh the subscription after adding
@@ -287,6 +319,8 @@ def add_tables_to_replication(tables: list[str], refresh: bool = False) -> str:
 def remove_tables_from_replication(tables: list[str], refresh: bool = False) -> str:
     """Remove tables from the publication.
 
+    ⚠️ Acts on the publisher (the upstream PRIMARY database) and changes what is replicated. On a production deployment this ALTERs the live primary — confirm with the user first.
+
     Args:
         tables: List of table names to remove
         refresh: Whether to refresh the subscription after removing
@@ -296,7 +330,10 @@ def remove_tables_from_replication(tables: list[str], refresh: bool = False) -> 
 
 @mcp.tool()
 def refresh_subscription() -> str:
-    """Refresh the subscription to pick up publication changes."""
+    """Refresh the subscription to pick up publication changes.
+
+    ⚠️ Mutates replication: refreshes the subscriber's subscription.
+    """
     return json.dumps(_post("/replication/refresh"))
 
 
@@ -330,7 +367,10 @@ def get_trigger_status() -> str:
 
 @mcp.tool()
 def install_trigger() -> str:
-    """Install or update the auto-add event trigger on the publisher."""
+    """Install or update the auto-add event trigger on the publisher.
+
+    ⚠️ Acts on the publisher (the upstream PRIMARY database): runs DDL to install/replace an event trigger. On a production deployment this changes the live primary — confirm with the user first.
+    """
     return json.dumps(_post("/replication/trigger-install"))
 
 
