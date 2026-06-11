@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Check, Copy, Eye, EyeOff } from 'lucide-react'
+import { Check, Copy, Eye, EyeOff, Pencil } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardTitle } from '@/components/ui/card'
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogTitle,
+} from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
+import { copyText } from '@/lib/utils'
 
 interface CloneDetailResponse {
     name: string
@@ -44,13 +53,6 @@ interface SnapshotListItem {
     description?: string | null
 }
 
-interface CloneUsageSummary {
-    usage_bytes?: number | null
-    fs_size_bytes?: number | null
-    fs_used_bytes?: number | null
-    calculated_at?: string | null
-}
-
 export function CloneDetail() {
     const { cloneId = '' } = useParams<{ cloneId: string }>()
     const navigate = useNavigate()
@@ -65,33 +67,11 @@ export function CloneDetail() {
     const [error, setError] = useState<string | null>(null)
     const [message, setMessage] = useState<string | null>(null)
     const [actionBusy, setActionBusy] = useState(false)
-    const [usage, setUsage] = useState<CloneUsageSummary | null>(null)
-    const [overviewExpanded, setOverviewExpanded] = useState(false)
     const [showPassword, setShowPassword] = useState(false)
     const [copied, setCopied] = useState(false)
-
-    const toggleOverview = useCallback(() => {
-        setOverviewExpanded((prev) => !prev)
-    }, [])
-
-    const handleOverviewKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            toggleOverview()
-        }
-    }, [toggleOverview])
-
-    const formatBytes = useCallback((n?: number | null) => {
-        if (n == null || isNaN(n)) return '-'
-        const units = ['B', 'KB', 'MB', 'GB', 'TB']
-        let v = n
-        let i = 0
-        while (v >= 1024 && i < units.length - 1) {
-            v /= 1024
-            i++
-        }
-        return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`
-    }, [])
+    const [refreshOpen, setRefreshOpen] = useState(false)
+    const [editOpen, setEditOpen] = useState(false)
+    const [editDesc, setEditDesc] = useState('')
 
     const fetchDetail = useCallback(async () => {
         if (!cloneId) return
@@ -136,43 +116,28 @@ export function CloneDetail() {
         }
     }, [base])
 
-    const fetchUsage = useCallback(async () => {
-        if (!cloneId) return
-        try {
-            const encoded = encodeURIComponent(cloneId)
-            const r = await fetch(`${base}/clones/${encoded}/usage`)
-            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
-            const data: CloneUsageSummary = await r.json()
-            setUsage(data)
-        } catch (e: any) {
-            setUsage(null)
-            setError((prev) => prev ?? String(e?.message || e))
-        }
-    }, [base, cloneId])
-
     useEffect(() => {
         fetchDetail()
         fetchCloneSnapshots()
         fetchAllSnapshots()
-        fetchUsage()
-    }, [fetchDetail, fetchCloneSnapshots, fetchAllSnapshots, fetchUsage])
+    }, [fetchDetail, fetchCloneSnapshots, fetchAllSnapshots])
 
     useEffect(() => {
-        setOverviewExpanded(false)
         setShowPassword(false)
         setCopied(false)
     }, [cloneId])
 
-    const onRefresh = useCallback(async () => {
+    const openRefresh = useCallback(() => {
         if (!detail) return
         if (!detail.container_name) {
             setError('Cannot refresh: the clone has no container.')
             return
         }
-        const input = window.prompt('Enter a new description, or press OK to keep the current one.', detail.description || '')
-        if (input === null) return
-        const trimmed = input.trim()
+        setRefreshOpen(true)
+    }, [detail])
 
+    const confirmRefresh = useCallback(async () => {
+        if (!detail?.container_name) return
         setActionBusy(true)
         setMessage(null)
         setError(null)
@@ -181,18 +146,46 @@ export function CloneDetail() {
             const r = await fetch(`${base}/clones/${encoded}/refresh`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(trimmed ? { description: trimmed } : {}),
+                body: JSON.stringify({}),
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
             setMessage(`Refreshed ${res.refreshed_container}`)
-            await Promise.all([fetchDetail(), fetchCloneSnapshots(), fetchUsage()])
+            setRefreshOpen(false)
+            await Promise.all([fetchDetail(), fetchCloneSnapshots()])
         } catch (e: any) {
             setError(String(e?.message || e))
         } finally {
             setActionBusy(false)
         }
-    }, [base, detail, fetchCloneSnapshots, fetchDetail, fetchUsage])
+    }, [base, detail, fetchCloneSnapshots, fetchDetail])
+
+    const openEdit = useCallback(() => {
+        setEditDesc(detail?.description ?? '')
+        setEditOpen(true)
+    }, [detail])
+
+    const saveDescription = useCallback(async () => {
+        if (!cloneId) return
+        setActionBusy(true)
+        setMessage(null)
+        setError(null)
+        try {
+            const r = await fetch(`${base}/clones/${encodeURIComponent(cloneId)}/description`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description: editDesc.trim() }),
+            })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            setMessage('Description updated.')
+            setEditOpen(false)
+            await fetchDetail()
+        } catch (e: any) {
+            setError(String(e?.message || e))
+        } finally {
+            setActionBusy(false)
+        }
+    }, [base, cloneId, editDesc, fetchDetail])
 
     const onDelete = useCallback(async () => {
         if (!detail) return
@@ -259,18 +252,18 @@ export function CloneDetail() {
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
             setMessage(`Reset to snapshot ${res.snapshot_used}`)
-            await Promise.all([fetchDetail(), fetchCloneSnapshots(), fetchUsage()])
+            await Promise.all([fetchDetail(), fetchCloneSnapshots()])
         } catch (e: any) {
             setError(String(e?.message || e))
         } finally {
             setActionBusy(false)
         }
-    }, [base, cloneId, fetchCloneSnapshots, fetchDetail, fetchUsage])
+    }, [base, cloneId, fetchCloneSnapshots, fetchDetail])
 
-    const metadataEntries = useMemo(() => {
-        const meta = detail?.metadata
-        if (!meta) return [] as Array<[string, unknown]>
-        return Object.entries(meta)
+    const updatedAt = useMemo(() => {
+        const candidates = [detail?.refreshed_at, detail?.reset_at].filter(Boolean) as string[]
+        if (!candidates.length) return null
+        return candidates.sort().pop() as string
     }, [detail])
 
     const conn = useMemo(() => {
@@ -298,13 +291,13 @@ export function CloneDetail() {
 
     const onCopyConn = useCallback(async () => {
         if (!connString) return
-        try {
-            await navigator.clipboard.writeText(connString)
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
-        } catch {
-            /* clipboard unavailable */
+        const ok = await copyText(connString)
+        if (!ok) {
+            setError('Copy failed. Select the connection string and copy manually.')
+            return
         }
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
     }, [connString])
 
     return (
@@ -325,45 +318,37 @@ export function CloneDetail() {
             {detail && (
                 <Card className="mt-4">
                     <CardTitle>Overview</CardTitle>
-                    <div
-                        role="button"
-                        tabIndex={0}
-                        onClick={toggleOverview}
-                        onKeyDown={handleOverviewKeyDown}
-                        className="mt-2 grid cursor-pointer gap-1.5 rounded-md border border-border bg-secondary p-3 transition-colors hover:border-border-strong"
-                    >
-                        <div className="text-[15px] font-semibold">{detail.name}</div>
-                        <div className="text-[13px] text-zinc-300">{detail.description?.trim() ? detail.description : '(no description)'}</div>
-                        <div className="text-[13px] text-zinc-300">Port: {detail.host_port ?? 'N/A'}</div>
-                        <div className="text-xs text-muted-foreground">
-                            {overviewExpanded ? 'Click to collapse details' : 'Click to expand details'}
+                    <div className="mt-3 grid gap-4">
+                        <div>
+                            <div className="mb-1 flex items-center gap-2">
+                                <span className="text-xs font-medium text-muted-foreground">Description</span>
+                                <button
+                                    type="button"
+                                    onClick={openEdit}
+                                    aria-label="Edit description"
+                                    className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                >
+                                    <Pencil className="size-3.5" />
+                                </button>
+                            </div>
+                            <div className="text-[15px] font-medium text-zinc-100">
+                                {detail.description?.trim() ? detail.description : <span className="text-muted-foreground">(no description)</span>}
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <div className="mb-1 text-xs font-medium text-muted-foreground">Created</div>
+                                <div className="text-[13px] text-zinc-200">{detail.created_at ? new Date(detail.created_at).toLocaleString() : '—'}</div>
+                            </div>
+                            <div>
+                                <div className="mb-1 text-xs font-medium text-muted-foreground">Updated</div>
+                                <div className="text-[13px] text-zinc-200">{updatedAt ? new Date(updatedAt).toLocaleString() : 'Never'}</div>
+                            </div>
                         </div>
                     </div>
 
-                    {overviewExpanded && (
-                        <div className="mt-3 grid gap-2 text-[13px]">
-                            <div><strong className="font-semibold">Container:</strong> {detail.container_name || 'none'}</div>
-                            <div><strong className="font-semibold">Subvolume:</strong> {detail.name}</div>
-                            <div><strong className="font-semibold">Path:</strong> {detail.path}</div>
-                            <div><strong className="font-semibold">Status:</strong> {detail.container_status || 'unknown'}</div>
-                            <div><strong className="font-semibold">Created:</strong> {detail.created_at ? new Date(detail.created_at).toLocaleString() : 'N/A'}</div>
-                            <div><strong className="font-semibold">Usage:</strong> {formatBytes(usage?.usage_bytes)}</div>
-                            {usage?.calculated_at && (
-                                <div><strong className="font-semibold">Measured:</strong> {new Date(usage.calculated_at).toLocaleString()}</div>
-                            )}
-                            {metadataEntries.length > 0 && (
-                                <div>
-                                    <h3 className="mb-1 mt-2 text-[13px] font-semibold">Metadata</h3>
-                                    <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-secondary p-3 font-mono text-xs leading-relaxed text-zinc-300">
-                                        {JSON.stringify(detail.metadata, null, 2)}
-                                    </pre>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
                     <div className="mt-4 flex flex-wrap gap-2">
-                        <Button onClick={onRefresh} disabled={actionBusy || !detail.has_container}>Refresh</Button>
+                        <Button onClick={openRefresh} disabled={actionBusy || !detail.has_container}>Refresh</Button>
                         <Button onClick={onCreateSnapshot} disabled={actionBusy}>Create Snapshot</Button>
                         <Button variant="destructive" onClick={onDelete} disabled={actionBusy}>Delete</Button>
                     </div>
@@ -467,6 +452,41 @@ export function CloneDetail() {
                     </ul>
                 )}
             </Card>
+
+            <Dialog open={refreshOpen} onOpenChange={(open) => { if (!actionBusy) setRefreshOpen(open) }}>
+                <DialogContent>
+                    <DialogTitle>Refresh clone</DialogTitle>
+                    <DialogDescription>
+                        This re-syncs the clone with the latest data from main and recreates its container.
+                        The current description is kept, and any changes made inside this clone are discarded.
+                    </DialogDescription>
+                    <DialogFooter>
+                        <Button onClick={() => setRefreshOpen(false)} disabled={actionBusy}>Cancel</Button>
+                        <Button variant="primary" onClick={confirmRefresh} disabled={actionBusy}>
+                            {actionBusy ? 'Refreshing...' : 'Refresh'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={editOpen} onOpenChange={(open) => { if (!actionBusy) setEditOpen(open) }}>
+                <DialogContent>
+                    <DialogTitle>Edit description</DialogTitle>
+                    <Textarea
+                        autoFocus
+                        value={editDesc}
+                        onChange={(e) => setEditDesc(e.target.value)}
+                        placeholder="Describe this clone"
+                        className="min-h-[90px] font-sans text-[13px]"
+                    />
+                    <DialogFooter>
+                        <Button onClick={() => setEditOpen(false)} disabled={actionBusy}>Cancel</Button>
+                        <Button variant="primary" onClick={saveDescription} disabled={actionBusy}>
+                            {actionBusy ? 'Saving...' : 'Save'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }
