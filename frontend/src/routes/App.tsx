@@ -435,7 +435,7 @@ export function App() {
                                     )}
                                 </div>
                             )}
-                            {copyError && <p style={{ color: 'red' }}>{copyError}</p>}
+                            {copyError && <p style={{ color: 'var(--red)' }}>{copyError}</p>}
                         </div>
                     ) : (
                         <p style={{ marginTop: 8, opacity: 0.7 }}>No copy progress available.</p>
@@ -451,12 +451,12 @@ export function App() {
                                 {`${formatBytes(fsUsage.fs_used_bytes)} / ${formatBytes(fsUsage.fs_size_bytes)}`}
                             </div>
                             {typeof fsUsage.fs_used_bytes === 'number' && typeof fsUsage.fs_size_bytes === 'number' && fsUsage.fs_size_bytes > 0 && (
-                                <div style={{ height: 6, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden', position: 'relative', marginTop: 4 }}>
+                                <div style={{ height: 6, background: 'var(--surface-3)', borderRadius: 999, overflow: 'hidden', position: 'relative', marginTop: 4 }}>
                                     <div
                                         style={{
                                             height: '100%',
                                             width: `${Math.min(100, (fsUsage.fs_used_bytes / fsUsage.fs_size_bytes) * 100).toFixed(2)}%`,
-                                            background: '#3b82f6',
+                                            background: 'var(--blue)',
                                         }}
                                     />
                                 </div>
@@ -484,7 +484,7 @@ export function App() {
                             fontSize: 12,
                             fontWeight: 600,
                             color: '#fff',
-                            background: subStatus.status === 'ok' ? '#22c55e' : '#ef4444',
+                            background: subStatus.status === 'ok' ? 'var(--green)' : 'var(--red)',
                         }}>
                             {subStatus.status === 'ok' ? 'DB subscription 정상동작' : 'subscription down'}
                         </span>
@@ -497,7 +497,7 @@ export function App() {
                             fontSize: 12,
                             fontWeight: 600,
                             color: '#fff',
-                            background: '#f59e0b',
+                            background: 'var(--amber)',
                         }}>
                             resolved (past errors in log)
                         </span>
@@ -522,13 +522,13 @@ export function App() {
                     </button>
                     {subLogs && <span style={{ fontSize: 12, opacity: 0.6 }}>{subLogs.total_matched} matched lines (deduped to {subLogs.lines.length})</span>}
                 </div>
-                {subLogsError && <p style={{ color: 'red' }}>{subLogsError}</p>}
+                {subLogsError && <p style={{ color: 'var(--red)' }}>{subLogsError}</p>}
                 {subLogs && subLogs.lines.length > 0 && (
                     <pre style={{ maxHeight: 300, overflow: 'auto', fontSize: 12, lineHeight: 1.5 }}>
                         {subLogs.lines.map((line, i) => {
                             const isError = /\b(ERROR|FATAL)\b/.test(line)
                             return (
-                                <div key={i} style={isError ? { color: '#ef4444', fontWeight: 600 } : undefined}>
+                                <div key={i} style={isError ? { color: 'var(--red)', fontWeight: 600 } : undefined}>
                                     {line}
                                 </div>
                             )
@@ -578,15 +578,15 @@ export function App() {
                             {sqlLoading ? 'Loading...' : 'Reload'}
                         </button>
                     </div>
-                    {sqlErr && <p style={{ color: '#fca5a5', whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>{sqlErr}</p>}
-                    {sqlMsg && <p style={{ color: '#86efac', margin: '6px 0 0' }}>{sqlMsg}</p>}
+                    {sqlErr && <p style={{ color: 'var(--red)', whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>{sqlErr}</p>}
+                    {sqlMsg && <p style={{ color: 'var(--green)', margin: '6px 0 0' }}>{sqlMsg}</p>}
                 </div>
                 <div className="row" style={{ margin: '8px 0' }}>
                     <button className="btn" onClick={runCheck} disabled={checkLoading}>
                         {checkLoading ? 'Running...' : 'Run Check SQL'}
                     </button>
                 </div>
-                {checkError && <p style={{ color: 'red' }}>{checkError}</p>}
+                {checkError && <p style={{ color: 'var(--red)' }}>{checkError}</p>}
                 {check && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
                         {typeof check.sql === 'string' && (
@@ -605,7 +605,7 @@ export function App() {
                                         {String(check.publisher.output || '').trim()}
                                     </pre>
                                 ) : (
-                                    <pre style={{ color: '#fca5a5' }}>
+                                    <pre style={{ color: 'var(--red)' }}>
                                         {String(check.publisher.error || 'Error')}
                                     </pre>
                                 )}
@@ -617,7 +617,7 @@ export function App() {
                                         {String(check.subscriber.output || '').trim()}
                                     </pre>
                                 ) : (
-                                    <pre style={{ color: '#fca5a5' }}>
+                                    <pre style={{ color: 'var(--red)' }}>
                                         {String(check.subscriber.error || 'Error')}
                                     </pre>
                                 )}
@@ -648,7 +648,7 @@ export function App() {
                         {mainCloning ? 'Cloning...' : 'Clone from Main'}
                     </button>
                 </div>
-                {clonesError && <p style={{ color: 'red' }}>{clonesError}</p>}
+                {clonesError && <p style={{ color: 'var(--red)' }}>{clonesError}</p>}
                 <ul className="list" style={{ marginTop: 8 }}>
                     {clones.length === 0 && <li style={{ opacity: 0.7 }}>No clones</li>}
                     {clones.map((c) => {
@@ -657,7 +657,7 @@ export function App() {
                             ? (c.container_status || (c.is_running ? 'running' : 'stopped'))
                             : 'no-container'
                         const statusColor = c.has_container
-                            ? (c.is_running ? '#22c55e' : '#9ca3af')
+                            ? (c.is_running ? 'var(--green)' : 'var(--muted)')
                             : undefined
                         return (
                             <li key={c.path} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
@@ -709,8 +709,8 @@ export function App() {
                         {creating ? 'Creating...' : 'Create Snapshot'}
                     </button>
                 </div>
-                {message && <p style={{ color: 'green' }}>{message}</p>}
-                {error && <p style={{ color: 'red' }}>{error}</p>}
+                {message && <p style={{ color: 'var(--green)' }}>{message}</p>}
+                {error && <p style={{ color: 'var(--red)' }}>{error}</p>}
                 <ul className="list" style={{ marginTop: 8 }}>
                     {items.map((it) => (
                         <li key={it.name} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
