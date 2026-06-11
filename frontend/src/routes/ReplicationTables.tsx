@@ -370,7 +370,7 @@ export function ReplicationTables() {
             {info && (
                 <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
                     <div className="card" style={{ flex: 1, minWidth: 280, padding: '12px 16px' }}>
-                        <div style={{ fontWeight: 600, marginBottom: 8, color: '#60a5fa' }}>Publisher</div>
+                        <div style={{ fontWeight: 600, marginBottom: 8, color: 'var(--blue)' }}>Publisher</div>
                         <div style={{ fontSize: 13, lineHeight: 1.8, fontFamily: 'monospace' }}>
                             <div>Host: {info.publisher.host}</div>
                             <div>Port: {info.publisher.port}</div>
@@ -381,7 +381,7 @@ export function ReplicationTables() {
                         </div>
                     </div>
                     <div className="card" style={{ flex: 1, minWidth: 280, padding: '12px 16px' }}>
-                        <div style={{ fontWeight: 600, marginBottom: 8, color: '#4ade80' }}>Subscriber</div>
+                        <div style={{ fontWeight: 600, marginBottom: 8, color: 'var(--green)' }}>Subscriber</div>
                         <div style={{ fontSize: 13, lineHeight: 1.8, fontFamily: 'monospace' }}>
                             <div>Container: {info.subscriber.container}</div>
                             <div>Host: {info.subscriber.host}</div>
@@ -395,8 +395,8 @@ export function ReplicationTables() {
                 </div>
             )}
 
-            {message && <p style={{ color: '#4ade80', marginTop: 12 }}>{message}</p>}
-            {error && <p style={{ color: '#f87171', marginTop: 12 }}>{error}</p>}
+            {message && <p style={{ color: 'var(--green)', marginTop: 12 }}>{message}</p>}
+            {error && <p style={{ color: 'var(--red)', marginTop: 12 }}>{error}</p>}
 
             <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap', alignItems: 'center' }}>
                 <input
@@ -418,7 +418,7 @@ export function ReplicationTables() {
                             className="btn"
                             style={{
                                 background: filter === key ? 'var(--primary)' : 'transparent',
-                                color: filter === key ? '#111' : 'var(--text)',
+                                color: filter === key ? '#fff' : 'var(--text)',
                                 border: `1px solid ${filter === key ? 'transparent' : 'var(--border)'}`,
                                 padding: '6px 12px',
                                 fontSize: 13,
@@ -443,7 +443,7 @@ export function ReplicationTables() {
                     <div style={{ maxHeight: 300, overflow: 'auto' }}>
                         {syncEvents.map((e, i) => {
                             const f = fmtSync(e)
-                            const c = f.tone === 'err' ? '#f87171' : f.tone === 'warn' ? '#fbbf24' : '#4ade80'
+                            const c = f.tone === 'err' ? 'var(--red)' : f.tone === 'warn' ? 'var(--amber)' : 'var(--green)'
                             return (
                                 <div key={i} style={{ borderBottom: '1px solid var(--border)', padding: '8px 0' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -452,7 +452,7 @@ export function ReplicationTables() {
                                     </div>
                                     <div style={{ fontSize: 13, lineHeight: 1.6 }}>
                                         {f.lines.map((ln, j) => (
-                                            <div key={j} style={{ color: j === 0 ? 'inherit' : '#9ca3af', paddingLeft: ln.startsWith('\u00b7') ? 10 : 0 }}>{ln}</div>
+                                            <div key={j} style={{ color: j === 0 ? 'inherit' : 'var(--muted)', paddingLeft: ln.startsWith('\u00b7') ? 10 : 0 }}>{ln}</div>
                                         ))}
                                     </div>
                                 </div>
@@ -526,8 +526,8 @@ export function ReplicationTables() {
                                     {(() => {
                                         const mode = tableMode(t, fdwSet)
                                         const label = mode === 'replicated' ? 'Replicated' : mode === 'fdw' ? 'FDW' : 'None'
-                                        const color = mode === 'replicated' ? '#4ade80' : mode === 'fdw' ? '#c084fc' : 'var(--muted)'
-                                        const borderColor = mode === 'replicated' ? '#22c55e33' : mode === 'fdw' ? '#a855f733' : 'var(--border)'
+                                        const color = mode === 'replicated' ? 'var(--green)' : mode === 'fdw' ? 'var(--purple)' : 'var(--muted)'
+                                        const borderColor = mode === 'replicated' ? 'var(--green-border)' : mode === 'fdw' ? 'var(--purple-border)' : 'var(--border)'
                                         return (
                                             <span className="badge" style={{ color, borderColor, minWidth: 76, textAlign: 'center' }}>
                                                 {label}
@@ -539,10 +539,10 @@ export function ReplicationTables() {
                                 <div style={{ textAlign: 'center' }}>
                                     <span className="badge" style={{
                                         color: t.in_publication
-                                            ? (t.pub_via === 'schema' ? '#fbbf24' : '#4ade80')
+                                            ? (t.pub_via === 'schema' ? 'var(--amber)' : 'var(--green)')
                                             : 'var(--muted)',
                                         borderColor: t.in_publication
-                                            ? (t.pub_via === 'schema' ? '#f59e0b33' : '#22c55e33')
+                                            ? (t.pub_via === 'schema' ? 'var(--amber-border)' : 'var(--green-border)')
                                             : 'var(--border)',
                                     }}>
                                         {t.in_publication ? (t.pub_via === 'schema' ? 'Schema' : 'Yes') : 'No'}
@@ -550,15 +550,15 @@ export function ReplicationTables() {
                                 </div>
                                 <div style={{ textAlign: 'center' }}>
                                     <span className="badge" style={{
-                                        color: t.in_subscriber ? '#60a5fa' : 'var(--muted)',
-                                        borderColor: t.in_subscriber ? '#3b82f633' : 'var(--border)',
+                                        color: t.in_subscriber ? 'var(--blue)' : 'var(--muted)',
+                                        borderColor: t.in_subscriber ? 'var(--blue-border)' : 'var(--border)',
                                     }}>
                                         {t.in_subscriber ? 'Yes' : 'No'}
                                     </span>
                                 </div>
                                 <div style={{ textAlign: 'center' }}>
                                     {fdwSet.has(fqn) ? (
-                                        <span className="badge" style={{ color: '#c084fc', borderColor: '#a855f733' }}>FDW</span>
+                                        <span className="badge" style={{ color: 'var(--purple)', borderColor: 'var(--purple-border)' }}>FDW</span>
                                     ) : (
                                         <span className="badge" style={{ color: 'var(--muted)', borderColor: 'var(--border)' }}>No</span>
                                     )}
@@ -598,7 +598,7 @@ export function ReplicationTables() {
                 >
                     Remove from Publication ({selectedInPub.length})
                     {selectedSchemaLevel.length > 0 && (
-                        <span style={{ color: '#fbbf24', marginLeft: 4, fontSize: 12 }}>
+                        <span style={{ color: 'var(--amber)', marginLeft: 4, fontSize: 12 }}>
                             ({selectedSchemaLevel.length} schema-level excluded)
                         </span>
                     )}
@@ -653,7 +653,7 @@ export function ReplicationTables() {
                         </p>
                         <div style={{
                             maxHeight: 200, overflowY: 'auto',
-                            background: '#101010', borderRadius: 8, padding: 8, margin: '8px 0',
+                            background: 'var(--surface-2)', borderRadius: 8, padding: 8, margin: '8px 0',
                             fontFamily: 'monospace', fontSize: 13,
                         }}>
                             {confirmAction.tables.map((t) => (

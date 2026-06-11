@@ -274,8 +274,8 @@ export function CloneDetail() {
             </div>
 
             {loading && <p>Loading...</p>}
-            {error && <p style={{ color: 'red' }}>{error}</p>}
-            {message && <p style={{ color: 'green' }}>{message}</p>}
+            {error && <p style={{ color: 'var(--red)' }}>{error}</p>}
+            {message && <p style={{ color: 'var(--green)' }}>{message}</p>}
 
             {detail && (
                 <section className="card" style={{ marginTop: 16 }}>
@@ -289,19 +289,19 @@ export function CloneDetail() {
                             marginTop: 8,
                             padding: 12,
                             borderRadius: 8,
-                            border: '1px solid #e5e7eb',
-                            background: '#ffffff',
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface-2)',
                             display: 'grid',
                             gap: 6,
                             cursor: 'pointer',
                             transition: 'box-shadow 0.15s ease, border-color 0.15s ease',
-                            boxShadow: overviewExpanded ? '0 4px 12px rgba(15, 23, 42, 0.08)' : 'none',
+                            boxShadow: overviewExpanded ? '0 4px 16px rgba(0, 0, 0, 0.35)' : 'none',
                         }}
                     >
-                        <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>{detail.name}</div>
-                        <div style={{ color: '#475569' }}>{detail.description?.trim() ? detail.description : '(no description)'}</div>
-                        <div style={{ color: '#475569' }}>Port: {detail.host_port ?? 'N/A'}</div>
-                        <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>{detail.name}</div>
+                        <div style={{ color: 'var(--text-secondary)' }}>{detail.description?.trim() ? detail.description : '(no description)'}</div>
+                        <div style={{ color: 'var(--text-secondary)' }}>Port: {detail.host_port ?? 'N/A'}</div>
+                        <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                             {overviewExpanded ? 'Click to collapse details' : 'Click to expand details'}
                         </div>
                     </div>
