@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Check, Copy, Eye, EyeOff } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -23,6 +24,9 @@ interface CloneDetailResponse {
     refreshed_at?: string | null
     reset_at?: string | null
     reset_from_snapshot?: string | null
+    db_user?: string | null
+    db_password?: string | null
+    db_name?: string | null
 }
 
 interface CloneSnapshotItem {
@@ -63,6 +67,8 @@ export function CloneDetail() {
     const [actionBusy, setActionBusy] = useState(false)
     const [usage, setUsage] = useState<CloneUsageSummary | null>(null)
     const [overviewExpanded, setOverviewExpanded] = useState(false)
+    const [showPassword, setShowPassword] = useState(false)
+    const [copied, setCopied] = useState(false)
 
     const toggleOverview = useCallback(() => {
         setOverviewExpanded((prev) => !prev)
@@ -153,6 +159,8 @@ export function CloneDetail() {
 
     useEffect(() => {
         setOverviewExpanded(false)
+        setShowPassword(false)
+        setCopied(false)
     }, [cloneId])
 
     const onRefresh = useCallback(async () => {
@@ -265,6 +273,40 @@ export function CloneDetail() {
         return Object.entries(meta)
     }, [detail])
 
+    const conn = useMemo(() => {
+        if (!detail) return null
+        const host = (typeof window !== 'undefined' && window.location.hostname) || 'localhost'
+        return {
+            host,
+            port: detail.host_port != null ? String(detail.host_port) : '',
+            user: detail.db_user ?? '',
+            password: detail.db_password ?? '',
+            dbname: detail.db_name ?? '',
+        }
+    }, [detail])
+
+    const connString = useMemo(() => {
+        if (!conn) return ''
+        return `postgresql://${conn.user}:${conn.password}@${conn.host}:${conn.port}/${conn.dbname}`
+    }, [conn])
+
+    const connStringDisplay = useMemo(() => {
+        if (!conn) return ''
+        const pw = showPassword ? conn.password : '••••••••'
+        return `postgresql://${conn.user}:${pw}@${conn.host}:${conn.port}/${conn.dbname}`
+    }, [conn, showPassword])
+
+    const onCopyConn = useCallback(async () => {
+        if (!connString) return
+        try {
+            await navigator.clipboard.writeText(connString)
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+        } catch {
+            /* clipboard unavailable */
+        }
+    }, [connString])
+
     return (
         <div className="mx-auto max-w-5xl animate-page-in px-6 pb-20 pt-6">
             <div className="mb-2 flex items-center justify-between gap-4 border-b border-border pb-4">
@@ -272,9 +314,6 @@ export function CloneDetail() {
                 <div className="flex items-center gap-2">
                     <Button asChild>
                         <Link to="/">← Back</Link>
-                    </Button>
-                    <Button onClick={() => { fetchDetail(); fetchCloneSnapshots(); fetchAllSnapshots() }}>
-                        Refresh Data
                     </Button>
                 </div>
             </div>
@@ -327,6 +366,61 @@ export function CloneDetail() {
                         <Button onClick={onRefresh} disabled={actionBusy || !detail.has_container}>Refresh</Button>
                         <Button onClick={onCreateSnapshot} disabled={actionBusy}>Create Snapshot</Button>
                         <Button variant="destructive" onClick={onDelete} disabled={actionBusy}>Delete</Button>
+                    </div>
+                </Card>
+            )}
+
+            {detail && conn && (
+                <Card className="mt-4">
+                    <CardTitle>Connection</CardTitle>
+                    <div className="mt-3 grid gap-px overflow-hidden rounded-md border border-border bg-border text-[13px]">
+                        <div className="flex items-center gap-3 bg-card px-3.5 py-2.5">
+                            <span className="w-24 flex-none text-muted-foreground">Host</span>
+                            <span className="min-w-0 truncate font-mono text-zinc-200">{conn.host}</span>
+                        </div>
+                        <div className="flex items-center gap-3 bg-card px-3.5 py-2.5">
+                            <span className="w-24 flex-none text-muted-foreground">Port</span>
+                            <span className="font-mono text-zinc-200">{conn.port || 'N/A'}</span>
+                        </div>
+                        <div className="flex items-center gap-3 bg-card px-3.5 py-2.5">
+                            <span className="w-24 flex-none text-muted-foreground">User</span>
+                            <span className="min-w-0 truncate font-mono text-zinc-200">{conn.user || '-'}</span>
+                        </div>
+                        <div className="flex items-center gap-3 bg-card px-3.5 py-2.5">
+                            <span className="w-24 flex-none text-muted-foreground">Password</span>
+                            <span className="min-w-0 truncate font-mono text-zinc-200">{showPassword ? (conn.password || '-') : '••••••••'}</span>
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword((v) => !v)}
+                                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                                className="ml-auto flex-none rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="mt-3">
+                        <div className="mb-1.5 text-xs font-medium text-muted-foreground">Connection string</div>
+                        <div className="flex items-center gap-2 rounded-md border border-border bg-secondary px-3 py-2">
+                            <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-zinc-300">{connStringDisplay}</code>
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword((v) => !v)}
+                                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                                className="flex-none rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={onCopyConn}
+                                aria-label="Copy connection string"
+                                className="flex-none rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                                {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+                            </button>
+                        </div>
                     </div>
                 </Card>
             )}
