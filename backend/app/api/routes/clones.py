@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Path, Body
 from pydantic import BaseModel
+from pathlib import Path as FsPath
 from ...core.config import settings
 from ...services.docker_pg import delete_clone
 from ...services.btrfs import (
@@ -9,6 +10,8 @@ from ...services.btrfs import (
 	list_snapshots_for_clone,
 	get_clone_usage_summary,
 	get_fs_usage_summary,
+	read_snaplicator_metadata,
+	write_snaplicator_metadata,
 )
 from ...services.docker_pg import clone_from_main_and_run, CloneOptions, refresh_clone_in_place, reset_clone_to_snapshot, is_port_in_use
 
@@ -30,10 +33,21 @@ class ResetCloneBody(BaseModel):
 	description: str | None = None
 
 
+class UpdateDescriptionBody(BaseModel):
+	description: str | None = None
+
+
 @router.get("")
 def get_clones():
 	try:
-		return list_clone_subvolumes_with_containers(settings.root_data_dir, settings.main_data_dir)
+		clones = list_clone_subvolumes_with_containers(settings.root_data_dir, settings.main_data_dir)
+		if isinstance(clones, list):
+			for c in clones:
+				if isinstance(c, dict):
+					c["db_user"] = settings.postgres_user
+					c["db_password"] = settings.postgres_password
+					c["db_name"] = settings.postgres_db
+		return clones
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Failed to list clones: {e}")
 
@@ -235,6 +249,25 @@ def get_clone_detail_api(clone_id: str = Path(..., description="Clone identifier
 		raise HTTPException(status_code=404, detail=str(e))
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Failed to fetch clone detail: {e}")
+
+
+@router.post("/{clone_id}/description")
+def update_clone_description(
+	clone_id: str = Path(..., description="Clone identifier (subvolume name or container name)"),
+	body: UpdateDescriptionBody = Body(...),
+):
+	try:
+		detail = get_clone_detail(settings.root_data_dir, settings.main_data_dir, clone_id)
+		target_path = FsPath(detail["path"])
+		meta = dict(read_snaplicator_metadata(target_path) or {})
+		new_desc = (body.description or "").strip()
+		meta["description"] = new_desc
+		write_snaplicator_metadata(target_path, meta)
+		return {"name": detail.get("name"), "description": new_desc}
+	except FileNotFoundError as e:
+		raise HTTPException(status_code=404, detail=str(e))
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Failed to update description: {e}")
 
 @router.delete("/{container_name}")
 def remove_clone(container_name: str = Path(..., description="Docker container name of the clone")):
