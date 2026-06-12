@@ -39,9 +39,14 @@ export default {
           from: { opacity: '0', transform: 'translateY(4px)' },
           to: { opacity: '1', transform: 'none' },
         },
+        'toast-in': {
+          from: { opacity: '0', transform: 'translateX(8px)' },
+          to: { opacity: '1', transform: 'none' },
+        },
       },
       animation: {
         'page-in': 'page-in 0.25s ease both',
+        'toast-in': 'toast-in 0.14s ease-out both',
       },
     },
   },

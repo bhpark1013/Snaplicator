@@ -253,6 +253,7 @@ class CloneOptions:
     postgres_db: str
     postgres_image: str = "postgres:17"
     description: Optional[str] = None
+    display_name: Optional[str] = None
 
 
 def _launch_clone_container(
@@ -435,6 +436,7 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
         "main_data_dir": opts.main_data_dir,
         "created_at": datetime.now().isoformat(),
         "created_by": "snaplicator-api",
+        "display_name": opts.display_name,
         "description": opts.description,
     }
     meta_json = json.dumps(meta, ensure_ascii=False)
@@ -531,6 +533,7 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
         "main_data_dir": opts.main_data_dir,
         "created_at": datetime.now().isoformat(),
         "created_by": "snaplicator-api",
+        "display_name": opts.display_name,
         "description": opts.description,
     }
     meta_json = json.dumps(meta, ensure_ascii=False)

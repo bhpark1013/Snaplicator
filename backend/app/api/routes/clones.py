@@ -18,6 +18,7 @@ from ...services.docker_pg import clone_from_main_and_run, CloneOptions, refresh
 router = APIRouter()
 
 class CreateCloneBody(BaseModel):
+	name: str | None = None
 	description: str | None = None
 	port: int | None = None
 	username: str | None = None
@@ -26,6 +27,9 @@ class CreateCloneBody(BaseModel):
 
 class CloneSnapshotBody(BaseModel):
 	description: str | None = None
+	previous_snapshot: str | None = None
+	retention_days: int = 14
+	insert_before: str | None = None
 
 
 class ResetCloneBody(BaseModel):
@@ -33,7 +37,8 @@ class ResetCloneBody(BaseModel):
 	description: str | None = None
 
 
-class UpdateDescriptionBody(BaseModel):
+class UpdateCloneMetaBody(BaseModel):
+	name: str | None = None
 	description: str | None = None
 
 
@@ -88,6 +93,7 @@ def create_clone_from_main(body: CreateCloneBody | None = None):
 			postgres_db=str(settings.postgres_db),
 			postgres_image=settings.postgres_image,
 			description=(body.description if body else None),
+			display_name=(body.name if body else None),
 		)
 		return clone_from_main_and_run(opts, host_port_override=specified_port, db_user=specified_user or None, db_password=specified_password or None)
 	except HTTPException:
@@ -149,7 +155,18 @@ def create_clone_snapshot_api(
 ):
 	try:
 		description = body.description if body else None
-		return create_clone_snapshot(settings.root_data_dir, settings.main_data_dir, clone_id, description)
+		previous_snapshot = body.previous_snapshot if body else None
+		retention_days = body.retention_days if body else 14
+		insert_before = body.insert_before if body else None
+		return create_clone_snapshot(
+			settings.root_data_dir,
+			settings.main_data_dir,
+			clone_id,
+			description,
+			previous_snapshot,
+			retention_days=retention_days,
+			insert_before=insert_before,
+		)
 	except FileNotFoundError as e:
 		raise HTTPException(status_code=404, detail=str(e))
 	except FileExistsError as e:
@@ -252,22 +269,28 @@ def get_clone_detail_api(clone_id: str = Path(..., description="Clone identifier
 
 
 @router.post("/{clone_id}/description")
-def update_clone_description(
+def update_clone_meta(
 	clone_id: str = Path(..., description="Clone identifier (subvolume name or container name)"),
-	body: UpdateDescriptionBody = Body(...),
+	body: UpdateCloneMetaBody = Body(...),
 ):
 	try:
 		detail = get_clone_detail(settings.root_data_dir, settings.main_data_dir, clone_id)
 		target_path = FsPath(detail["path"])
 		meta = dict(read_snaplicator_metadata(target_path) or {})
-		new_desc = (body.description or "").strip()
-		meta["description"] = new_desc
+		if body.name is not None:
+			meta["display_name"] = body.name.strip()
+		if body.description is not None:
+			meta["description"] = body.description.strip()
 		write_snaplicator_metadata(target_path, meta)
-		return {"name": detail.get("name"), "description": new_desc}
+		return {
+			"name": detail.get("name"),
+			"display_name": meta.get("display_name"),
+			"description": meta.get("description"),
+		}
 	except FileNotFoundError as e:
 		raise HTTPException(status_code=404, detail=str(e))
 	except Exception as e:
-		raise HTTPException(status_code=500, detail=f"Failed to update description: {e}")
+		raise HTTPException(status_code=500, detail=f"Failed to update clone: {e}")
 
 @router.delete("/{container_name}")
 def remove_clone(container_name: str = Path(..., description="Docker container name of the clone")):

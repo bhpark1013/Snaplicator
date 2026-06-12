@@ -6,7 +6,7 @@ import logging
 import time
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 
@@ -100,6 +100,31 @@ def _read_snapshot_description(path: Path) -> Optional[str]:
         if desc:
             return desc
     return None
+
+
+def _read_clone_display_name(path: Path) -> Optional[str]:
+    """User-facing clone Name. Falls back to the legacy description for clones
+    created before display_name existed."""
+    data = read_snaplicator_metadata(path)
+    if not isinstance(data, dict):
+        return None
+    for key in ("display_name", "description"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def _retention_fields(created: datetime, retention_days: Optional[int]) -> Dict[str, Any]:
+    """Normalize a retention setting into metadata fields.
+
+    retention_days <= 0 (or None) means "keep forever" (permanent); we store
+    retention_days=0 and expires_at=None. Otherwise expires_at is created + N days.
+    Retention is advisory metadata for the UI today (no auto-deletion)."""
+    days = retention_days if isinstance(retention_days, int) else 14
+    if days <= 0:
+        return {"retention_days": 0, "expires_at": None}
+    return {"retention_days": days, "expires_at": (created + timedelta(days=days)).isoformat()}
 
 
 def _human_to_bytes(text: str) -> Optional[int]:
@@ -230,7 +255,7 @@ def list_snapshots(root_data_dir: str, main_data_dir: str) -> List[Dict]:
     return items
 
 
-def create_snapshot(root_data_dir: str, main_data_dir: str, description: Optional[str] = None) -> Dict:
+def create_snapshot(root_data_dir: str, main_data_dir: str, description: Optional[str] = None, retention_days: int = 14, previous_snapshot: Optional[str] = None, insert_before: Optional[str] = None) -> Dict:
     """Create a readonly btrfs snapshot like scripts/create_main_snapshot.sh.
 
     - Source: {ROOT_DATA_DIR}/{MAIN_DATA_DIR}
@@ -262,6 +287,9 @@ def create_snapshot(root_data_dir: str, main_data_dir: str, description: Optiona
         "created_by": "snaplicator-api",
         "description": description,
         "type": "main_snapshot",
+        "previous_snapshot": (previous_snapshot or None),
+        "next_snapshot": None,
+        **_retention_fields(datetime.now(), retention_days),
     }
     write_snaplicator_metadata(target, meta)
 
@@ -271,6 +299,15 @@ def create_snapshot(root_data_dir: str, main_data_dir: str, description: Optiona
     except subprocess.CalledProcessError:
         # Fallback if property subcommand not available with -ts (older btrfs-progs)
         _run(["sudo", "-n", "btrfs", "property", "set", str(target), "ro", "true"])
+
+    # Edge-insert: splice the new snapshot in front of `insert_before`.
+    if insert_before:
+        ib = insert_before.strip()
+        if ib and ib != target.name:
+            try:
+                update_snapshot_lineage(root_data_dir, ib, previous_snapshot=target.name)
+            except Exception as e:
+                logger.warning("insert_before relink failed for %s -> %s: %s", ib, target.name, e)
 
     return {
         "name": target.name,
@@ -358,6 +395,7 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
             continue
         desc_start = time.perf_counter()
         description = _read_snapshot_description(p)
+        display_name = _read_clone_display_name(p)
         desc_seconds = time.perf_counter() - desc_start
         metadata_seconds = subvol_check_seconds + readonly_check_seconds + desc_seconds
 
@@ -379,6 +417,7 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
             "container_status": None,
             "container_ports": None,
             "container_started_at": None,
+            "display_name": display_name,
             "description": description,
         })
 
@@ -576,6 +615,9 @@ def create_clone_snapshot(
     main_data_dir: str,
     identifier: str,
     description: Optional[str] = None,
+    previous_snapshot: Optional[str] = None,
+    retention_days: int = 14,
+    insert_before: Optional[str] = None,
 ) -> Dict[str, Any]:
     detail = get_clone_detail(root_data_dir, main_data_dir, identifier)
     clone_path = Path(detail["path"])
@@ -597,12 +639,16 @@ def create_clone_snapshot(
         "root_data_dir": str(root),
         "main_data_dir": main_data_dir,
         "source_clone_name": detail.get("name"),
+        "source_clone_display_name": detail.get("display_name"),
         "source_clone_path": detail.get("path"),
         "source_container_name": detail.get("container_name"),
         "created_at": datetime.now().isoformat(),
         "created_by": "snaplicator-api",
         "description": description,
         "type": "clone_snapshot",
+        "previous_snapshot": previous_snapshot or None,
+        "next_snapshot": None,
+        **_retention_fields(datetime.now(), retention_days),
     }
     write_snaplicator_metadata(target, meta)
 
@@ -611,12 +657,215 @@ def create_clone_snapshot(
     except subprocess.CalledProcessError:
         _run(["sudo", "-n", "btrfs", "property", "set", str(target), "ro", "true"])
 
+    # Edge-insert: splice the new snapshot in front of `insert_before` so the
+    # graph becomes previous_snapshot -> new -> insert_before.
+    if insert_before:
+        ib = insert_before.strip()
+        if ib and ib != target.name:
+            try:
+                update_snapshot_lineage(root_data_dir, ib, previous_snapshot=target.name)
+            except Exception as e:
+                logger.warning("insert_before relink failed for %s -> %s: %s", ib, target.name, e)
+
     return {
         "name": target.name,
         "path": str(target),
         "readonly": True,
         "metadata": meta,
     }
+
+
+def _set_subvolume_ro(path: Path, ro: bool) -> None:
+    val = "true" if ro else "false"
+    try:
+        _run(["sudo", "-n", "btrfs", "property", "set", "-ts", str(path), "ro", val])
+    except subprocess.CalledProcessError:
+        _run(["sudo", "-n", "btrfs", "property", "set", str(path), "ro", val])
+
+
+def update_snapshot_lineage(
+    root_data_dir: str,
+    snapshot_name: str,
+    previous_snapshot: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Re-link a snapshot's `previous_snapshot` pointer. Snapshots are readonly
+    subvolumes, so we briefly toggle ro=false to rewrite the metadata, then back.
+    Lineage is display-only (test-scenario ordering); the PG data is untouched."""
+    root = Path(root_data_dir).resolve()
+    target = (root / snapshot_name).resolve()
+    if not str(target).startswith(str(root)):
+        raise PermissionError(f"Refusing to edit outside ROOT_DATA_DIR: {target}")
+    if not target.exists() or not _is_btrfs_subvolume(target):
+        raise FileNotFoundError(f"Snapshot not found or not a subvolume: {target}")
+
+    prev = (previous_snapshot or "").strip() or None
+    if prev == snapshot_name:
+        raise ValueError("A snapshot cannot be its own previous snapshot")
+    if prev is not None:
+        prev_path = (root / prev).resolve()
+        if not prev_path.exists() or not _is_btrfs_subvolume(prev_path):
+            raise FileNotFoundError(f"Previous snapshot not found: {prev}")
+
+    meta = dict(read_snaplicator_metadata(target) or {})
+    meta["previous_snapshot"] = prev
+
+    was_ro = _is_readonly_subvolume(target)
+    if was_ro:
+        _set_subvolume_ro(target, False)
+    try:
+        write_snaplicator_metadata(target, meta)
+    finally:
+        if was_ro:
+            _set_subvolume_ro(target, True)
+    return {"name": snapshot_name, "previous_snapshot": prev}
+
+
+def reorder_snapshots(root_data_dir: str, updates: List[Dict[str, Optional[str]]]) -> Dict[str, Any]:
+    """Apply several `previous_snapshot` re-assignments at once (drag-to-move).
+
+    `updates` is a list of {"snapshot": name, "previous_snapshot": prev|None}.
+    We validate the FINAL graph (all existing previous links + these overrides)
+    is acyclic and self-reference-free BEFORE touching any subvolume, so an
+    intermediate state can never reject a valid reorder. Then each change is
+    written via the RO-toggle path. Lineage is display-only; PG data untouched."""
+    root = Path(root_data_dir).resolve()
+    if not isinstance(updates, list) or not updates:
+        return {"applied": []}
+
+    # Current previous-map for every snapshot under root.
+    current: Dict[str, Optional[str]] = {}
+    for s in list_snapshots(root_data_dir, ""):
+        meta = s.get("metadata") or {}
+        current[s["name"]] = (meta.get("previous_snapshot") or None) if isinstance(meta, dict) else None
+
+    # Normalize + validate each requested change.
+    normalized: List[Tuple[str, Optional[str]]] = []
+    for u in updates:
+        name = (u.get("snapshot") or "").strip()
+        prev = (u.get("previous_snapshot") or None)
+        prev = prev.strip() if isinstance(prev, str) else None
+        prev = prev or None
+        if not name:
+            raise ValueError("Each update needs a snapshot name")
+        if name not in current:
+            raise FileNotFoundError(f"Snapshot not found: {name}")
+        if prev is not None and prev not in current:
+            raise FileNotFoundError(f"Previous snapshot not found: {prev}")
+        if prev == name:
+            raise ValueError(f"A snapshot cannot be its own previous: {name}")
+        normalized.append((name, prev))
+
+    # Compute final graph and reject cycles.
+    final = dict(current)
+    for name, prev in normalized:
+        final[name] = prev
+    for start in final:
+        seen = set()
+        cur: Optional[str] = start
+        while cur is not None:
+            if cur in seen:
+                raise ValueError(f"Re-link would create a cycle through {start}")
+            seen.add(cur)
+            cur = final.get(cur)
+
+    # Apply (skip no-ops).
+    applied: List[Dict[str, Optional[str]]] = []
+    for name, prev in normalized:
+        if current.get(name) == prev:
+            continue
+        update_snapshot_lineage(root_data_dir, name, previous_snapshot=prev)
+        applied.append({"snapshot": name, "previous_snapshot": prev})
+    return {"applied": applied}
+
+
+def cleanup_expired_snapshots(
+    root_data_dir: str,
+    main_data_dir: str,
+    apply: bool = False,
+    now_iso: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Delete snapshots whose retention has elapsed (expires_at <= now).
+
+    SAFE FOR CLONES: a clone is its own btrfs subvolume; btrfs ref-counts the
+    CoW extents, so deleting a snapshot never removes data a clone still
+    references. Only the snapshot subvolume goes away.
+
+    - Skips permanent snapshots (retention_days==0) and any without expires_at.
+    - Before deleting, re-points surviving children to their nearest non-deleted
+      ancestor so the lineage chain stays connected (display-only).
+    - apply=False (default) is a dry run: reports candidates, deletes nothing.
+    Returns a summary dict; also logged."""
+    now = datetime.fromisoformat(now_iso) if now_iso else datetime.now()
+
+    snaps = list_snapshots(root_data_dir, main_data_dir)
+    prev_of: Dict[str, Optional[str]] = {}
+    for s in snaps:
+        m = s.get("metadata") or {}
+        prev_of[s["name"]] = (m.get("previous_snapshot") or None) if isinstance(m, dict) else None
+
+    candidates: List[Dict[str, Any]] = []
+    for s in snaps:
+        m = s.get("metadata") or {}
+        if not isinstance(m, dict):
+            continue
+        rd = m.get("retention_days")
+        exp = m.get("expires_at")
+        if not isinstance(rd, int) or rd <= 0:  # permanent or unset
+            continue
+        if not exp:
+            continue
+        try:
+            exp_dt = datetime.fromisoformat(exp)
+        except Exception:
+            continue
+        if exp_dt <= now:
+            candidates.append({"name": s["name"], "expires_at": exp})
+
+    to_delete = {c["name"] for c in candidates}
+
+    def first_alive_ancestor(name: str) -> Optional[str]:
+        p = prev_of.get(name)
+        seen: set = set()
+        while p is not None and p in to_delete and p not in seen:
+            seen.add(p)
+            p = prev_of.get(p)
+        return p
+
+    results: List[Dict[str, Any]] = []
+    if apply and to_delete:
+        # 1) heal surviving children that point at a soon-deleted node
+        for s in snaps:
+            child = s["name"]
+            if child in to_delete:
+                continue
+            if prev_of.get(child) in to_delete:
+                new_prev = first_alive_ancestor(child)
+                try:
+                    update_snapshot_lineage(root_data_dir, child, previous_snapshot=new_prev)
+                except Exception as e:
+                    logger.warning("cleanup heal %s failed: %s", child, e)
+        # 2) delete expired snapshots
+        for c in candidates:
+            entry = {"name": c["name"], "expires_at": c["expires_at"], "deleted": False}
+            try:
+                delete_snapshot(root_data_dir, main_data_dir, c["name"])
+                entry["deleted"] = True
+            except Exception as e:
+                entry["error"] = str(e)
+            results.append(entry)
+    else:
+        results = [{"name": c["name"], "expires_at": c["expires_at"], "deleted": False} for c in candidates]
+
+    summary = {
+        "now": now.isoformat(),
+        "apply": apply,
+        "total_snapshots": len(snaps),
+        "expired": len(candidates),
+        "deleted": sum(1 for r in results if r.get("deleted")),
+        "results": results,
+    }
+    logger.info("cleanup_expired_snapshots: %s", json.dumps(summary, ensure_ascii=False, default=str))
+    return summary
 
 
 def list_snapshots_for_clone(root_data_dir: str, main_data_dir: str, identifier: str) -> List[Dict[str, Any]]:

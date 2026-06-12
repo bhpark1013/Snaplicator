@@ -12,7 +12,10 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { useToast } from '@/components/ui/toast'
 import { cn, copyText } from '@/lib/utils'
+import { RetentionSelect } from '@/components/RetentionSelect'
+import { LineageGraph, computeInsertParams, type Slot, type SnapshotItem } from '@/components/LineageGraph'
 
 interface CloneItem {
     name: string
@@ -25,14 +28,21 @@ interface CloneItem {
     host_port?: number | null
     is_running: boolean
     container_started_at: string | null
+    display_name?: string | null
     description?: string | null
     db_user?: string | null
     db_password?: string | null
     db_name?: string | null
 }
 
+interface CloneSnapshotOption {
+    name: string
+    description?: string | null
+}
+
 export function Clones() {
     const navigate = useNavigate()
+    const toast = useToast()
     const [clones, setClones] = useState<CloneItem[]>([])
     const [clonesLoading, setClonesLoading] = useState(false)
     const [clonesError, setClonesError] = useState<string | null>(null)
@@ -43,6 +53,7 @@ export function Clones() {
     const [deletingBusy, setDeletingBusy] = useState(false)
 
     const [createOpen, setCreateOpen] = useState(false)
+    const [createName, setCreateName] = useState('')
     const [createDesc, setCreateDesc] = useState('')
     const [createPort, setCreatePort] = useState('')
     const [createUser, setCreateUser] = useState('')
@@ -51,10 +62,14 @@ export function Clones() {
     const [mainCloning, setMainCloning] = useState(false)
     const defaultUser = 'snaplicator'
     const [refreshingClone, setRefreshingClone] = useState<string | null>(null)
+    const [refreshFor, setRefreshFor] = useState<CloneItem | null>(null)
     const [copiedClone, setCopiedClone] = useState<string | null>(null)
 
     const [snapshotFor, setSnapshotFor] = useState<CloneItem | null>(null)
     const [snapshotDesc, setSnapshotDesc] = useState('')
+    const [snapshotSlot, setSnapshotSlot] = useState<Slot | null>(null)
+    const [snapshotRetention, setSnapshotRetention] = useState(14)
+    const [allSnapshots, setAllSnapshots] = useState<SnapshotItem[]>([])
     const [snapshotBusy, setSnapshotBusy] = useState(false)
     const [snapshotError, setSnapshotError] = useState<string | null>(null)
 
@@ -72,10 +87,27 @@ export function Clones() {
         setTimeout(() => setCopiedClone((v) => (v === c.name ? null : v)), 1500)
     }
 
-    const openSnapshot = (c: CloneItem) => {
+    const openSnapshot = async (c: CloneItem) => {
         setSnapshotFor(c)
-        setSnapshotDesc(c.description ?? '')
+        setSnapshotDesc('')
         setSnapshotError(null)
+        setSnapshotRetention(14)
+        setSnapshotSlot(null)
+        setAllSnapshots([])
+        try {
+            const [allR, cloneR] = await Promise.all([
+                fetch(`${base}/snapshots`),
+                fetch(`${base}/clones/${encodeURIComponent(c.name)}/snapshots`),
+            ])
+            if (allR.ok) setAllSnapshots(await allR.json())
+            if (cloneR.ok) {
+                const snaps: CloneSnapshotOption[] = await cloneR.json()
+                // default insertion = right after this clone's most recent snapshot
+                if (snaps.length) setSnapshotSlot({ kind: 'after', parent: snaps[snaps.length - 1].name })
+            }
+        } catch {
+            /* graph just stays empty */
+        }
     }
 
     const confirmSnapshot = async () => {
@@ -89,17 +121,22 @@ export function Clones() {
         setSnapshotError(null)
         setMessage(null)
         setError(null)
+        const tid = toast.loading('Creating snapshot…')
+        const { previous_snapshot, insert_before } = snapshotSlot
+            ? computeInsertParams(snapshotSlot)
+            : { previous_snapshot: null, insert_before: null }
         try {
             const r = await fetch(`${base}/clones/${encodeURIComponent(snapshotFor.name)}/snapshots`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description: desc }),
+                body: JSON.stringify({ description: desc, previous_snapshot, insert_before, retention_days: snapshotRetention }),
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
-            setMessage(`Snapshot created: ${res.name}`)
+            toast.update(tid, 'success', `Snapshot created: ${res.name}`)
             setSnapshotFor(null)
         } catch (e: any) {
+            toast.update(tid, 'error', `Snapshot failed: ${String(e?.message || e)}`)
             setSnapshotError(String(e?.message || e))
         } finally {
             setSnapshotBusy(false)
@@ -146,11 +183,12 @@ export function Clones() {
     }, [])
 
     const onCreateClone = async () => {
+        const trimmedName = createName.trim()
         const trimmedDesc = createDesc.trim()
         const user = createUser.trim()
         const pw = createPw
-        if (!trimmedDesc) {
-            setCreateError('Description is required.')
+        if (!trimmedName) {
+            setCreateError('Name is required.')
             return
         }
         if (!!user !== !!pw) {
@@ -161,9 +199,10 @@ export function Clones() {
         setCreateError(null)
         setMessage(null)
         setError(null)
+        const tid = toast.loading(`Creating clone “${trimmedName}”…`)
         try {
             const portNum = createPort.trim() ? parseInt(createPort.trim(), 10) : undefined
-            const bodyData: Record<string, unknown> = { description: trimmedDesc, port: portNum }
+            const bodyData: Record<string, unknown> = { name: trimmedName, description: trimmedDesc, port: portNum }
             if (user) {
                 bodyData.username = user
                 bodyData.password = pw
@@ -175,14 +214,16 @@ export function Clones() {
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
-            setMessage(`Cloned from main: ${res.clone_subvolume} -> container ${res.container_name} (port ${res.host_port}, user ${res.db_user || defaultUser})`)
+            toast.update(tid, 'success', `Clone “${trimmedName}” created on port ${res.host_port}`)
             setCreateOpen(false)
+            setCreateName('')
             setCreateDesc('')
             setCreatePort('')
             setCreateUser('')
             setCreatePw('')
             loadClones()
         } catch (e: any) {
+            toast.update(tid, 'error', `Clone failed: ${String(e?.message || e)}`)
             setCreateError(String(e?.message || e))
         } finally {
             setMainCloning(false)
@@ -198,34 +239,39 @@ export function Clones() {
     const confirmDelete = async () => {
         if (!deleting) return
         setDeletingBusy(true)
+        const tid = toast.loading('Deleting clone…')
         try {
             const r = await fetch(`${base}/clones/${encodeURIComponent(deleting)}`, { method: 'DELETE' })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
-            setMessage(`Deleted ${res.containers_removed?.join(', ') || deleting} and subvolume ${res.subvolume_deleted}`)
+            toast.update(tid, 'success', `Deleted clone (${res.subvolume_deleted ? 'subvolume removed' : 'done'})`)
             loadClones()
             setDeleting(null)
         } catch (e: any) {
+            toast.update(tid, 'error', `Delete failed: ${String(e?.message || e)}`)
             setError(String(e?.message || e))
         } finally {
             setDeletingBusy(false)
         }
     }
 
-    const onRefreshClone = async (clone: CloneItem) => {
+    const onRefreshClone = (clone: CloneItem) => {
         const targetName = clone.container_name || clone.name
         if (!targetName || !clone.has_container) {
             setClonesError('Cannot refresh a clone without a running container.')
             return
         }
+        setRefreshFor(clone)
+    }
 
-        const ok = window.confirm(`Refresh clone ${targetName} with the latest data from main?`)
-        if (!ok) return
-
+    const confirmRefreshClone = async () => {
+        if (!refreshFor) return
+        const targetName = refreshFor.container_name || refreshFor.name
         setRefreshingClone(targetName)
         setMessage(null)
         setError(null)
         setClonesError(null)
+        const tid = toast.loading('Refreshing clone from main…')
         try {
             const r = await fetch(`${base}/clones/${encodeURIComponent(targetName)}/refresh`, {
                 method: 'POST',
@@ -234,13 +280,24 @@ export function Clones() {
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
-            setMessage(`Refreshed ${res.refreshed_container} using ${res.clone_subvolume}`)
+            toast.update(tid, 'success', `Refreshed ${res.refreshed_container}`)
+            setRefreshFor(null)
             loadClones()
         } catch (e: any) {
+            toast.update(tid, 'error', `Refresh failed: ${String(e?.message || e)}`)
             setError(String(e?.message || e))
         } finally {
             setRefreshingClone(null)
         }
+    }
+
+    const snapshotSlotSummary = () => {
+        const label = (name: string) => allSnapshots.find((s) => s.name === name)?.description?.trim() || name
+        const s = snapshotSlot
+        if (!s) return 'Start a new chain (no previous snapshot)'
+        if (s.kind === 'after') return `After “${label(s.parent)}”`
+        if (s.kind === 'edge') return `Between “${label(s.parent)}” and “${label(s.child)}”`
+        return `New root before “${label(s.child)}”`
     }
 
     const renderClone = (c: CloneItem) => {
@@ -283,7 +340,7 @@ export function Clones() {
                             title={running ? 'running' : 'stopped'}
                         />
                         <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
-                            {c.description?.trim() ? c.description : <span className="text-muted-foreground">(no description)</span>}
+                            {(c.display_name ?? c.description)?.trim() ? (c.display_name ?? c.description) : <span className="text-muted-foreground">(unnamed clone)</span>}
                         </span>
                     </div>
                     <div className="flex min-w-0 items-center gap-1.5">
@@ -368,12 +425,21 @@ export function Clones() {
                     <DialogTitle>New clone from main</DialogTitle>
                     <div className="grid gap-3">
                         <label className="grid gap-1.5">
-                            <span className="text-[13px] text-muted-foreground">Description (required)</span>
+                            <span className="text-[13px] text-muted-foreground">Name (required)</span>
                             <Input
                                 autoFocus
+                                value={createName}
+                                onChange={(e) => setCreateName(e.target.value)}
+                                placeholder="e.g. feature-xyz"
+                                className="w-full"
+                            />
+                        </label>
+                        <label className="grid gap-1.5">
+                            <span className="text-[13px] text-muted-foreground">Description (optional)</span>
+                            <Input
                                 value={createDesc}
                                 onChange={(e) => setCreateDesc(e.target.value)}
-                                placeholder="e.g. feature-xyz testing"
+                                placeholder="e.g. testing the new checkout flow"
                                 className="w-full"
                             />
                         </label>
@@ -416,7 +482,7 @@ export function Clones() {
                     </div>
                     <DialogFooter>
                         <Button onClick={() => setCreateOpen(false)} disabled={mainCloning}>Cancel</Button>
-                        <Button variant="primary" onClick={onCreateClone} disabled={mainCloning || !createDesc.trim()}>
+                        <Button variant="primary" onClick={onCreateClone} disabled={mainCloning || !createName.trim()}>
                             {mainCloning ? 'Cloning...' : 'Create Clone'}
                         </Button>
                     </DialogFooter>
@@ -424,7 +490,7 @@ export function Clones() {
             </Dialog>
 
             <Dialog open={!!snapshotFor} onOpenChange={(open) => { if (!open && !snapshotBusy) setSnapshotFor(null) }}>
-                <DialogContent>
+                <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
                     <DialogTitle>Create snapshot</DialogTitle>
                     <DialogDescription>
                         A read-only btrfs snapshot is captured from this clone's current state.
@@ -439,6 +505,20 @@ export function Clones() {
                             className="w-full"
                         />
                     </label>
+                    <div className="mt-3">
+                        <RetentionSelect value={snapshotRetention} onChange={setSnapshotRetention} />
+                    </div>
+                    <div className="mt-4 grid gap-1.5">
+                        <span className="text-[13px] text-muted-foreground">Insertion point — click a <span className="text-primary">+</span> in the graph</span>
+                        <LineageGraph
+                            items={allSnapshots}
+                            mode="insert"
+                            selectedSlot={snapshotSlot}
+                            onSelectSlot={setSnapshotSlot}
+                            maxHeight={300}
+                        />
+                        <span className="text-xs text-muted-foreground">{snapshotSlotSummary()}</span>
+                    </div>
                     {snapshotError && <p className="whitespace-pre-wrap text-[13px] text-destructive">{snapshotError}</p>}
                     <DialogFooter>
                         <Button onClick={() => setSnapshotFor(null)} disabled={snapshotBusy}>Cancel</Button>
@@ -462,6 +542,25 @@ export function Clones() {
                         <Button onClick={() => setDeleting(null)} disabled={deletingBusy}>Cancel</Button>
                         <Button variant="destructive" onClick={confirmDelete} disabled={deletingBusy}>
                             {deletingBusy ? 'Deleting...' : 'Delete'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={!!refreshFor} onOpenChange={(open) => { if (!open && refreshingClone === null) setRefreshFor(null) }}>
+                <DialogContent>
+                    <DialogTitle>Refresh clone</DialogTitle>
+                    <DialogDescription>
+                        This re-syncs the clone with the latest data from main and recreates its container.
+                        The name and description are kept, and any changes made inside this clone are discarded.
+                    </DialogDescription>
+                    <p className="mt-2 text-[13px]">
+                        Target: <strong className="font-semibold">{refreshFor?.display_name?.trim() || refreshFor?.container_name || refreshFor?.name}</strong>
+                    </p>
+                    <DialogFooter>
+                        <Button onClick={() => setRefreshFor(null)} disabled={refreshingClone !== null}>Cancel</Button>
+                        <Button variant="primary" onClick={confirmRefreshClone} disabled={refreshingClone !== null}>
+                            {refreshingClone !== null ? 'Refreshing...' : 'Refresh'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
