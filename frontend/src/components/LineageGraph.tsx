@@ -72,6 +72,14 @@ export function retentionLabel(m?: SnapMeta | null): string {
 
 // Measure a node's pixel width so the description isn't truncated (within a cap).
 let _measureCtx: CanvasRenderingContext2D | null = null
+let _fontFam = ''
+function _fontFamily(): string {
+    if (_fontFam) return _fontFam
+    _fontFam = typeof document !== 'undefined'
+        ? (getComputedStyle(document.body).fontFamily || 'ui-sans-serif, system-ui, sans-serif')
+        : 'ui-sans-serif, system-ui, sans-serif'
+    return _fontFam
+}
 function _measure(text: string, font: string): number {
     if (typeof document === 'undefined') return text.length * 7
     if (!_measureCtx) _measureCtx = document.createElement('canvas').getContext('2d')
@@ -79,17 +87,16 @@ function _measure(text: string, font: string): number {
     _measureCtx.font = font
     return _measureCtx.measureText(text).width
 }
-const FONT_DESC = "500 13px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif"
-const FONT_SUB = "400 11px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif"
 export function nodeWidth(s: SnapshotItem): number {
+    const fam = _fontFamily()
     const desc = s.description?.trim() || '(no description)'
     const src = sourceLabel(s)
     const ts = formatTs(s.metadata?.created_at)
     const sub = (src ? `from ${src}` : s.name) + (ts ? ` · ${ts}` : '')
-    // line 1: node px-3 (24) + dot+gap (12) + description + pr-16 badge clearance (64) = +100
-    const w1 = _measure(desc, FONT_DESC) + 100
-    // line 2: node px-3 (24) + pl-3 (12) + sub text + small pad (8) = +44
-    const w2 = _measure(sub, FONT_SUB) + 44
+    // line 1: px-3 (24) + dot+gap (12) + pr-16 badge clearance (64) + safety (8) = +108
+    const w1 = _measure(desc, `500 13px ${fam}`) + 108
+    // line 2: px-3 (24) + pl-3 (12) + safety (8) = +44
+    const w2 = _measure(sub, `400 11px ${fam}`) + 44
     return Math.round(Math.max(MIN_NODE_W, Math.min(MAX_NODE_W, Math.max(w1, w2))))
 }
 
