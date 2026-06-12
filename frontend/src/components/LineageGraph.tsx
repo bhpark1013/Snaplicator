@@ -35,12 +35,13 @@ export interface LineageUpdate {
 }
 
 // ---- geometry ----
-const NODE_W = 200
 const NODE_H = 64
-const COL_W = 276
 const ROW_H = 98
 const PAD = 24
 const SLOT_OFF = 22 // how far a slot sits from the node edge
+const COL_GAP = 76 // gap between a column's widest node and the next column
+const MIN_NODE_W = 176
+const MAX_NODE_W = 460
 
 export function sourceLabel(s: SnapshotItem): string | null {
     const m = s.metadata
@@ -67,6 +68,29 @@ export function retentionLabel(m?: SnapMeta | null): string {
     if (days < 0) return 'expired'
     if (days === 0) return 'expires today'
     return `expires ${days}d`
+}
+
+// Measure a node's pixel width so the description isn't truncated (within a cap).
+let _measureCtx: CanvasRenderingContext2D | null = null
+function _measure(text: string, font: string): number {
+    if (typeof document === 'undefined') return text.length * 7
+    if (!_measureCtx) _measureCtx = document.createElement('canvas').getContext('2d')
+    if (!_measureCtx) return text.length * 7
+    _measureCtx.font = font
+    return _measureCtx.measureText(text).width
+}
+const FONT_DESC = "500 13px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif"
+const FONT_SUB = "400 11px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif"
+export function nodeWidth(s: SnapshotItem): number {
+    const desc = s.description?.trim() || '(no description)'
+    const src = sourceLabel(s)
+    const ts = formatTs(s.metadata?.created_at)
+    const sub = (src ? `from ${src}` : s.name) + (ts ? ` · ${ts}` : '')
+    // line 1: node px-3 (24) + dot+gap (12) + description + pr-16 badge clearance (64) = +100
+    const w1 = _measure(desc, FONT_DESC) + 100
+    // line 2: node px-3 (24) + pl-3 (12) + sub text + small pad (8) = +44
+    const w2 = _measure(sub, FONT_SUB) + 44
+    return Math.round(Math.max(MIN_NODE_W, Math.min(MAX_NODE_W, Math.max(w1, w2))))
 }
 
 export function slotsEqual(a?: Slot | null, b?: Slot | null): boolean {
@@ -129,6 +153,7 @@ interface Positioned {
     col: number
     row: number
     prev: string | null
+    w: number
 }
 
 function useLayout(items: SnapshotItem[]) {
@@ -174,18 +199,27 @@ function useLayout(items: SnapshotItem[]) {
         let maxRow = 0
         pos.forEach((p) => { maxCol = Math.max(maxCol, p.col); maxRow = Math.max(maxRow, p.row) })
 
+        // per-node widths (sized to the description), then per-column max width + cumulative x
+        const widthOf = new Map<string, number>()
+        items.forEach((s) => widthOf.set(s.name, nodeWidth(s)))
+        const colWidth: number[] = new Array(maxCol + 1).fill(MIN_NODE_W)
+        pos.forEach((p, name) => { colWidth[p.col] = Math.max(colWidth[p.col], widthOf.get(name) ?? MIN_NODE_W) })
+        const colX: number[] = new Array(maxCol + 1).fill(PAD)
+        for (let c = 1; c <= maxCol; c++) colX[c] = colX[c - 1] + colWidth[c - 1] + COL_GAP
+
+        const left = (col: number) => colX[col] ?? PAD
+        const top = (row: number) => PAD + row * ROW_H
+
         const positioned: Positioned[] = items.map((s) => {
             const p = pos.get(s.name) ?? { col: 0, row: 0 }
-            return { snap: s, col: p.col, row: p.row, prev: prevOf(s) }
+            return { snap: s, col: p.col, row: p.row, prev: prevOf(s), w: widthOf.get(s.name) ?? MIN_NODE_W }
         })
-        const left = (col: number) => PAD + col * COL_W
-        const top = (row: number) => PAD + row * ROW_H
 
         const edges = positioned
             .filter((n) => n.prev)
             .map((n) => {
                 const p = pos.get(n.prev!)!
-                const x1 = left(p.col) + NODE_W
+                const x1 = left(p.col) + (widthOf.get(n.prev!) ?? MIN_NODE_W)
                 const y1 = top(p.row) + NODE_H / 2
                 const x2 = left(n.col)
                 const y2 = top(n.row) + NODE_H / 2
@@ -195,10 +229,9 @@ function useLayout(items: SnapshotItem[]) {
         return {
             positioned,
             edges,
-            posMap: pos,
             left,
             top,
-            width: PAD * 2 + maxCol * COL_W + NODE_W + COL_W, // extra room for right-side slots
+            width: left(maxCol) + (colWidth[maxCol] ?? MIN_NODE_W) + COL_GAP + PAD, // extra room for right-side slots
             height: PAD * 2 + maxRow * ROW_H + NODE_H,
         }
     }, [items])
@@ -267,7 +300,7 @@ export function LineageGraph({
         const nodeLeft = left(n.col)
         const nodeTop = top(n.row)
         el.scrollTo({
-            left: Math.max(0, nodeLeft - el.clientWidth / 2 + NODE_W / 2),
+            left: Math.max(0, nodeLeft - el.clientWidth / 2 + n.w / 2),
             top: Math.max(0, nodeTop - el.clientHeight / 2 + NODE_H / 2),
             behavior: 'smooth',
         })
@@ -359,7 +392,7 @@ export function LineageGraph({
                             {renderSlot(leftSlotOf(n), lx - SLOT_OFF, cy, `L-${n.snap.name}`)}
                             {/* one move point per edge: a node with children already exposes the
                                 in-between slots as its children's left slots, so only leaves get an "after" slot */}
-                            {!parentNames.has(n.snap.name) && renderSlot(rightSlotOf(n), lx + NODE_W + SLOT_OFF, cy, `R-${n.snap.name}`)}
+                            {!parentNames.has(n.snap.name) && renderSlot(rightSlotOf(n), lx + n.w + SLOT_OFF, cy, `R-${n.snap.name}`)}
                         </span>
                     )
                 })}
@@ -384,7 +417,7 @@ export function LineageGraph({
                             onDragEnd={() => { setDragName(null); setHoverSlot(null) }}
                             onClick={() => { if (isDragging) return; onNodeClick?.(n.snap) }}
                             onKeyDown={(e) => { if (e.key === 'Enter') onNodeClick?.(n.snap) }}
-                            style={{ left: lx, top: ty, width: NODE_W, height: NODE_H }}
+                            style={{ left: lx, top: ty, width: n.w, height: NODE_H }}
                             className={cn(
                                 'absolute z-10 flex flex-col justify-center gap-0.5 rounded-md border bg-secondary px-3 text-left transition-colors',
                                 canDrag && 'cursor-grab active:cursor-grabbing',
