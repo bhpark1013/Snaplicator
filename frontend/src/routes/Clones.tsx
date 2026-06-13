@@ -16,6 +16,7 @@ import { useToast } from '@/components/ui/toast'
 import { cn, copyText } from '@/lib/utils'
 import { RetentionSelect } from '@/components/RetentionSelect'
 import { LineageGraph, computeInsertParams, type Slot, type SnapshotItem } from '@/components/LineageGraph'
+import { WhatsNew } from '@/components/WhatsNew'
 
 interface CloneItem {
     name: string
@@ -391,6 +392,8 @@ export function Clones() {
                     </Button>
                 </div>
             </div>
+
+            <WhatsNew />
 
             <Card className="mt-4">
                 {clonesError && <p className="mb-2 text-[13px] text-destructive">{clonesError}</p>}
