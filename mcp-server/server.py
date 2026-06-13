@@ -381,4 +381,20 @@ def get_copy_progress() -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    # MCP_TRANSPORT=streamable-http serves HTTP at http://MCP_HOST:MCP_PORT/mcp
+    # (bind MCP_HOST to the Tailscale IP so the endpoint is tailnet-only).
+    # Default stdio keeps `claude mcp add -- ssh ...` setups working.
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "streamable-http":
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        host = os.environ.get("MCP_HOST", "127.0.0.1")
+        port = int(os.environ.get("MCP_PORT", "8765"))
+        mcp.settings.host = host
+        mcp.settings.port = port
+        # SDK's DNS-rebinding protection only allows localhost Host headers by
+        # default; clients reach us via the Tailscale IP, so allow that too.
+        mcp.settings.transport_security = TransportSecuritySettings(
+            allowed_hosts=[f"{host}:{port}", host, f"localhost:{port}", f"127.0.0.1:{port}"],
+        )
+    mcp.run(transport=transport)
