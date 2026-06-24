@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import logging
 import time
@@ -223,12 +224,50 @@ def _get_subvolume_usage_bytes(path: Path) -> Optional[int]:
             return None
 
 
+# Snapshot names are "{source}-snapshot-{YYYYMMDD}-{HHMMSS}"; the source is the
+# clone dir name (or the main data dir for main snapshots).
+_SNAP_SUFFIX_RE = re.compile(r"-snapshot-\d{8}-\d{6}$")
+
+
+def _resolve_source_label(
+    meta: Dict[str, Any],
+    name: str,
+    main_data_dir: str,
+    root: Path,
+    dn_cache: Dict[str, Optional[str]],
+) -> Dict[str, Any]:
+    """Backfill source-clone provenance for legacy snapshots, read-only.
+
+    Older snapshots often lack `source_clone_display_name` (the clone had no Name
+    when the snapshot was taken) or, for the oldest ones, any metadata at all.
+    Both are recoverable without touching the immutable snapshot subvolumes: the
+    snapshot name encodes its source, and the clone's *current* Name can be read
+    live from the clone. We only enrich the in-memory dict returned to the API."""
+    m = _SNAP_SUFFIX_RE.search(name)
+    prefix = name[: m.start()] if m else None
+    if meta.get("type") == "main_snapshot" or prefix == main_data_dir:
+        meta.setdefault("type", "main_snapshot")
+        return meta
+    src = (meta.get("source_clone_name") or "").strip() or prefix
+    if not src:
+        return meta
+    meta.setdefault("source_clone_name", src)
+    if not (meta.get("source_clone_display_name") or "").strip():
+        if src not in dn_cache:
+            dn_cache[src] = _read_clone_display_name(root / src)
+        dn = dn_cache[src]
+        if dn:
+            meta["source_clone_display_name"] = dn
+    return meta
+
+
 def list_snapshots(root_data_dir: str, main_data_dir: str) -> List[Dict]:
     root = Path(root_data_dir)
     if not root.exists():
         raise FileNotFoundError(f"Root path not found: {root}")
 
     items: List[Dict] = []
+    dn_cache: Dict[str, Optional[str]] = {}
 
     # Scan immediate children for snapshot naming
     for entry in os.scandir(root):
@@ -242,12 +281,14 @@ def list_snapshots(root_data_dir: str, main_data_dir: str) -> List[Dict]:
             # Skip writable subvolumes; snapshots must be readonly by definition
             continue
         meta = read_snaplicator_metadata(p)
+        meta = meta if isinstance(meta, dict) and meta else {}
+        meta = _resolve_source_label(meta, name, main_data_dir, root, dn_cache)
         items.append({
             "name": name,
             "path": str(p),
             "readonly": True,
             "description": _read_snapshot_description(p),
-            "metadata": meta if isinstance(meta, dict) and meta else None,
+            "metadata": meta or None,
         })
 
     # Sort by name (timestamp-friendly)
@@ -882,6 +923,7 @@ def list_snapshots_for_clone(root_data_dir: str, main_data_dir: str, identifier:
     skipped_non_btrfs = 0
     skipped_missing_meta = 0
     skipped_unmatched = 0
+    dn_cache: Dict[str, Optional[str]] = {}
 
     for entry in entries:
         per_start = time.perf_counter()
@@ -895,9 +937,9 @@ def list_snapshots_for_clone(root_data_dir: str, main_data_dir: str, identifier:
         meta_start = time.perf_counter()
         meta = read_snaplicator_metadata(path)
         meta_seconds = time.perf_counter() - meta_start
-        if not isinstance(meta, dict) or not meta:
-            skipped_missing_meta += 1
-            continue
+        # Legacy snapshots may carry no metadata file; still attribute by name.
+        meta = meta if isinstance(meta, dict) and meta else {}
+        meta = _resolve_source_label(meta, entry.name, main_data_dir, root, dn_cache)
         source_path = meta.get("source_clone_path")
         source_name = meta.get("source_clone_name")
         if source_path == detail.get("path") or source_name == detail.get("name"):

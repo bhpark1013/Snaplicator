@@ -47,6 +47,9 @@ export function sourceLabel(s: SnapshotItem): string | null {
     const m = s.metadata
     if (m?.source_clone_display_name?.trim()) return m.source_clone_display_name.trim()
     if (m?.type === 'main_snapshot') return 'main'
+    // Legacy snapshots taken before the clone had a Name: fall back to the clone's
+    // dir id so they still show their origin instead of the snapshot's own name.
+    if (m?.source_clone_name?.trim()) return m.source_clone_name.trim()
     return null
 }
 
@@ -280,6 +283,8 @@ export function LineageGraph({
     const scrollRef = useRef<HTMLDivElement>(null)
     const [dragName, setDragName] = useState<string | null>(null)
     const [hoverSlot, setHoverSlot] = useState<Slot | null>(null)
+    // a node whose full (otherwise-truncated) name is expanded inline via wrapping
+    const [expandedName, setExpandedName] = useState<string | null>(null)
 
     const canDrag = mode === 'list' && draggable
     // the node currently being placed: a live drag, or a parent-driven selection
@@ -413,7 +418,11 @@ export function LineageGraph({
                     const isHighlight = highlightName === n.snap.name
                     const isDragging = dragName === n.snap.name
                     const isMoving = moveTarget === n.snap.name
+                    const isExpanded = expandedName === n.snap.name
                     const ret = retentionLabel(n.snap.metadata)
+                    const fullDesc = n.snap.description?.trim() || '(no description)'
+                    const subText = src ? `from ${src}` : n.snap.name
+                    const ts = formatTs(n.snap.metadata?.created_at)
                     return (
                         <div
                             key={n.snap.name}
@@ -422,29 +431,34 @@ export function LineageGraph({
                             draggable={canDrag}
                             onDragStart={(e) => { if (canDrag) { setDragName(n.snap.name); e.dataTransfer.effectAllowed = 'move' } }}
                             onDragEnd={() => { setDragName(null); setHoverSlot(null) }}
-                            onClick={() => { if (isDragging) return; onNodeClick?.(n.snap) }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') onNodeClick?.(n.snap) }}
-                            style={{ left: lx, top: ty, width: n.w, height: NODE_H }}
+                            onClick={() => { if (isDragging) return; setExpandedName((c) => (c === n.snap.name ? null : n.snap.name)); onNodeClick?.(n.snap) }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { setExpandedName((c) => (c === n.snap.name ? null : n.snap.name)); onNodeClick?.(n.snap) } }}
+                            title={isExpanded ? undefined : fullDesc}
+                            style={{ left: lx, top: ty, width: n.w, height: isExpanded ? undefined : NODE_H, minHeight: NODE_H, zIndex: isExpanded ? 30 : undefined }}
                             className={cn(
-                                'absolute z-10 flex flex-col justify-center gap-0.5 rounded-md border bg-secondary px-3 text-left transition-colors',
+                                'absolute z-10 flex flex-col justify-center gap-0.5 rounded-md border bg-secondary px-3 py-2 text-left transition-colors',
                                 canDrag && 'cursor-grab active:cursor-grabbing',
                                 onNodeClick && 'cursor-pointer',
                                 onNodeClick && 'hover:border-primary/60 hover:bg-accent',
                                 isMoving ? 'border-warning ring-2 ring-warning/70' : isHighlight ? 'border-purple ring-2 ring-purple/70' : 'border-border',
+                                isExpanded && 'border-primary/60 shadow-lg shadow-black/40',
                                 isDragging && 'opacity-40',
                                 placing && !isMoving && 'opacity-70',
                             )}
                         >
-                            <div className="flex items-center gap-1.5 pr-16">
-                                <span className={cn('size-1.5 flex-none rounded-full', isRoot ? 'bg-purple' : 'bg-primary')} />
-                                <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-100">
-                                    {n.snap.description?.trim() || '(no description)'}
+                            <div className={cn('flex gap-1.5 pr-16', isExpanded ? 'items-start' : 'items-center')}>
+                                <span className={cn('size-1.5 flex-none rounded-full', isExpanded && 'mt-1', isRoot ? 'bg-purple' : 'bg-primary')} />
+                                <span
+                                    title={fullDesc}
+                                    className={cn('min-w-0 flex-1 text-[13px] font-medium text-zinc-100', isExpanded ? 'whitespace-normal break-words' : 'truncate')}
+                                >
+                                    {fullDesc}
                                 </span>
                             </div>
-                            <div className="flex items-center gap-1.5 pl-3 text-[11px] text-muted-foreground">
-                                <span className="truncate">{src ? `from ${src}` : n.snap.name}</span>
-                                {formatTs(n.snap.metadata?.created_at) && (
-                                    <span className="flex-none tabular-nums text-zinc-500">· {formatTs(n.snap.metadata?.created_at)}</span>
+                            <div className={cn('flex gap-1.5 pl-3 text-[11px] text-muted-foreground', isExpanded ? 'items-start' : 'items-center')}>
+                                <span title={subText} className={isExpanded ? 'min-w-0 break-all' : 'truncate'}>{subText}</span>
+                                {ts && (
+                                    <span className="flex-none tabular-nums text-zinc-500">· {ts}</span>
                                 )}
                             </div>
                             <span
