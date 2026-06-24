@@ -42,6 +42,7 @@ const SLOT_OFF = 22 // how far a slot sits from the node edge
 const COL_GAP = 76 // gap between a column's widest node and the next column
 const MIN_NODE_W = 176
 const MAX_NODE_W = 460
+const EXPANDED_MAX_W = 680 // when a node is clicked open, widen up to this before wrapping
 
 export function sourceLabel(s: SnapshotItem): string | null {
     const m = s.metadata
@@ -101,6 +102,15 @@ export function nodeWidth(s: SnapshotItem): number {
     // line 2: px-3 (24) + pl-3 (12) + safety (8) = +44
     const w2 = _measure(sub, `400 11px ${fam}`) + 44
     return Math.round(Math.max(MIN_NODE_W, Math.min(MAX_NODE_W, Math.max(w1, w2))))
+}
+
+// Width for a clicked-open node: grow to fit the full description up to a higher
+// cap, so it widens to a sensible size and only wraps beyond that (not constantly).
+export function expandedNodeWidth(s: SnapshotItem): number {
+    const fam = _fontFamily()
+    const desc = s.description?.trim() || '(no description)'
+    const full = _measure(desc, `500 13px ${fam}`) + 108
+    return Math.round(Math.max(nodeWidth(s), Math.min(EXPANDED_MAX_W, full)))
 }
 
 export function slotsEqual(a?: Slot | null, b?: Slot | null): boolean {
@@ -434,7 +444,7 @@ export function LineageGraph({
                             onClick={() => { if (isDragging) return; setExpandedName((c) => (c === n.snap.name ? null : n.snap.name)); onNodeClick?.(n.snap) }}
                             onKeyDown={(e) => { if (e.key === 'Enter') { setExpandedName((c) => (c === n.snap.name ? null : n.snap.name)); onNodeClick?.(n.snap) } }}
                             title={isExpanded ? undefined : fullDesc}
-                            style={{ left: lx, top: ty, width: n.w, height: isExpanded ? undefined : NODE_H, minHeight: NODE_H, zIndex: isExpanded ? 30 : undefined }}
+                            style={{ left: lx, top: ty, width: isExpanded ? expandedNodeWidth(n.snap) : n.w, height: isExpanded ? undefined : NODE_H, minHeight: NODE_H, zIndex: isExpanded ? 30 : undefined }}
                             className={cn(
                                 'absolute z-10 flex flex-col justify-center gap-0.5 rounded-md border bg-secondary px-3 py-2 text-left transition-colors',
                                 canDrag && 'cursor-grab active:cursor-grabbing',
@@ -456,7 +466,7 @@ export function LineageGraph({
                                 </span>
                             </div>
                             <div className={cn('flex gap-1.5 pl-3 text-[11px] text-muted-foreground', isExpanded ? 'items-start' : 'items-center')}>
-                                <span title={subText} className={isExpanded ? 'min-w-0 break-all' : 'truncate'}>{subText}</span>
+                                <span title={subText} className={isExpanded ? 'min-w-0 break-words' : 'truncate'}>{subText}</span>
                                 {ts && (
                                     <span className="flex-none tabular-nums text-zinc-500">· {ts}</span>
                                 )}
