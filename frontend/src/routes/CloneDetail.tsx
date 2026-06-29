@@ -527,7 +527,7 @@ export function CloneDetail() {
             )}
 
             {detail && detail.host_port != null && (
-                <McpConnect port={detail.host_port} label={detail.display_name?.trim() || undefined} />
+                <McpConnect port={detail.host_port} />
             )}
 
             <Card className="mt-4">

@@ -3,7 +3,7 @@ import { Check, Copy, Terminal } from 'lucide-react'
 
 import { Card, CardTitle } from '@/components/ui/card'
 import { copyText } from '@/lib/utils'
-import { claudeMcpCmd, codexMcpSnippet, mcpScopedUrl, mcpServerName } from '@/lib/mcp'
+import { claudeMcpCmd, codexMcpSnippet, mcpScopedUrl } from '@/lib/mcp'
 
 function CopyButton({ value, label }: { value: string; label?: string }) {
     const [copied, setCopied] = useState(false)
@@ -45,7 +45,7 @@ function Snippet({ title, hint, code }: { title: string; hint: string; code: str
  * ready-to-paste Claude Code / Codex command whose MCP endpoint is scoped to
  * THIS clone's port, so destructive clone tools can only touch this clone.
  */
-export function McpConnect({ port, label }: { port: number; label?: string }) {
+export function McpConnect({ port }: { port: number }) {
     const url = mcpScopedUrl(port)
     return (
         <Card className="mt-4">
@@ -53,12 +53,7 @@ export function McpConnect({ port, label }: { port: number; label?: string }) {
                 <CardTitle>Connect from your AI agent (MCP)</CardTitle>
                 <span className="rounded-full bg-primary/20 px-1.5 py-px text-[10px] font-medium text-[#b9c0ff]">scoped to this clone</span>
             </div>
-            <p className="mb-3 mt-1 text-[12px] text-muted-foreground">
-                Drive Snaplicator from Claude Code or Codex. Destructive clone actions (refresh / reset / delete)
-                are scoped to {label ? <span className="text-zinc-200">“{label}” </span> : null}
-                <span className="text-zinc-200">port {port}</span> only. The endpoint is tailnet-only — you must be on the Tailscale network.
-            </p>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="mt-3 mb-3 flex flex-wrap items-center gap-2">
                 <span className="break-all font-mono text-[11px] text-muted-foreground">{url}</span>
                 <CopyButton value={url} label="Copy URL" />
             </div>
@@ -70,7 +65,7 @@ export function McpConnect({ port, label }: { port: number; label?: string }) {
                 />
                 <Snippet
                     title="Codex"
-                    hint={`Add to ~/.codex/config.toml as [mcp_servers.${mcpServerName(port)}], then restart Codex.`}
+                    hint="Add to ~/.codex/config.toml, then restart Codex."
                     code={codexMcpSnippet(port)}
                 />
             </div>
