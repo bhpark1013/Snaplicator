@@ -253,6 +253,7 @@ class CloneOptions:
     postgres_db: str
     postgres_image: str = "postgres:17"
     description: Optional[str] = None
+    display_name: Optional[str] = None
 
 
 def _launch_clone_container(
@@ -435,6 +436,7 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
         "main_data_dir": opts.main_data_dir,
         "created_at": datetime.now().isoformat(),
         "created_by": "snaplicator-api",
+        "display_name": opts.display_name,
         "description": opts.description,
     }
     meta_json = json.dumps(meta, ensure_ascii=False)
@@ -531,6 +533,7 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
         "main_data_dir": opts.main_data_dir,
         "created_at": datetime.now().isoformat(),
         "created_by": "snaplicator-api",
+        "display_name": opts.display_name,
         "description": opts.description,
     }
     meta_json = json.dumps(meta, ensure_ascii=False)
@@ -719,7 +722,6 @@ def reset_clone_to_snapshot(
     identifier: str,
     snapshot_name: str,
     opts: CloneOptions,
-    description_override: Optional[str] = None,
 ) -> Dict:
     clone_detail = get_clone_detail(opts.root_data_dir, opts.main_data_dir, identifier)
     if not clone_detail.get("has_container"):
@@ -757,7 +759,9 @@ def reset_clone_to_snapshot(
 
         existing_meta = clone_detail.get("metadata") or {}
         meta = dict(existing_meta)
-        description = description_override
+        # Reset no longer takes a description; preserve the clone's existing one
+        # (falling back to the snapshot's description for legacy clones).
+        description = None
         if description is None:
             desc_candidate = meta.get("description")
             if not desc_candidate and isinstance(snapshot_meta, dict):

@@ -1,7 +1,7 @@
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Body
 from pydantic import BaseModel
 from ...core.config import settings
-from ...services.btrfs import list_snapshots, create_snapshot, delete_snapshot
+from ...services.btrfs import list_snapshots, create_snapshot, delete_snapshot, update_snapshot_lineage, reorder_snapshots, set_snapshot_retention
 from ...services.docker_pg import clone_from_snapshot_and_run, clone_from_main_and_run, CloneOptions
 import subprocess  # type: ignore[name-defined]
 
@@ -9,9 +9,26 @@ router = APIRouter()
 
 class CreateSnapshotBody(BaseModel):
 	description: str | None = None
+	retention_days: int = 14
+	previous_snapshot: str | None = None
+	insert_before: str | None = None
 
 class CloneBody(BaseModel):
+	name: str | None = None
 	description: str | None = None
+
+class UpdateLineageBody(BaseModel):
+	previous_snapshot: str | None = None
+
+class LineageUpdate(BaseModel):
+	snapshot: str
+	previous_snapshot: str | None = None
+
+class BatchLineageBody(BaseModel):
+	updates: list[LineageUpdate]
+
+class UpdateRetentionBody(BaseModel):
+	retention_days: int = 14
 
 @router.get("")
 def get_snapshots():
@@ -29,7 +46,17 @@ def get_snapshots():
 def post_snapshot(body: CreateSnapshotBody | None = None):
 	try:
 		desc = body.description if body else None
-		return create_snapshot(settings.root_data_dir, settings.main_data_dir, description=desc)
+		retention = body.retention_days if body else 14
+		previous_snapshot = body.previous_snapshot if body else None
+		insert_before = body.insert_before if body else None
+		return create_snapshot(
+			settings.root_data_dir,
+			settings.main_data_dir,
+			description=desc,
+			retention_days=retention,
+			previous_snapshot=previous_snapshot,
+			insert_before=insert_before,
+		)
 	except FileNotFoundError as e:
 		raise HTTPException(status_code=404, detail=str(e))
 	except FileExistsError as e:
@@ -76,6 +103,7 @@ def post_clone_from_snapshot(
 			postgres_db=str(settings.postgres_db),
 			postgres_image=settings.postgres_image,
 			description=(body.description if body else None),
+			display_name=(body.name if body else None),
 		)
 		return clone_from_snapshot_and_run(opts)
 	except HTTPException:
@@ -105,6 +133,55 @@ def delete_snapshot_api(
 		raise HTTPException(status_code=500, detail=f"Failed to delete snapshot: {e}")
 
 
+@router.post("/{snapshot_name}/retention")
+def update_snapshot_retention_api(
+	snapshot_name: str = Path(..., description="Snapshot directory name under ROOT_DATA_DIR"),
+	body: UpdateRetentionBody = Body(...),
+):
+	try:
+		return set_snapshot_retention(settings.root_data_dir, snapshot_name, body.retention_days)
+	except FileNotFoundError as e:
+		raise HTTPException(status_code=404, detail=str(e))
+	except ValueError as e:
+		raise HTTPException(status_code=400, detail=str(e))
+	except PermissionError as e:
+		raise HTTPException(status_code=403, detail=str(e))
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Failed to update snapshot retention: {e}")
+
+
+@router.post("/{snapshot_name}/lineage")
+def update_snapshot_lineage_api(
+	snapshot_name: str = Path(..., description="Snapshot directory name under ROOT_DATA_DIR"),
+	body: UpdateLineageBody = Body(...),
+):
+	try:
+		return update_snapshot_lineage(settings.root_data_dir, snapshot_name, body.previous_snapshot)
+	except FileNotFoundError as e:
+		raise HTTPException(status_code=404, detail=str(e))
+	except ValueError as e:
+		raise HTTPException(status_code=400, detail=str(e))
+	except PermissionError as e:
+		raise HTTPException(status_code=403, detail=str(e))
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Failed to update snapshot lineage: {e}")
+
+
+@router.post("/lineage/batch")
+def reorder_snapshots_api(body: BatchLineageBody = Body(...)):
+	try:
+		updates = [{"snapshot": u.snapshot, "previous_snapshot": u.previous_snapshot} for u in body.updates]
+		return reorder_snapshots(settings.root_data_dir, updates)
+	except FileNotFoundError as e:
+		raise HTTPException(status_code=404, detail=str(e))
+	except ValueError as e:
+		raise HTTPException(status_code=400, detail=str(e))
+	except PermissionError as e:
+		raise HTTPException(status_code=403, detail=str(e))
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Failed to reorder snapshots: {e}")
+
+
 @router.post("/from-main/clone")
 def post_clone_from_main(body: CloneBody | None = None):
 	try:
@@ -132,6 +209,7 @@ def post_clone_from_main(body: CloneBody | None = None):
 			postgres_db=str(settings.postgres_db),
 			postgres_image=settings.postgres_image,
 			description=(body.description if body else None),
+			display_name=(body.name if body else None),
 		)
 		return clone_from_main_and_run(opts)
 	except HTTPException:
