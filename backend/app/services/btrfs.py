@@ -358,7 +358,7 @@ def create_snapshot(root_data_dir: str, main_data_dir: str, description: Optiona
     }
 
 
-def delete_snapshot(root_data_dir: str, main_data_dir: str, snapshot_name: str) -> Dict:
+def delete_snapshot(root_data_dir: str, main_data_dir: str, snapshot_name: str, heal_lineage: bool = True) -> Dict:
     root = Path(root_data_dir).resolve()
     target = (root / snapshot_name).resolve()
     # Safety checks
@@ -383,13 +383,38 @@ def delete_snapshot(root_data_dir: str, main_data_dir: str, snapshot_name: str) 
             raise RuntimeError(f"Snapshot appears mounted; unmount before delete. details=\n{mnt}")
     except subprocess.CalledProcessError:
         pass
+    # Capture lineage before the subvolume goes away: this snapshot's own
+    # previous, and the children that point at it. heal_lineage=False lets
+    # cleanup_expired_snapshots skip this (it batch-heals against the full
+    # expired set before deleting).
+    new_prev: Optional[str] = None
+    children: List[str] = []
+    if heal_lineage:
+        snaps = list_snapshots(root_data_dir, main_data_dir)
+        known = {s["name"] for s in snaps}
+        meta = read_snaplicator_metadata(target) or {}
+        p = meta.get("previous_snapshot") if isinstance(meta, dict) else None
+        new_prev = p if p in known else None  # drop dangling refs instead of propagating them
+        for s in snaps:
+            m = s.get("metadata") or {}
+            if isinstance(m, dict) and m.get("previous_snapshot") == snapshot_name:
+                children.append(s["name"])
     # Delete subvolume
     try:
         _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(target)])
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or e.stdout or "").strip()
         raise RuntimeError(f"btrfs subvolume delete failed for {target}: {stderr}")
-    return {"subvolume_deleted": str(target)}
+    # Re-point surviving children to the deleted snapshot's previous so the
+    # chain stays connected (display-only; best-effort after a successful delete).
+    healed: List[Dict[str, Optional[str]]] = []
+    for child in children:
+        try:
+            update_snapshot_lineage(root_data_dir, child, previous_snapshot=new_prev)
+            healed.append({"snapshot": child, "previous_snapshot": new_prev})
+        except Exception as e:
+            logger.warning("delete_snapshot heal %s failed: %s", child, e)
+    return {"subvolume_deleted": str(target), "healed_children": healed}
 
 
 def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str) -> List[Dict]:
@@ -933,7 +958,7 @@ def cleanup_expired_snapshots(
         for c in candidates:
             entry = {"name": c["name"], "expires_at": c["expires_at"], "deleted": False}
             try:
-                delete_snapshot(root_data_dir, main_data_dir, c["name"])
+                delete_snapshot(root_data_dir, main_data_dir, c["name"], heal_lineage=False)
                 entry["deleted"] = True
             except Exception as e:
                 entry["error"] = str(e)
