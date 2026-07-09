@@ -1112,8 +1112,12 @@ DECLARE
     tbl record;
     allt boolean;
 BEGIN
-    -- non-definition noise / DCL: never logged
-    IF tg_tag IN ('GRANT', 'REVOKE', 'SECURITY LABEL', 'COMMENT') THEN
+    -- Never logged: DCL noise, plus publication/subscription DDL —
+    -- publisher-only infrastructure that must not replay on a subscriber
+    -- (auto pub-add would otherwise log an ALTER PUBLICATION per table).
+    IF tg_tag IN ('GRANT', 'REVOKE', 'SECURITY LABEL', 'COMMENT',
+                  'CREATE PUBLICATION', 'ALTER PUBLICATION', 'DROP PUBLICATION',
+                  'CREATE SUBSCRIPTION', 'ALTER SUBSCRIPTION', 'DROP SUBSCRIPTION') THEN
         RETURN;
     END IF;
 
@@ -1188,6 +1192,14 @@ DECLARE
     q text := current_query();
     obj record;
 BEGIN
+    -- same noise filter as the ddl_command_end twin (e.g. ALTER PUBLICATION
+    -- DROP TABLE reports 'publication relation' drops here)
+    IF tg_tag IN ('GRANT', 'REVOKE', 'SECURITY LABEL', 'COMMENT',
+                  'CREATE PUBLICATION', 'ALTER PUBLICATION', 'DROP PUBLICATION',
+                  'CREATE SUBSCRIPTION', 'ALTER SUBSCRIPTION', 'DROP SUBSCRIPTION') THEN
+        RETURN;
+    END IF;
+
     -- one representative dropped object; prefer directly-named ones
     SELECT d.object_identity, d.schema_name
       INTO obj
@@ -1254,3 +1266,240 @@ def verify_capture_installed(publisher_connstr: str) -> bool:
     )
     out = _run_publisher_sql(publisher_connstr, sql)
     return out.strip() == "2"
+
+
+# ── DDL Apply (subscriber side, Phase 2) ───────────────────────────
+
+
+def install_ddl_apply(
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+    initial_watermark: int = 0,
+) -> Dict:
+    """Install the subscriber-side DDL apply infrastructure.
+
+    The publisher's _snaplicator_ddl_log is a member of the publication, so
+    its rows arrive through the normal logical replication stream in commit
+    order, interleaved exactly between the surrounding DML. An ENABLE ALWAYS
+    row trigger on the subscriber's copy executes each row's ddl_text at
+    that exact position — no LSN gates, no polling, no ordering logic.
+
+    Safety rules baked into the trigger:
+      * id <= watermark            -> skip (initial COPY replay, clone
+                                     artifacts, re-subscription)
+      * ddl_text ~* CONCURRENTLY   -> queue to _snaplicator_ddl_deferred
+                                     (cannot run inside the apply worker's
+                                     transaction; the sync loop executes it
+                                     out-of-band)
+      * any execution error        -> record to _snaplicator_ddl_failures +
+                                     RAISE WARNING and CONTINUE. Never
+                                     re-raise: a re-raise would crash-loop
+                                     the apply worker on the same
+                                     transaction forever — the exact
+                                     incident this system prevents.
+                                     Loudness comes from monitoring the
+                                     failures table, not from blocking
+                                     the stream.
+      * watermark advances for every processed row (applied, deferred or
+        failed) so a restart never re-executes old rows.
+
+    initial_watermark should be the publisher's max(id) at install time,
+    BEFORE the log table is added to the publication, so pre-existing rows
+    are never replayed. Idempotent; an existing watermark is preserved.
+    """
+
+    def _sub_sql(sql: str) -> str:
+        return _run_subscriber_sql(
+            subscriber_container, subscriber_user, subscriber_password,
+            subscriber_db, sql,
+        )
+
+    # same shape as the publisher's log table — receives replicated rows
+    _sub_sql(f"""
+CREATE TABLE IF NOT EXISTS public.{CAPTURE_LOG_TABLE} (
+    id bigserial PRIMARY KEY,
+    captured_at timestamptz NOT NULL DEFAULT now(),
+    lsn pg_lsn NOT NULL,
+    txid bigint NOT NULL,
+    command_tag text NOT NULL,
+    object_identity text,
+    schema_name text,
+    ddl_text text NOT NULL,
+    search_path text
+);
+""")
+
+    _sub_sql("""
+CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_watermark (
+    id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    last_applied_id bigint NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+""")
+
+    _sub_sql("""
+CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_failures (
+    id bigserial PRIMARY KEY,
+    log_id bigint NOT NULL,
+    ddl_text text NOT NULL,
+    error text NOT NULL,
+    failed_at timestamptz NOT NULL DEFAULT now()
+);
+""")
+
+    _sub_sql("""
+CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_deferred (
+    id bigserial PRIMARY KEY,
+    log_id bigint NOT NULL,
+    ddl_text text NOT NULL,
+    search_path text,
+    deferred_at timestamptz NOT NULL DEFAULT now(),
+    executed_at timestamptz,
+    error text
+);
+""")
+
+    _sub_sql(
+        "INSERT INTO public._snaplicator_ddl_watermark (id, last_applied_id) "
+        f"VALUES (1, {int(initial_watermark)}) ON CONFLICT (id) DO NOTHING;"
+    )
+
+    _sub_sql("""
+CREATE OR REPLACE FUNCTION public._snaplicator_apply_ddl()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+    wm bigint;
+    saved_sp text;
+BEGIN
+    wm := coalesce((SELECT last_applied_id
+                      FROM public._snaplicator_ddl_watermark WHERE id = 1), 0);
+    IF NEW.id <= wm THEN
+        RETURN NEW;  -- already processed (initial COPY, clone, re-subscribe)
+    END IF;
+
+    IF NEW.ddl_text ~* 'CONCURRENTLY' THEN
+        INSERT INTO public._snaplicator_ddl_deferred (log_id, ddl_text, search_path)
+        VALUES (NEW.id, NEW.ddl_text, NEW.search_path);
+    ELSE
+        saved_sp := current_setting('search_path', true);
+        BEGIN
+            IF NEW.search_path IS NOT NULL AND NEW.search_path <> '' THEN
+                PERFORM set_config('search_path', NEW.search_path, true);
+            END IF;
+            EXECUTE NEW.ddl_text;
+        EXCEPTION WHEN OTHERS THEN
+            -- loud skip: never re-raise (would crash-loop the apply worker)
+            INSERT INTO public._snaplicator_ddl_failures (log_id, ddl_text, error)
+            VALUES (NEW.id, NEW.ddl_text, SQLERRM);
+            RAISE WARNING 'snaplicator: ddl apply failed for log id %: %',
+                NEW.id, SQLERRM;
+        END;
+        PERFORM set_config('search_path', coalesce(saved_sp, 'public'), true);
+    END IF;
+
+    UPDATE public._snaplicator_ddl_watermark
+       SET last_applied_id = NEW.id, updated_at = now()
+     WHERE id = 1;
+    RETURN NEW;
+END;
+$fn$;
+""")
+
+    # ENABLE ALWAYS: the apply worker runs with
+    # session_replication_role = replica, which suppresses ordinary triggers.
+    _sub_sql(f"""
+DROP TRIGGER IF EXISTS _snaplicator_ddl_apply ON public.{CAPTURE_LOG_TABLE};
+CREATE TRIGGER _snaplicator_ddl_apply
+    AFTER INSERT ON public.{CAPTURE_LOG_TABLE}
+    FOR EACH ROW EXECUTE FUNCTION public._snaplicator_apply_ddl();
+ALTER TABLE public.{CAPTURE_LOG_TABLE}
+    ENABLE ALWAYS TRIGGER _snaplicator_ddl_apply;
+""")
+
+    return {
+        "installed": True,
+        "log_table": CAPTURE_LOG_TABLE,
+        "initial_watermark": int(initial_watermark),
+    }
+
+
+def verify_ddl_apply_installed(
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> bool:
+    """Check the apply trigger exists on the log table and is ENABLE ALWAYS."""
+    sql = (
+        "SELECT count(*) FROM pg_trigger t "
+        "JOIN pg_class c ON c.oid = t.tgrelid "
+        "WHERE t.tgname = '_snaplicator_ddl_apply' "
+        f"AND c.relname = '{CAPTURE_LOG_TABLE}' "
+        "AND t.tgenabled = 'A';"
+    )
+    out = _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password,
+        subscriber_db, sql,
+    )
+    return out.strip() == "1"
+
+
+def add_log_table_to_publication(
+    publisher_connstr: str, publication_name: str
+) -> Dict:
+    """Put the DDL log table into the publication so its rows ride the
+    normal replication stream. Idempotent; FOR ALL TABLES publications
+    already include it (and reject ALTER PUBLICATION ADD TABLE)."""
+    allt = _run_publisher_sql(
+        publisher_connstr,
+        f"SELECT puballtables FROM pg_publication WHERE pubname = '{publication_name}';",
+    ).strip()
+    if allt == "":
+        return {"added": False, "reason": "publication_not_found"}
+    if allt == "t":
+        return {"added": False, "reason": "for_all_tables"}
+
+    member = _run_publisher_sql(
+        publisher_connstr,
+        "SELECT count(*) FROM pg_publication_tables "
+        f"WHERE pubname = '{publication_name}' "
+        f"AND tablename = '{CAPTURE_LOG_TABLE}';",
+    ).strip()
+    if member == "1":
+        return {"added": False, "reason": "already_member"}
+
+    _run_publisher_sql(
+        publisher_connstr,
+        f"ALTER PUBLICATION {publication_name} "
+        f"ADD TABLE public.{CAPTURE_LOG_TABLE};",
+    )
+    return {"added": True}
+
+
+def get_ddl_apply_status(
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> Dict:
+    """Watermark position + failure/deferred counts, for the sync loop and
+    monitoring."""
+    sql = (
+        "SELECT coalesce((SELECT last_applied_id FROM public._snaplicator_ddl_watermark WHERE id = 1), 0) "
+        "|| ',' || (SELECT count(*) FROM public._snaplicator_ddl_failures) "
+        "|| ',' || (SELECT count(*) FROM public._snaplicator_ddl_deferred WHERE executed_at IS NULL);"
+    )
+    out = _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password,
+        subscriber_db, sql,
+    ).strip()
+    wm, failures, deferred = out.split(",")
+    return {
+        "watermark": int(wm),
+        "failures": int(failures),
+        "deferred_pending": int(deferred),
+    }

@@ -233,6 +233,16 @@ class TestGuards:
 		finally:
 			psql("DROP ROLE cap_pwrole;")
 
+	def test_publication_ddl_not_captured(self, clean_log):
+		"""Publication DDL is publisher-only infrastructure — replaying it on
+		a subscriber (which has no publication) would fail on every auto
+		pub-add. Never logged, from either trigger."""
+		psql("CREATE TABLE guard_pub_t (id int);")
+		psql(f"TRUNCATE {LOG_TABLE};")
+		psql(f"ALTER PUBLICATION {PUBLICATION} DROP TABLE guard_pub_t;")
+		psql(f"ALTER PUBLICATION {PUBLICATION} ADD TABLE guard_pub_t;")
+		assert log_count() == 0
+
 	def test_comment_not_captured(self, clean_log):
 		psql("CREATE TABLE guard_c (id int);")
 		psql("COMMENT ON TABLE guard_c IS 'noise';")

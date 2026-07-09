@@ -160,3 +160,135 @@ def clean_log(capture_installed):
 	"""Empty the DDL log so each test only sees its own rows."""
 	psql(f"TRUNCATE {LOG_TABLE};")
 	yield
+
+
+# ── e2e pair: publisher + subscriber over real logical replication ──
+
+E2E_NET = "snap_e2e_net"
+E2E_PUB = "snap_e2e_pub"
+E2E_SUB = "snap_e2e_sub"
+E2E_PUB_PORT = int(os.environ.get("TEST_PG_PUB_PORT", "55434"))
+E2E_SUB_PORT = int(os.environ.get("TEST_PG_SUB_PORT", "55435"))
+E2E_SUBSCRIPTION = "e2e_subscription"
+
+
+def psql_conn(connstr: str, sql: str, sep: str = "|") -> str:
+	"""Run one query string against an arbitrary connstr."""
+	proc = subprocess.run(
+		["psql", connstr, "-X", "-v", "ON_ERROR_STOP=1", "-At", "-F", sep, "-c", sql],
+		text=True, capture_output=True,
+	)
+	if proc.returncode != 0:
+		raise RuntimeError((proc.stderr or proc.stdout).strip())
+	return (proc.stdout or "").strip()
+
+
+def e2e_connstr(port: int) -> str:
+	return (
+		f"host=127.0.0.1 port={port} dbname={PG_DB} "
+		f"user={PG_USER} password={PG_PASSWORD}"
+	)
+
+
+def wait_until(fn, timeout: float = 30.0, interval: float = 0.5, desc: str = "condition"):
+	"""Poll fn() until truthy; replication apply is asynchronous."""
+	deadline = time.time() + timeout
+	last_exc = None
+	while time.time() < deadline:
+		try:
+			if fn():
+				return
+			last_exc = None
+		except Exception as e:  # transient: object not there yet, etc.
+			last_exc = e
+		time.sleep(interval)
+	raise AssertionError(f"timed out waiting for {desc} (last error: {last_exc})")
+
+
+def _run_e2e_container(name: str, port: int) -> None:
+	subprocess.run(
+		[
+			"docker", "run", "-d", "--rm",
+			"--name", name,
+			"--network", E2E_NET,
+			"-e", f"POSTGRES_USER={PG_USER}",
+			"-e", f"POSTGRES_PASSWORD={PG_PASSWORD}",
+			"-e", f"POSTGRES_DB={PG_DB}",
+			"-p", f"{port}:5432",
+			"--tmpfs", "/var/lib/postgresql/data",
+			TEST_PG_IMAGE,
+			"-c", "wal_level=logical",
+		],
+		check=True, capture_output=True,
+	)
+
+
+@pytest.fixture(scope="session")
+def pg_pair():
+	"""Publisher + subscriber containers wired with a real subscription.
+
+	Mirrors the production shape: table-list publication, capture triggers on
+	the publisher (host-psql path), apply infra on the subscriber (docker-exec
+	path — same as _run_subscriber_sql in production), log table in the
+	publication, watermark initialised to the publisher's max(id) BEFORE the
+	subscription starts so pre-existing log rows are never replayed.
+	"""
+	from app.services.replication import (
+		add_log_table_to_publication,
+		install_capture_triggers,
+		install_ddl_apply,
+	)
+
+	for c in (E2E_PUB, E2E_SUB):
+		subprocess.run(["docker", "rm", "-f", c], capture_output=True)
+	subprocess.run(["docker", "network", "rm", E2E_NET], capture_output=True)
+	subprocess.run(["docker", "network", "create", E2E_NET], check=True, capture_output=True)
+
+	_run_e2e_container(E2E_PUB, E2E_PUB_PORT)
+	_run_e2e_container(E2E_SUB, E2E_SUB_PORT)
+
+	pub = e2e_connstr(E2E_PUB_PORT)
+	sub = e2e_connstr(E2E_SUB_PORT)
+	for connstr in (pub, sub):
+		wait_until(
+			lambda c=connstr: psql_conn(c, "SELECT 1;") == "1",
+			timeout=90, desc="postgres ready",
+		)
+
+	# publisher: seed table (in publication from the start) + capture triggers
+	psql_conn(pub, "CREATE TABLE seed (id int PRIMARY KEY, val text, req int NOT NULL);")
+	psql_conn(pub, f"CREATE PUBLICATION {PUBLICATION} FOR TABLE seed;")
+	install_capture_triggers(pub, PUBLICATION)
+
+	# subscriber starts with the same seed schema (as a real replica would)
+	psql_conn(sub, "CREATE TABLE seed (id int PRIMARY KEY, val text, req int NOT NULL);")
+
+	# DDL captured BEFORE the watermark must never be replayed on the
+	# subscriber (a sequence: not publishable, so it cannot break tablesync)
+	psql_conn(pub, "CREATE SEQUENCE pre_watermark_seq;")
+
+	max_id = int(psql_conn(pub, f"SELECT coalesce(max(id), 0) FROM {LOG_TABLE};"))
+	install_ddl_apply(E2E_SUB, PG_USER, PG_PASSWORD, PG_DB, initial_watermark=max_id)
+	add_log_table_to_publication(pub, PUBLICATION)
+
+	psql_conn(
+		sub,
+		f"CREATE SUBSCRIPTION {E2E_SUBSCRIPTION} "
+		f"CONNECTION 'host={E2E_PUB} port=5432 dbname={PG_DB} "
+		f"user={PG_USER} password={PG_PASSWORD}' "
+		f"PUBLICATION {PUBLICATION};",
+	)
+	# wait until initial sync of both tables (seed + ddl log) is done
+	wait_until(
+		lambda: psql_conn(
+			sub,
+			"SELECT count(*) FROM pg_subscription_rel WHERE srsubstate IN ('r','s');",
+		) == "2",
+		timeout=60, desc="initial table sync",
+	)
+
+	yield {"pub": pub, "sub": sub}
+
+	for c in (E2E_PUB, E2E_SUB):
+		subprocess.run(["docker", "rm", "-f", c], capture_output=True)
+	subprocess.run(["docker", "network", "rm", E2E_NET], capture_output=True)
