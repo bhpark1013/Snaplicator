@@ -1049,3 +1049,208 @@ def sync_table_schema_moves(
         "errors": errors,
         "refreshed": refreshed,
     }
+
+
+# ── DDL Capture (wide capture-and-replicate, Phase 1) ──────────────
+
+
+CAPTURE_LOG_TABLE = "_snaplicator_ddl_log"
+
+
+def install_capture_triggers(publisher_connstr: str, publication_name: str) -> Dict:
+    """Install wide DDL capture on the publisher.
+
+    Creates the _snaplicator_ddl_log outbox table plus two event triggers:
+      _snaplicator_capture_ddl   ON ddl_command_end  (CREATE/ALTER, wide)
+      _snaplicator_capture_drop  ON sql_drop         (DROP)
+
+    Capture is intentionally wide — scoping decisions happen at apply time.
+    Only three capture-side guards exist:
+      1. recursion — DDL touching _snaplicator_* objects is never logged
+      2. noise/DCL — GRANT/REVOKE/SECURITY LABEL/COMMENT are never logged
+         (TRUNCATE rides native logical replication; role/password commands
+         are cluster-global and never reach event triggers)
+      3. dedupe   — at most one log row per (txid, query string): subcommand
+         entries (serial sequences, PK indexes) and double-firing commands
+         (ALTER TABLE DROP COLUMN hits both triggers) collapse to one row
+
+    Replaces the legacy _snaplicator_auto_pub_add trigger; its behaviour
+    (auto ALTER PUBLICATION ADD TABLE on CREATE TABLE) is folded into the
+    capture trigger and skipped for FOR ALL TABLES publications.
+
+    Idempotent: safe to call repeatedly; existing log rows are preserved.
+
+    All log-table references inside the trigger functions are schema-qualified
+    (public.): the triggers run under the DDL issuer's search_path, so an
+    unqualified reference would fail (and silently lose the capture) whenever
+    a migration runs with SET search_path. A function-level SET search_path
+    is not an option — it would corrupt the captured search_path value.
+    """
+    log_table_sql = f"""
+CREATE TABLE IF NOT EXISTS public.{CAPTURE_LOG_TABLE} (
+    id bigserial PRIMARY KEY,
+    captured_at timestamptz NOT NULL DEFAULT now(),
+    lsn pg_lsn NOT NULL,
+    txid bigint NOT NULL,
+    command_tag text NOT NULL,
+    object_identity text,
+    schema_name text,
+    ddl_text text NOT NULL,
+    search_path text
+);
+"""
+    _run_publisher_sql(publisher_connstr, log_table_sql)
+
+    capture_fn_sql = f"""
+CREATE OR REPLACE FUNCTION _snaplicator_capture_ddl()
+RETURNS event_trigger
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+    q text := current_query();
+    cmd record;
+    tbl record;
+    allt boolean;
+BEGIN
+    -- non-definition noise / DCL: never logged
+    IF tg_tag IN ('GRANT', 'REVOKE', 'SECURITY LABEL', 'COMMENT') THEN
+        RETURN;
+    END IF;
+
+    -- One representative entry for object_identity/schema_name. Subcommand
+    -- entries (serial sequences, PK indexes, ...) share the same query
+    -- string; prefer the entry whose tag matches the top-level command tag.
+    -- Some commands (e.g. CREATE EXTENSION) report only their member
+    -- objects here — command_tag is therefore taken from tg_tag below, not
+    -- from this row.
+    SELECT c.command_tag, c.object_identity, c.schema_name
+      INTO cmd
+      FROM pg_event_trigger_ddl_commands() c
+     WHERE c.object_identity IS NULL OR c.object_identity !~ '_snaplicator_'
+     ORDER BY (c.command_tag = tg_tag) DESC
+     LIMIT 1;
+
+    IF cmd.command_tag IS NOT NULL THEN
+        BEGIN
+            -- dedupe: one row per (txid, query string)
+            IF NOT EXISTS (
+                SELECT 1 FROM public.{CAPTURE_LOG_TABLE}
+                 WHERE txid = txid_current() AND ddl_text = q
+            ) THEN
+                INSERT INTO public.{CAPTURE_LOG_TABLE}
+                    (lsn, txid, command_tag, object_identity, schema_name,
+                     ddl_text, search_path)
+                VALUES
+                    (pg_current_wal_lsn(), txid_current(), tg_tag,
+                     cmd.object_identity, cmd.schema_name, q,
+                     current_setting('search_path', true));
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            -- capture must never break the DDL that triggered it
+            RAISE WARNING 'snaplicator: ddl capture failed: %', SQLERRM;
+        END;
+    END IF;
+
+    -- Legacy behaviour: auto-add new tables to the publication. FOR ALL
+    -- TABLES publications include them automatically (and reject ALTER
+    -- PUBLICATION ADD TABLE), so skip in that case.
+    SELECT puballtables INTO allt
+      FROM pg_publication WHERE pubname = '{publication_name}';
+    IF allt IS FALSE THEN
+        FOR tbl IN
+            SELECT c.object_identity
+              FROM pg_event_trigger_ddl_commands() c
+             WHERE c.command_tag = 'CREATE TABLE'
+               AND c.object_type = 'table'
+               AND c.object_identity !~ '_snaplicator_'
+        LOOP
+            BEGIN
+                EXECUTE format(
+                    'ALTER PUBLICATION {publication_name} ADD TABLE %s',
+                    tbl.object_identity);
+            EXCEPTION WHEN OTHERS THEN
+                RAISE WARNING 'snaplicator: auto pub add failed for %: %',
+                    tbl.object_identity, SQLERRM;
+            END;
+        END LOOP;
+    END IF;
+END;
+$fn$;
+"""
+    _run_publisher_sql(publisher_connstr, capture_fn_sql)
+
+    drop_fn_sql = f"""
+CREATE OR REPLACE FUNCTION _snaplicator_capture_drop()
+RETURNS event_trigger
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+    q text := current_query();
+    obj record;
+BEGIN
+    -- one representative dropped object; prefer directly-named ones
+    SELECT d.object_identity, d.schema_name
+      INTO obj
+      FROM pg_event_trigger_dropped_objects() d
+     WHERE d.object_identity !~ '_snaplicator_'
+     ORDER BY d.original DESC
+     LIMIT 1;
+
+    IF obj.object_identity IS NULL THEN
+        RETURN;
+    END IF;
+
+    -- dedupe: ALTER TABLE DROP COLUMN fires sql_drop AND ddl_command_end
+    IF NOT EXISTS (
+        SELECT 1 FROM public.{CAPTURE_LOG_TABLE}
+         WHERE txid = txid_current() AND ddl_text = q
+    ) THEN
+        INSERT INTO public.{CAPTURE_LOG_TABLE}
+            (lsn, txid, command_tag, object_identity, schema_name,
+             ddl_text, search_path)
+        VALUES
+            (pg_current_wal_lsn(), txid_current(), tg_tag,
+             obj.object_identity, obj.schema_name, q,
+             current_setting('search_path', true));
+    END IF;
+EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'snaplicator: drop capture failed: %', SQLERRM;
+END;
+$fn$;
+"""
+    _run_publisher_sql(publisher_connstr, drop_fn_sql)
+
+    # DROP + CREATE so function references stay fresh; DDL on event triggers
+    # does not itself fire event triggers, so this cannot recurse.
+    triggers_sql = """
+DO $do$
+BEGIN
+    DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;
+    DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
+    DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
+    CREATE EVENT TRIGGER _snaplicator_capture_ddl
+        ON ddl_command_end
+        EXECUTE FUNCTION _snaplicator_capture_ddl();
+    CREATE EVENT TRIGGER _snaplicator_capture_drop
+        ON sql_drop
+        EXECUTE FUNCTION _snaplicator_capture_drop();
+END;
+$do$;
+"""
+    _run_publisher_sql(publisher_connstr, triggers_sql)
+
+    return {
+        "installed": True,
+        "publication": publication_name,
+        "log_table": CAPTURE_LOG_TABLE,
+    }
+
+
+def verify_capture_installed(publisher_connstr: str) -> bool:
+    """Check that both capture event triggers exist on the publisher."""
+    sql = (
+        "SELECT count(*) FROM pg_event_trigger "
+        "WHERE evtname IN ('_snaplicator_capture_ddl', '_snaplicator_capture_drop');"
+    )
+    out = _run_publisher_sql(publisher_connstr, sql)
+    return out.strip() == "2"
