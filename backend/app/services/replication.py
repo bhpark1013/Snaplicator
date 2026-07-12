@@ -1076,7 +1076,8 @@ def install_capture_triggers(publisher_connstr: str, publication_name: str) -> D
 
     Replaces the legacy _snaplicator_auto_pub_add trigger; its behaviour
     (auto ALTER PUBLICATION ADD TABLE on CREATE TABLE) is folded into the
-    capture trigger and skipped for FOR ALL TABLES publications.
+    capture trigger, scoped to schemas the publication already covers, and
+    skipped for FOR ALL TABLES publications.
 
     Idempotent: safe to call repeatedly; existing log rows are preserved.
 
@@ -1155,8 +1156,12 @@ BEGIN
         END;
     END IF;
 
-    -- Legacy behaviour: auto-add new tables to the publication. FOR ALL
-    -- TABLES publications include them automatically (and reject ALTER
+    -- Legacy behaviour: auto-add new tables to the publication, scoped to
+    -- schemas the publication already covers (legacy hardcoded 'public';
+    -- membership-derived scope needs no config). Deliberately excluded
+    -- schemas stay out — e.g. FDW-managed etl tables, some without PKs:
+    -- publishing one breaks publisher-side UPDATE/DELETE. FOR ALL TABLES
+    -- publications include new tables automatically (and reject ALTER
     -- PUBLICATION ADD TABLE), so skip in that case.
     SELECT puballtables INTO allt
       FROM pg_publication WHERE pubname = '{publication_name}';
@@ -1167,6 +1172,10 @@ BEGIN
              WHERE c.command_tag = 'CREATE TABLE'
                AND c.object_type = 'table'
                AND c.object_identity !~ '_snaplicator_'
+               AND c.schema_name IN (
+                   SELECT pt.schemaname
+                     FROM pg_publication_tables pt
+                    WHERE pt.pubname = '{publication_name}')
         LOOP
             BEGIN
                 EXECUTE format(

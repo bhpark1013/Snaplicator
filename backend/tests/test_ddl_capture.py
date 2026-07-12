@@ -239,8 +239,8 @@ class TestGuards:
 		pub-add. Never logged, from either trigger."""
 		psql("CREATE TABLE guard_pub_t (id int);")
 		psql(f"TRUNCATE {LOG_TABLE};")
-		psql(f"ALTER PUBLICATION {PUBLICATION} DROP TABLE guard_pub_t;")
 		psql(f"ALTER PUBLICATION {PUBLICATION} ADD TABLE guard_pub_t;")
+		psql(f"ALTER PUBLICATION {PUBLICATION} DROP TABLE guard_pub_t;")
 		assert log_count() == 0
 
 	def test_comment_not_captured(self, clean_log):
@@ -318,13 +318,39 @@ class TestTransactions:
 
 
 class TestPublicationAutoAdd:
-	def test_create_table_auto_added_to_publication(self, clean_log):
+	def test_create_table_auto_added_when_schema_covered(self, clean_log):
+		"""Auto-add is scoped to schemas the publication already covers: an
+		empty publication covers none, so nothing is added; once public has
+		a member, subsequent public tables are added automatically."""
+		psql("CREATE TABLE pub_bootstrap_t (id int);")
+		out = psql(
+			f"SELECT count(*) FROM pg_publication_tables "
+			f"WHERE pubname = '{PUBLICATION}' AND tablename = 'pub_bootstrap_t';"
+		)
+		assert out == "0"  # empty publication -> no covered schema -> no add
+		psql(f"ALTER PUBLICATION {PUBLICATION} ADD TABLE pub_bootstrap_t;")
 		psql("CREATE TABLE pub_auto_t (id int);")
 		out = psql(
 			f"SELECT count(*) FROM pg_publication_tables "
 			f"WHERE pubname = '{PUBLICATION}' AND tablename = 'pub_auto_t';"
 		)
 		assert out == "1"
+
+	def test_uncovered_schema_not_auto_added_but_still_captured(self, clean_log):
+		"""The prod etl case: a schema the publication does not cover holds
+		FDW-managed tables (some without PK) — publishing one would break
+		publisher-side UPDATE/DELETE. Must never be auto-added; capture
+		stays schema-wide, so the DDL is still logged."""
+		psql("CREATE SCHEMA etlish;")
+		psql("CREATE TABLE etlish.fdw_only_t (id int);")
+		out = psql(
+			f"SELECT count(*) FROM pg_publication_tables "
+			f"WHERE pubname = '{PUBLICATION}' AND schemaname = 'etlish';"
+		)
+		assert out == "0"
+		assert log_count(
+			"command_tag = 'CREATE TABLE' AND ddl_text LIKE '%fdw_only_t%'"
+		) == 1
 
 	def test_log_table_not_auto_added(self, capture_installed):
 		"""Publication membership of the log table is a Phase 2 deploy step."""
