@@ -26,10 +26,46 @@ Snaplicator uses two complementary paths to keep the replica current, with the F
 
 | Path | Source of truth | What it covers | Auto-sync |
 |------|-----------------|----------------|-----------|
-| Native logical replication | `CREATE PUBLICATION` on the primary | All tables in the publication (DML + selected DDL) | new tables (event trigger on publisher), added columns, CHECK constraints, schema moves |
+| Native logical replication | `CREATE PUBLICATION` on the primary | All tables in the publication (DML + selected DDL) | in-stream DDL replication (see below); diff reconcilers (added columns, CHECK constraints, schema moves) remain as a backstop |
 | `postgres_fdw` foreign tables | `configs/fdw.yaml` | Tables that can't go through the publication (e.g. no PRIMARY KEY, or read-only-by-FDW by design) | remote column drift (added / removed / type-changed) re-imports automatically |
 
 Reflected changes — and any loop errors — are appended to `~/.snaplicator/sync_events.jsonl` (also exposed at `GET /replication/sync-log` and surfaced in the "Auto-Sync Activity" panel of the UI).
+
+### DDL replication
+
+Native logical replication does **not** replicate DDL ([documented restriction](https://www.postgresql.org/docs/current/logical-replication-restrictions.html)): when the publisher's schema changes, incoming rows stop fitting the subscriber's schema and the apply worker crash-loops until someone fixes it by hand. Snaplicator closes this gap with a capture-and-replay pipeline that rides the replication stream itself:
+
+```
+publisher                                  subscriber
+─────────                                  ──────────
+event triggers (ddl_command_end, sql_drop)
+  → INSERT into _snaplicator_ddl_log       _snaplicator_ddl_log (replicated copy)
+    (same transaction as the DDL,            → ENABLE ALWAYS trigger fires on the
+     log table is IN the publication)          arriving row and EXECUTEs ddl_text
+                                               at its exact position in the stream
+```
+
+Because the log row commits in the same transaction as the DDL, it arrives **in commit order between the surrounding DML** — the subscriber applies `ALTER TABLE` at exactly the point the publisher did. No LSN bookkeeping, no polling, no ordering heuristics.
+
+Safety properties (all covered by tests in `backend/tests/`):
+
+- **Capture guards** — `_snaplicator_*` objects are never captured (recursion), DCL and publication/subscription DDL are filtered (publisher-only concepts), one log row per `(txid, query)` (dedupe).
+- **Watermark** — the subscriber skips log rows with `id <=` the install-time watermark, so initial `COPY`, clone artifacts, and re-subscriptions never re-execute history.
+- **Failures are loud, never fatal, never retried** — a DDL that cannot apply (e.g. subscriber-local drift) is recorded in `_snaplicator_ddl_failures` (with `search_path` for manual replay) and the stream keeps flowing; the apply trigger never re-raises, because a re-raise would crash-loop the apply worker. Resolution is a human decision.
+- **`CONCURRENTLY` is deferred** — `CREATE INDEX CONCURRENTLY` cannot run inside the apply transaction, so it is queued in `_snaplicator_ddl_deferred` for one-shot out-of-band execution.
+
+Known limitations (shared with every replay-based approach, including the [withdrawn core patch](https://commitfest.postgresql.org/patch/3595/)): statements whose effect is non-deterministic replay with per-node results (`ADD COLUMN ... DEFAULT now()`, `CREATE TABLE AS SELECT`), DDL hidden inside function calls replays the outer statement, and `command_tag` for `CREATE EXTENSION` records the first inner command of the extension script.
+
+Context: PostgreSQL core has tried to ship this (commitfest [#3595](https://commitfest.postgresql.org/patch/3595/), 2022–2024, withdrawn; a narrower "take2" is in progress), and [pgl_ddl_deploy](https://github.com/enova/pgl_ddl_deploy) implements the same event-trigger + queue pattern as an extension. Managed services (Aurora/RDS) don't allow that extension, which is why Snaplicator implements the pattern in plain SQL managed by the backend.
+
+**Status**: capture + apply are implemented and tested (`install_capture_triggers`, `install_ddl_apply`, `add_log_table_to_publication` in `backend/app/services/replication.py`); wiring into the backend startup/loop (auto-install, deferred executor, failure surfacing) lands separately. To try it interactively, spin up the smoke environment:
+
+```bash
+cd backend
+.venv/bin/python scripts/ddl_smoke.py setup      # publisher :55440 / subscriber :55441
+.venv/bin/python scripts/ddl_smoke.py status
+.venv/bin/python scripts/ddl_smoke.py teardown
+```
 
 ---
 
