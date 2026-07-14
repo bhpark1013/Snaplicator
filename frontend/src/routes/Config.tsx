@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 
 interface CopyProgress {
@@ -60,6 +61,14 @@ export function Config() {
 
     const [subStatus, setSubStatus] = useState<{ status: string; subscriptions: Array<{ name: string; pid: number | null; worker_running: boolean; received_lsn: string | null; latest_end_lsn: string | null; latest_end_time: string | null }> } | null>(null)
 
+    const [notif, setNotif] = useState<{ configured: boolean; enabled: boolean; webhook_url_masked: string } | null>(null)
+    const [notifExpanded, setNotifExpanded] = useState(false)
+    const [notifUrl, setNotifUrl] = useState('')
+    const [notifSaving, setNotifSaving] = useState(false)
+    const [notifTesting, setNotifTesting] = useState(false)
+    const [notifMsg, setNotifMsg] = useState<string | null>(null)
+    const [notifErr, setNotifErr] = useState<string | null>(null)
+
     const api = import.meta.env.VITE_API_BASE_URL || ''
     const base = api ? api : '/api'
 
@@ -80,6 +89,50 @@ export function Config() {
             .then((r) => (r.ok ? r.json() : Promise.reject(r)))
             .then((data) => setSubStatus(data))
             .catch(() => setSubStatus(null))
+    }
+
+    const loadNotif = () => {
+        fetch(`${base}/notifications`)
+            .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+            .then((data) => setNotif(data))
+            .catch(() => setNotif(null))
+    }
+
+    const saveNotif = async (payload: { webhook_url?: string; enabled?: boolean }) => {
+        setNotifSaving(true)
+        setNotifMsg(null)
+        setNotifErr(null)
+        try {
+            const r = await fetch(`${base}/notifications`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            })
+            if (!r.ok) throw new Error(`${r.status}`)
+            setNotif(await r.json())
+            setNotifUrl('')
+            setNotifMsg('Saved.')
+        } catch (e) {
+            setNotifErr(String(e))
+        } finally {
+            setNotifSaving(false)
+        }
+    }
+
+    const testNotif = async () => {
+        setNotifTesting(true)
+        setNotifMsg(null)
+        setNotifErr(null)
+        try {
+            const r = await fetch(`${base}/notifications/test`, { method: 'POST' })
+            const data = await r.json()
+            if (data.ok) setNotifMsg('Test message sent — check the Slack channel.')
+            else setNotifErr(`Send failed: ${data.error || data.skipped || `status ${data.status ?? 'unknown'}`}`)
+        } catch (e) {
+            setNotifErr(String(e))
+        } finally {
+            setNotifTesting(false)
+        }
     }
 
     const loadSubLogs = () => {
@@ -167,6 +220,7 @@ export function Config() {
         loadFsUsage()
         loadSubLogs()
         loadSubStatus()
+        loadNotif()
         loadCheckSql()
         runCheck()
         // eslint-disable-next-line react-hooks-exhaustive-deps
@@ -435,6 +489,60 @@ export function Config() {
                                 <div>source: docker logs --tail {subLogs.filters.tail} {subLogs.container_name}</div>
                             </div>
                         )}
+                    </div>
+                )}
+            </Card>
+
+            {/* ── Collapsible detail: Slack Notifications ── */}
+            <Card className="mt-3">
+                <button
+                    onClick={() => setNotifExpanded((v) => !v)}
+                    className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                    {notifExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                    <span className="text-[13px] font-semibold tracking-tight">Slack Notifications</span>
+                    <span className="text-xs text-muted-foreground">— alert on auto-sync errors via incoming webhook</span>
+                    {notif && (
+                        <Badge variant={notif.configured && notif.enabled ? 'success' : 'neutral'}>
+                            {notif.configured ? (notif.enabled ? 'on' : 'off') : 'not configured'}
+                        </Badge>
+                    )}
+                </button>
+
+                {notifExpanded && (
+                    <div className="mt-3 flex flex-col gap-2 pl-6">
+                        <div className="text-xs text-muted-foreground">
+                            Paste a Slack incoming-webhook URL. Error events from the auto-sync loop are posted to its channel (5-min cooldown per event kind).
+                            {notif?.configured ? ` Current: ${notif.webhook_url_masked}` : ''}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Input
+                                type="password"
+                                value={notifUrl}
+                                onChange={(e) => setNotifUrl(e.target.value)}
+                                placeholder={notif?.configured ? 'Replace webhook URL…' : 'https://hooks.slack.com/services/…'}
+                                className="w-96 font-mono text-xs"
+                                spellCheck={false}
+                            />
+                            <Button onClick={() => saveNotif({ webhook_url: notifUrl, enabled: true })} disabled={notifSaving || !notifUrl.trim()}>
+                                {notifSaving ? 'Saving...' : 'Save'}
+                            </Button>
+                            {notif?.configured && (
+                                <>
+                                    <Button onClick={() => saveNotif({ enabled: !notif.enabled })} disabled={notifSaving}>
+                                        {notif.enabled ? 'Disable' : 'Enable'}
+                                    </Button>
+                                    <Button onClick={testNotif} disabled={notifTesting}>
+                                        {notifTesting ? 'Sending...' : 'Send test'}
+                                    </Button>
+                                    <Button onClick={() => saveNotif({ webhook_url: '', enabled: false })} disabled={notifSaving}>
+                                        Remove
+                                    </Button>
+                                </>
+                            )}
+                        </div>
+                        {notifErr && <p className="text-[13px] text-destructive">{notifErr}</p>}
+                        {notifMsg && <p className="text-[13px] text-success">{notifMsg}</p>}
                     </div>
                 )}
             </Card>
