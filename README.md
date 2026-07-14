@@ -62,7 +62,7 @@ Known limitations (shared with every replay-based approach, including the [withd
 
 Context: PostgreSQL core has tried to ship this (commitfest [#3595](https://commitfest.postgresql.org/patch/3595/), 2022–2024, withdrawn; a narrower "take2" is in progress), and [pgl_ddl_deploy](https://github.com/enova/pgl_ddl_deploy) implements the same event-trigger + queue pattern as an extension. Managed services (Aurora/RDS) don't allow that extension, which is why Snaplicator implements the pattern in plain SQL managed by the backend.
 
-**Status**: capture + apply are implemented and tested (`install_capture_triggers`, `install_ddl_apply`, `add_log_table_to_publication` in `backend/app/services/replication.py`); wiring into the backend startup/loop (auto-install, deferred executor, failure surfacing) lands separately. To try it interactively, spin up the smoke environment:
+**Status**: fully wired. Capture triggers install at startup and self-heal in the 30s loop (replacing the legacy auto-add trigger). The subscriber-side switch is `DDL_APPLY_ENABLED=true` in `configs/.env` — flipping it connects the stream idempotently (apply infra + watermark seed + log table into the publication + `REFRESH`); it defaults to off, so a deploy alone starts *capture only* and never changes replication behaviour. Deferred `CONCURRENTLY` statements are executed once, out of band, by the loop; new apply failures surface in the sync log (and Slack, if configured). To try it interactively, spin up the smoke environment:
 
 ```bash
 cd backend
@@ -88,7 +88,7 @@ Create the publication on the primary instance:
 CREATE PUBLICATION snaplicator_pub FOR TABLES IN SCHEMA public;
 ```
 
-The backend installs an event trigger on the publisher at startup that auto-adds new `public.*` tables to this publication (see `GET /replication/trigger-status`). New tables therefore start replicating without manual `ALTER PUBLICATION`.
+The backend installs DDL capture event triggers on the publisher at startup (see `GET /replication/trigger-status`). Besides feeding the DDL log, they auto-add new tables to the publication — scoped to schemas the publication already covers — so new tables start replicating without manual `ALTER PUBLICATION`.
 
 ### 3. (Optional) Configure `postgres_fdw` targets
 For tables that should be exposed as foreign tables instead of logically replicated, edit `configs/fdw.yaml`:
@@ -181,7 +181,7 @@ To clone directly from the main replica, open the frontend and use "Clone from M
 - Replica initialization log: `replica-init.log`
 - Clone container failures: `docker logs <container>`
 - Auto-sync history / errors: `cat ~/.snaplicator/sync_events.jsonl` or `GET /replication/sync-log`
-- Auto-add event trigger missing on publisher: hit `POST /replication/trigger-install` (also reinstalled automatically by the 30s loop if it goes missing)
+- DDL capture triggers missing on publisher: hit `POST /replication/trigger-install` (also reinstalled automatically by the 30s loop if they go missing)
 - FDW table looks stale: confirm the table is listed in `configs/fdw.yaml`; the drift detector only reconciles configured targets. Schema-level entries pick up new tables on the next re-import.
 - Running out of btrfs space: delete old subvolumes under `MAIN_DATA_DIR` with `sudo btrfs subvolume delete ...`
 - macOS reminder: keep actual data on the Linux VM's btrfs mount; Docker Desktop alone cannot host btrfs snapshots.

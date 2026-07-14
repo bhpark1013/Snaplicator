@@ -31,8 +31,10 @@ exact position between the surrounding DML — no LSN gates, no polling.
 """
 from __future__ import annotations
 
-from app.services.replication import (  # Phase 2 SUT — not yet implemented
+from app.services.replication import (
+	enable_ddl_apply,
 	get_ddl_apply_status,
+	run_deferred_ddl,
 	verify_ddl_apply_installed,
 )
 
@@ -79,6 +81,16 @@ class TestInfra:
 			sub, "SELECT count(*) FROM pg_class WHERE relname = 'pre_watermark_seq';"
 		) == "0"
 		assert _status()["failures"] == 0
+
+	def test_enable_ddl_apply_idempotent(self, pg_pair):
+		"""The loop calls the enable sequence every 30s once the flag is on —
+		re-running it against a live stream must be a read-only no-op."""
+		res = enable_ddl_apply(
+			pg_pair["pub"], PUBLICATION,
+			E2E_SUB, PG_USER, PG_PASSWORD, PG_DB, E2E_SUBSCRIPTION,
+		)
+		assert res["added"] is False
+		assert res["refreshed"] is False
 
 
 class TestInStreamApply:
@@ -171,6 +183,12 @@ class TestFailureIsolation:
 			) == "1",
 			desc="failure recorded",
 		)
+		# failure context includes search_path for manual replay
+		assert psql_conn(
+			sub,
+			"SELECT count(*) FROM public._snaplicator_ddl_failures "
+			"WHERE ddl_text LIKE '%clash_t%' AND search_path IS NOT NULL;",
+		) == "1"
 		# stream alive after the failure
 		psql_conn(pub, "INSERT INTO seed (id, val, req) VALUES (3, 'alive', 2);")
 		wait_until(
@@ -202,3 +220,17 @@ class TestFailureIsolation:
 			"SELECT count(*) FROM public._snaplicator_ddl_failures "
 			"WHERE ddl_text LIKE '%seed_val_idx%';",
 		) == "0"
+
+	def test_deferred_executor_one_shot(self, pg_pair):
+		"""The loop's out-of-band executor: builds the deferred index exactly
+		once; a second run finds nothing to do."""
+		sub = pg_pair["sub"]
+		res = run_deferred_ddl(E2E_SUB, PG_USER, PG_PASSWORD, PG_DB)
+		assert res["errors"] == []
+		assert len(res["executed"]) == 1
+		assert psql_conn(
+			sub, "SELECT count(*) FROM pg_class WHERE relname = 'seed_val_idx';"
+		) == "1"
+		assert _status()["deferred_pending"] == 0
+		res2 = run_deferred_ddl(E2E_SUB, PG_USER, PG_PASSWORD, PG_DB)
+		assert res2["executed"] == [] and res2["errors"] == []

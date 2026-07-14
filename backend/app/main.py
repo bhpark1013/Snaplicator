@@ -12,10 +12,23 @@ from .api.routes.replication import router as replication_router
 from .api.routes.notifications import router as notifications_router
 from .services import fdw as fdw_svc
 from .services import sync_log
-from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, sync_table_schema_moves, install_auto_add_trigger, verify_trigger_installed
-from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, install_auto_add_trigger, verify_trigger_installed
+from .services.replication import (
+    auto_sync_new_tables,
+    sync_column_changes,
+    sync_check_constraints,
+    sync_table_schema_moves,
+    install_capture_triggers,
+    verify_capture_installed,
+    enable_ddl_apply,
+    get_ddl_apply_status,
+    run_deferred_ddl,
+)
 
 logger = logging.getLogger("snaplicator.ddl_sync")
+
+# Baseline for change-detection of DDL apply failures across loop iterations.
+# None until the first successful status read after process start.
+_ddl_apply_seen = {"failures": None}
 
 
 def _build_publisher_connstr() -> str | None:
@@ -60,16 +73,17 @@ async def ddl_sync_loop():
             db = settings.postgres_db
 
             if connstr and pub_name and sub_name and container and user and db:
-                # Safety net: verify event trigger exists on publisher
+                # Safety net: DDL capture triggers must exist on the publisher —
+                # a gap in capture is an unrecoverable hole in the DDL log.
                 try:
-                    trigger_ok = await asyncio.to_thread(verify_trigger_installed, connstr)
+                    trigger_ok = await asyncio.to_thread(verify_capture_installed, connstr)
                     if not trigger_ok:
-                        logger.warning("Auto-add trigger missing on publisher, reinstalling...")
-                        await asyncio.to_thread(install_auto_add_trigger, connstr, pub_name)
-                        logger.info("Auto-add trigger reinstalled successfully")
-                        sync_log.record("trigger_reinstalled", {"publication": pub_name})
+                        logger.warning("DDL capture triggers missing on publisher, reinstalling...")
+                        await asyncio.to_thread(install_capture_triggers, connstr, pub_name)
+                        logger.info("DDL capture triggers reinstalled successfully")
+                        sync_log.record("capture_reinstalled", {"publication": pub_name})
                 except Exception as e:
-                    logger.warning(f"Trigger verification failed: {e}")
+                    logger.warning(f"Capture trigger verification failed: {e}")
 
                 # Sync table schema moves (ALTER TABLE ... SET SCHEMA) FIRST,
                 # before auto_sync_new_tables so a moved table is relocated on
@@ -136,6 +150,40 @@ async def ddl_sync_loop():
                 except Exception as e:
                     logger.warning(f"Constraint sync failed: {e}")
 
+                # ── In-stream DDL apply (subscriber side) — flag-gated switch ──
+                if settings.ddl_apply_enabled:
+                    try:
+                        res = await asyncio.to_thread(
+                            enable_ddl_apply,
+                            connstr, pub_name, container, user, password, db, sub_name,
+                        )
+                        if res.get("added") or res.get("refreshed"):
+                            logger.info(f"DDL apply enabled: {res}")
+                            sync_log.record("ddl_apply_enabled", res)
+
+                        st = await asyncio.to_thread(
+                            get_ddl_apply_status, container, user, password, db,
+                        )
+                        prev = _ddl_apply_seen["failures"]
+                        if prev is not None and st["failures"] > prev:
+                            sync_log.record("ddl_apply_failure", {
+                                "error": (
+                                    f"{st['failures'] - prev} new DDL apply failure(s) "
+                                    f"(total {st['failures']}) — see _snaplicator_ddl_failures"
+                                ),
+                            })
+                        _ddl_apply_seen["failures"] = st["failures"]
+
+                        if st["deferred_pending"]:
+                            dres = await asyncio.to_thread(
+                                run_deferred_ddl, container, user, password, db,
+                            )
+                            if dres.get("executed") or dres.get("errors"):
+                                logger.info(f"Deferred DDL executor: {dres}")
+                                sync_log.record("ddl_deferred", dres)
+                    except Exception as e:
+                        logger.warning(f"DDL apply sync failed: {e}")
+
             # ── FDW remote column-drift auto-sync ──
             # Independent of the publication gate above: FDW can be in use
             # even when logical replication is not fully configured.
@@ -196,15 +244,17 @@ async def ddl_sync_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Best-effort: install event trigger on publisher at startup
+    # Best-effort: install the DDL capture triggers (outbox) on the publisher
+    # at startup. Replaces the legacy auto-add-only trigger — auto pub-add is
+    # folded into the capture trigger, scoped to schemas the publication covers.
     try:
         connstr = _build_publisher_connstr()
         pub_name = settings.publication_name
         if connstr and pub_name:
-            await asyncio.to_thread(install_auto_add_trigger, connstr, pub_name)
-            logger.info(f"Auto-add event trigger installed on publisher for publication '{pub_name}'")
+            await asyncio.to_thread(install_capture_triggers, connstr, pub_name)
+            logger.info(f"DDL capture triggers installed on publisher for publication '{pub_name}'")
     except Exception as e:
-        logger.warning(f"Could not install auto-add trigger at startup (will retry in polling loop): {e}")
+        logger.warning(f"Could not install capture triggers at startup (will retry in polling loop): {e}")
 
     task = asyncio.create_task(ddl_sync_loop())
     yield

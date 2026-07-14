@@ -352,6 +352,24 @@ class TestPublicationAutoAdd:
 			"command_tag = 'CREATE TABLE' AND ddl_text LIKE '%fdw_only_t%'"
 		) == 1
 
+	def test_ctas_auto_added_when_schema_covered(self, clean_log):
+		"""CREATE TABLE AS materializes divergent contents when replayed, so
+		membership matters even more: after REFRESH, tablesync re-copies the
+		publisher's rows wholesale — self-healing."""
+		psql("CREATE TABLE ctas_cover_t (id int);")
+		member = psql(
+			f"SELECT count(*) FROM pg_publication_tables "
+			f"WHERE pubname = '{PUBLICATION}' AND tablename = 'ctas_cover_t';"
+		)
+		if member == "0":  # standalone run: public not covered yet
+			psql(f"ALTER PUBLICATION {PUBLICATION} ADD TABLE ctas_cover_t;")
+		psql("CREATE TABLE pub_ctas_t AS SELECT 42 AS id;")
+		out = psql(
+			f"SELECT count(*) FROM pg_publication_tables "
+			f"WHERE pubname = '{PUBLICATION}' AND tablename = 'pub_ctas_t';"
+		)
+		assert out == "1"
+
 	def test_log_table_not_auto_added(self, capture_installed):
 		"""Publication membership of the log table is a Phase 2 deploy step."""
 		out = psql(
@@ -478,3 +496,11 @@ class TestInstall:
 		# capture still works after reinstall
 		psql("CREATE TABLE idem_t2 (id int);")
 		assert log_count("command_tag = 'CREATE TABLE'") == 2
+
+	def test_reinstall_after_manual_drop(self, capture_installed):
+		"""The self-heal cycle the sync loop performs: verify -> False ->
+		reinstall -> True."""
+		psql("DROP EVENT TRIGGER _snaplicator_capture_ddl;")
+		assert verify_capture_installed(connstr_for(PG_DB)) is False
+		install_capture_triggers(connstr_for(PG_DB), PUBLICATION)
+		assert verify_capture_installed(connstr_for(PG_DB)) is True

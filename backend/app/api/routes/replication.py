@@ -13,8 +13,8 @@ from ...services.replication import (
     remove_tables_from_publication,
     refresh_subscription,
     sync_table_schemas_to_subscriber,
-    install_auto_add_trigger,
-    verify_trigger_installed,
+    install_capture_triggers,
+    verify_capture_installed,
 )
 from pathlib import Path
 import os
@@ -323,10 +323,10 @@ def post_refresh():
 
 @router.get("/trigger-status")
 def get_trigger_status():
-    """Check if the auto-add event trigger is installed on the publisher."""
+    """Check if the DDL capture event triggers are installed on the publisher."""
     try:
         connstr = _build_publisher_connstr()
-        installed = verify_trigger_installed(connstr)
+        installed = verify_capture_installed(connstr)
         return {"installed": installed, "publication": settings.publication_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to check trigger status: {e}")
@@ -334,13 +334,13 @@ def get_trigger_status():
 
 @router.post("/trigger-install")
 def post_trigger_install():
-    """Install or update the auto-add event trigger on the publisher."""
+    """Install or update the DDL capture event triggers on the publisher."""
     try:
         connstr = _build_publisher_connstr()
         pub_name = settings.publication_name
         if not pub_name:
             raise HTTPException(status_code=400, detail="Missing PUBLICATION_NAME setting")
-        result = install_auto_add_trigger(connstr, pub_name)
+        result = install_capture_triggers(connstr, pub_name)
         return result
     except HTTPException:
         raise

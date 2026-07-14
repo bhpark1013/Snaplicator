@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import subprocess
 from typing import Dict, List
 from pathlib import Path
@@ -722,60 +723,6 @@ def sync_column_changes(
     return {"columns_added": added, "errors": errors}
 
 
-# ── Event Trigger Management ──────────────────────
-
-
-def install_auto_add_trigger(publisher_connstr: str, publication_name: str) -> Dict:
-    """Install or update the event trigger on publisher that auto-adds new public tables to publication.
-
-    Idempotent: safe to call multiple times.
-    """
-    # Create or replace the trigger function with current publication name
-    func_sql = f"""
-CREATE OR REPLACE FUNCTION _snaplicator_auto_add_to_pub()
-RETURNS event_trigger
-LANGUAGE plpgsql
-AS $fn$
-DECLARE
-    obj record;
-BEGIN
-    FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands()
-    WHERE command_tag = 'CREATE TABLE'
-      AND schema_name = 'public'
-    LOOP
-        EXECUTE format('ALTER PUBLICATION {publication_name} ADD TABLE %s', obj.object_identity);
-        RAISE NOTICE 'snaplicator: auto-added % to publication {publication_name}', obj.object_identity;
-    END LOOP;
-END;
-$fn$;
-"""
-    _run_publisher_sql(publisher_connstr, func_sql)
-
-    # Create event trigger if not exists (PG14+)
-    # DROP + CREATE to ensure function reference is fresh
-    trigger_sql = """
-DO $do$
-BEGIN
-    DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;
-    CREATE EVENT TRIGGER _snaplicator_auto_pub_add
-    ON ddl_command_end
-    WHEN TAG IN ('CREATE TABLE')
-    EXECUTE FUNCTION _snaplicator_auto_add_to_pub();
-END;
-$do$;
-"""
-    _run_publisher_sql(publisher_connstr, trigger_sql)
-
-    return {"installed": True, "publication": publication_name}
-
-
-def verify_trigger_installed(publisher_connstr: str) -> bool:
-    """Check if the auto-add event trigger exists on the publisher."""
-    sql = "SELECT 1 FROM pg_event_trigger WHERE evtname = '_snaplicator_auto_pub_add';"
-    out = _run_publisher_sql(publisher_connstr, sql)
-    return out.strip() == "1"
-
-
 def sync_check_constraints(
     publisher_connstr: str,
     publication_name: str,
@@ -1169,7 +1116,8 @@ BEGIN
         FOR tbl IN
             SELECT c.object_identity
               FROM pg_event_trigger_ddl_commands() c
-             WHERE c.command_tag = 'CREATE TABLE'
+             WHERE c.command_tag IN ('CREATE TABLE', 'CREATE TABLE AS',
+                                     'SELECT INTO')
                AND c.object_type = 'table'
                AND c.object_identity !~ '_snaplicator_'
                AND c.schema_name IN (
@@ -1354,8 +1302,11 @@ CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_failures (
     log_id bigint NOT NULL,
     ddl_text text NOT NULL,
     error text NOT NULL,
+    search_path text,
     failed_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE public._snaplicator_ddl_failures
+    ADD COLUMN IF NOT EXISTS search_path text;
 """)
 
     _sub_sql("""
@@ -1402,8 +1353,9 @@ BEGIN
             EXECUTE NEW.ddl_text;
         EXCEPTION WHEN OTHERS THEN
             -- loud skip: never re-raise (would crash-loop the apply worker)
-            INSERT INTO public._snaplicator_ddl_failures (log_id, ddl_text, error)
-            VALUES (NEW.id, NEW.ddl_text, SQLERRM);
+            INSERT INTO public._snaplicator_ddl_failures
+                (log_id, ddl_text, error, search_path)
+            VALUES (NEW.id, NEW.ddl_text, SQLERRM, NEW.search_path);
             RAISE WARNING 'snaplicator: ddl apply failed for log id %: %',
                 NEW.id, SQLERRM;
         END;
@@ -1512,3 +1464,120 @@ def get_ddl_apply_status(
         "failures": int(failures),
         "deferred_pending": int(deferred),
     }
+
+
+def _run_subscriber_sql_cmds(
+    container_name: str, user: str, password: str | None, db: str,
+    sqls: List[str],
+) -> str:
+    """Like _run_subscriber_sql but one psql invocation with multiple -c:
+    same session, one implicit transaction per command — required for
+    statements that refuse transaction blocks (CREATE INDEX CONCURRENTLY)
+    while still letting an earlier session-level SET reach them."""
+    cmd: list[str] = ["docker", "exec"]
+    if password:
+        cmd += ["-e", f"PGPASSWORD={password}"]
+    cmd += [container_name, "psql", "-U", user, "-d", db, "-At",
+            "-v", "ON_ERROR_STOP=1"]
+    for sql in sqls:
+        cmd += ["-c", sql]
+    proc = subprocess.run(cmd, text=True, capture_output=True, check=True)
+    return (proc.stdout or "").strip()
+
+
+def get_publisher_max_ddl_log_id(publisher_connstr: str) -> int:
+    """Watermark seed: log rows at or below this id must never replay."""
+    out = _run_publisher_sql(
+        publisher_connstr,
+        f"SELECT coalesce(max(id), 0) FROM public.{CAPTURE_LOG_TABLE};",
+    ).strip()
+    return int(out or 0)
+
+
+def enable_ddl_apply(
+    publisher_connstr: str,
+    publication_name: str,
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+    subscription_name: str,
+) -> Dict:
+    """Connect the DDL stream, idempotently. Order matters: the watermark is
+    seeded from the publisher's current max(id) BEFORE the log table joins
+    the publication, so history arriving via the initial COPY is never
+    executed. REFRESH runs only when the subscriber is not yet pulling the
+    log table, so steady-state calls are read-only no-ops."""
+    wm = get_publisher_max_ddl_log_id(publisher_connstr)
+    install_ddl_apply(
+        subscriber_container, subscriber_user, subscriber_password,
+        subscriber_db, initial_watermark=wm,
+    )
+    added = add_log_table_to_publication(publisher_connstr, publication_name)
+    subscribed = _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password,
+        subscriber_db,
+        "SELECT count(*) FROM pg_subscription_rel sr "
+        "JOIN pg_class c ON c.oid = sr.srrelid "
+        f"WHERE c.relname = '{CAPTURE_LOG_TABLE}';",
+    ).strip()
+    if subscribed == "0":
+        _run_subscriber_sql(
+            subscriber_container, subscriber_user, subscriber_password,
+            subscriber_db,
+            f"ALTER SUBSCRIPTION {subscription_name} REFRESH PUBLICATION;",
+        )
+    return {"watermark": wm, "refreshed": subscribed == "0", **added}
+
+
+def run_deferred_ddl(
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> Dict:
+    """One-shot out-of-band executor for deferred DDL (CONCURRENTLY): each
+    row is attempted exactly once — success stamps executed_at, failure
+    stamps error and the row is never retried (human resolution, same
+    philosophy as _snaplicator_ddl_failures). A failed CREATE INDEX
+    CONCURRENTLY may leave an INVALID index behind; that cleanup is part of
+    the human resolution."""
+    raw = _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password,
+        subscriber_db,
+        "SELECT id::text || '|' || coalesce(search_path, '') || '|' || "
+        "replace(encode(convert_to(ddl_text, 'UTF8'), 'base64'), chr(10), '') "
+        "FROM public._snaplicator_ddl_deferred "
+        "WHERE executed_at IS NULL AND error IS NULL ORDER BY id;",
+    )
+    executed: List[int] = []
+    errors: List[Dict] = []
+    for line in [ln for ln in raw.splitlines() if ln.strip()]:
+        row_id, sp, b64 = line.split("|", 2)
+        ddl = base64.b64decode(b64).decode("utf-8")
+        try:
+            # Separate -c per statement: CONCURRENTLY refuses transaction
+            # blocks; the session-level SET still reaches the DDL.
+            cmds = [f"SET search_path TO {sp};"] if sp.strip() else []
+            _run_subscriber_sql_cmds(
+                subscriber_container, subscriber_user, subscriber_password,
+                subscriber_db, cmds + [ddl],
+            )
+            _run_subscriber_sql(
+                subscriber_container, subscriber_user, subscriber_password,
+                subscriber_db,
+                "UPDATE public._snaplicator_ddl_deferred "
+                f"SET executed_at = now() WHERE id = {int(row_id)};",
+            )
+            executed.append(int(row_id))
+        except subprocess.CalledProcessError as e:
+            msg = ((e.stderr or e.stdout or "") or str(e)).strip()[:300]
+            _run_subscriber_sql(
+                subscriber_container, subscriber_user, subscriber_password,
+                subscriber_db,
+                "UPDATE public._snaplicator_ddl_deferred "
+                f"SET error = '{msg.replace(chr(39), chr(39) * 2)}' "
+                f"WHERE id = {int(row_id)};",
+            )
+            errors.append({"id": int(row_id), "error": msg})
+    return {"executed": executed, "errors": errors}
