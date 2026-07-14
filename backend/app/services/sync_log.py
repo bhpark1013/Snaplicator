@@ -67,6 +67,9 @@ def record(kind: str, detail: dict) -> None:
             tmp = p.with_suffix(p.suffix + ".tmp")
             tmp.write_text("\n".join(existing) + "\n", encoding="utf-8")
             os.replace(tmp, p)
+        # Outside the lock: network I/O must not serialize log writers.
+        from . import notify
+        notify.notify_event(kind, detail)
     except Exception:
         pass
 
