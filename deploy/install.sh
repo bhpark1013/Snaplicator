@@ -174,53 +174,115 @@ set -e
 # 0 = a home exists, 1 = no-fit (a bare disk may still save the day)
 [ "$PLAN_RC" -le 1 ] || { cat "$PLAN_JSON" >&2; die "host survey / payload measurement failed"; }
 
-# Empty disks are never formatted silently — approval happens here, at
-# decision time. A preset FORMAT_DISK=/dev/sdX (for automation) skips
-# the question; answering nothing/no falls back to the planner's choice.
-if [ -z "${FORMAT_DISK:-}" ]; then
-  DISKS=$(python3 -c '
-import json, sys
-p = json.load(open(sys.argv[1]))
-for c in p["candidates"]:
-    if c["priority"] == 3 and c["fits"]:
-        print(c["target"], c["size_bytes"] // 2**30)
-' "$PLAN_JSON")
-  if [ -n "$DISKS" ] && [ -r /dev/tty ]; then
-    while read -r dev gib; do
-      ans=""
-      read -r -p "[snaplicator] found empty disk $dev (${gib} GiB). Format it as the pool? ALL DATA ON IT WILL BE LOST. [y/N] " ans < /dev/tty || ans=""
-      case "$ans" in
-        y|Y|yes|YES) FORMAT_DISK=$dev; break ;;
-        *) info "leaving $dev untouched" ;;
-      esac
-    done <<< "$DISKS"
-  elif [ -n "$DISKS" ]; then
-    info "empty disk(s) available but no TTY to ask — pass FORMAT_DISK=/dev/... to use one"
+# Re-run: stick to the pool a previous install already chose, instead of
+# asking again (and possibly picking a different spot).
+if [ -z "${FORMAT_DISK:-}" ] && [ -z "${ROOT_DATA_DIR:-}" ] && [ -f "$SNAP_HOME/deploy/.env" ]; then
+  PREV_ROOT=$(sed -n 's/^ROOT_DATA_DIR=//p' "$SNAP_HOME/deploy/.env" | tail -1)
+  if [ -n "$PREV_ROOT" ] && [ -d "$PREV_ROOT" ]; then
+    ROOT_DATA_DIR=$PREV_ROOT
+    info "reusing the pool from the previous install: $ROOT_DATA_DIR (delete $SNAP_HOME/deploy/.env to choose anew)"
   fi
 fi
 
+# Selection UX: show every viable option with the recommendation marked
+# and let the user pick; with no viable option, show the remediation and
+# stop. Presets (FORMAT_DISK= / ROOT_DATA_DIR=) skip the menu, and a
+# TTY-less run takes the recommendation (never a destructive format).
 CHOSEN=$(python3 -c '
 import json, sys
 p = json.load(open(sys.argv[1]))
 print("" if p["chosen"] is None else p["chosen"]["target"])
 ' "$PLAN_JSON")
-if [ -z "${FORMAT_DISK:-}" ] && [ -z "$CHOSEN" ]; then
-  (cd "$SNAP_HOME/cli" && python3 -m snaplicator_init --plan "$PLAN_JSON") >&2 || true
-  die "no home for the pool — free up space, attach a disk, or answer y to the disk question"
+
+if [ -z "${FORMAT_DISK:-}" ] && [ -z "${ROOT_DATA_DIR:-}" ]; then
+  # machine lines on stdout ("N|datadir:/path" / "N|format:/dev/x"),
+  # the human menu on stderr (recommended first, planner ranking)
+  OPTIONS=$(python3 -c '
+import json, sys
+p = json.load(open(sys.argv[1]))
+GiB = 2 ** 30
+fit = [c for c in p["candidates"] if c["fits"]]
+chosen = p["chosen"]
+rec = 1
+if chosen:
+    for i, c in enumerate(fit, 1):
+        if c["target"] == chosen["target"] and c["kind"] == chosen["kind"]:
+            rec = i
+            break
+if fit:
+    print("[snaplicator] pool location options:", file=sys.stderr)
+for i, c in enumerate(fit, 1):
+    target = c["target"]
+    if c["priority"] == 3:
+        size = c["size_bytes"] // GiB
+        desc = "format " + target + " (empty disk, " + str(size) + " GiB) — DESTRUCTIVE: everything on it is erased"
+        arg = "format:" + target
+    else:
+        pool = target.rstrip("/") + "/snaplicator"
+        free = c["avail_bytes"] // GiB
+        if c["priority"] == 1:
+            how = "btrfs subvolume (nothing to format)"
+        else:
+            how = "loopback file on " + str(c["fstype"]) + " (slight I/O overhead)"
+        desc = pool + " (" + str(free) + " GiB free) — " + how
+        arg = "datadir:" + pool
+    mark = "   [recommended]" if i == rec else ""
+    print(str(i) + "|" + arg)
+    print("  " + str(i) + ". " + desc + mark, file=sys.stderr)
+if fit:
+    print("REC|" + str(rec))
+' "$PLAN_JSON")
+  if [ -z "$OPTIONS" ]; then
+    (cd "$SNAP_HOME/cli" && python3 -m snaplicator_init --plan "$PLAN_JSON") >&2 || true
+    die "no viable pool location — follow the remediation above, then re-run"
+  fi
+  REC=$(printf '%s\n' "$OPTIONS" | sed -n 's/^REC|//p')
+  REC_ARG=$(printf '%s\n' "$OPTIONS" | sed -n "s/^${REC}|//p")
+  if [ -r /dev/tty ]; then
+    choice=""
+    case "$REC_ARG" in
+      format:*)
+        # a destructive option is never the enter-key default
+        read -r -p "[snaplicator] where should the pool live? (type a number) " choice < /dev/tty || choice=""
+        [ -n "$choice" ] || die "an explicit choice is required when the option formats a disk" ;;
+      *)
+        read -r -p "[snaplicator] where should the pool live? [${REC}] " choice < /dev/tty || choice=""
+        [ -n "$choice" ] || choice=$REC ;;
+    esac
+    SELECTED=$(printf '%s\n' "$OPTIONS" | sed -n "s/^${choice}|//p")
+    [ -n "$SELECTED" ] || die "no option ${choice} — re-run and pick a listed number"
+  else
+    SELECTED=$(printf '%s\n' "$OPTIONS" | sed -n "s/^${REC}|//p")
+    case "$SELECTED" in
+      format:*) die "recommended option is a destructive format but there is no TTY to confirm — pass FORMAT_DISK=${SELECTED#format:}" ;;
+    esac
+    info "no TTY — taking the recommendation: ${SELECTED#datadir:}"
+  fi
+  case "$SELECTED" in
+    format:*)  FORMAT_DISK=${SELECTED#format:} ;;
+    datadir:*) ROOT_DATA_DIR=${SELECTED#datadir:} ;;
+  esac
 fi
 
 if [ -n "${FORMAT_DISK:-}" ]; then
   info "pool target: $FORMAT_DISK (format as btrfs)"
-elif [ -n "$CHOSEN" ]; then
-  info "pool target: $CHOSEN (planner's choice — see the plan below)"
+else
+  info "pool target: ${ROOT_DATA_DIR:-$CHOSEN}"
 fi
 info "provisioning the btrfs pool..."
-INIT_ARGS=(--plan "$PLAN_JSON" --apply --yes)
+# re-plan at apply time with the selection pinned — a frozen plan cannot
+# change its chosen candidate, a --data-dir/--format-disk pin can
+INIT_ARGS=(--apply --yes)
 if [ -n "${ROOT_DATA_DIR:-}" ]; then
   INIT_ARGS+=(--data-dir "$ROOT_DATA_DIR")
 fi
 if [ -n "${FORMAT_DISK:-}" ]; then
   INIT_ARGS+=(--format-disk "$FORMAT_DISK")
+fi
+if [ "$DEMO" = "1" ]; then
+  INIT_ARGS+=(--pool-bytes $((DEMO_POOL_GIB * 1024 * 1024 * 1024)))
+else
+  INIT_ARGS+=("$CONNSTR")
 fi
 POOL_OUT=$(cd "$SNAP_HOME/cli" && python3 -m snaplicator_init "${INIT_ARGS[@]}") \
   || { printf '%s\n' "$POOL_OUT" >&2; die "pool provisioning failed — see the plan above (attach a disk or pass ROOT_DATA_DIR=/path)"; }
