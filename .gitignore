@@ -8,3 +8,4 @@ frontend/node_modules/
 configs/anonymize.sql
 configs/replication_check.sql
 mcp-server/.venv/
+.omc/
