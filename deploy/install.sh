@@ -191,6 +191,7 @@ for c in p["candidates"]:
       read -r -p "[snaplicator] found empty disk $dev (${gib} GiB). Format it as the pool? ALL DATA ON IT WILL BE LOST. [y/N] " ans < /dev/tty || ans=""
       case "$ans" in
         y|Y|yes|YES) FORMAT_DISK=$dev; break ;;
+        *) info "leaving $dev untouched" ;;
       esac
     done <<< "$DISKS"
   elif [ -n "$DISKS" ]; then
@@ -208,6 +209,11 @@ if [ -z "${FORMAT_DISK:-}" ] && [ -z "$CHOSEN" ]; then
   die "no home for the pool — free up space, attach a disk, or answer y to the disk question"
 fi
 
+if [ -n "${FORMAT_DISK:-}" ]; then
+  info "pool target: $FORMAT_DISK (format as btrfs)"
+elif [ -n "$CHOSEN" ]; then
+  info "pool target: $CHOSEN (planner's choice — see the plan below)"
+fi
 info "provisioning the btrfs pool..."
 INIT_ARGS=(--plan "$PLAN_JSON" --apply --yes)
 if [ -n "${ROOT_DATA_DIR:-}" ]; then
