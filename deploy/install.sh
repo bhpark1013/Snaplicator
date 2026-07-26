@@ -229,7 +229,10 @@ else
 fi
 
 # ── done ─────────────────────────────────────────────────────────────
-IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+# the machine's outbound source address (hostname -I can lead with a
+# docker bridge IP, which is useless to the user)
+IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") print $(i+1)}' | head -1)
+[ -n "$IP" ] || IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 info "done!"
 echo
 echo "  UI:        http://${IP:-<host>}:$WEB_PORT"
