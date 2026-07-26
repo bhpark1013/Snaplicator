@@ -15,9 +15,6 @@ from .services import fdw as fdw_svc
 from .services import sync_log
 from .services.replication import (
     auto_sync_new_tables,
-    sync_column_changes,
-    sync_check_constraints,
-    sync_table_schema_moves,
     install_capture_triggers,
     verify_capture_installed,
     enable_ddl_apply,
@@ -97,33 +94,11 @@ async def ddl_sync_loop():
                 except Exception as e:
                     logger.warning(f"Capture trigger verification failed: {e}")
 
-                # Sync table schema moves (ALTER TABLE ... SET SCHEMA) FIRST,
-                # before the subscription reconciler sees the moved table as a
-                # new publication member and refreshes while the old copy
-                # lingers as an orphan.
-                try:
-                    move_result = await asyncio.to_thread(
-                        sync_table_schema_moves,
-                        connstr, pub_name, container, user, password, db, sub_name,
-                    )
-                    sync_log.record_if("schema_move", move_result)
-                    if move_result and move_result.get("moved"):
-                        logger.info(
-                            f"Schema move sync: moved={move_result['moved']}, "
-                            f"refreshed={move_result.get('refreshed')}"
-                        )
-                    if move_result and move_result.get("orphans"):
-                        logger.warning(
-                            f"Schema move orphans (subscriber-only schemas, "
-                            f"manual cleanup required): {move_result['orphans']}"
-                        )
-                    if move_result and move_result.get("skipped"):
-                        logger.warning(f"Schema move skipped: {move_result['skipped']}")
-                    if move_result and move_result.get("errors"):
-                        logger.warning(f"Schema move errors: {move_result['errors']}")
-                except Exception as e:
-                    logger.warning(f"Schema move sync failed: {e}")
-
+                # Schema changes (moves, new columns, constraints) replicate
+                # in-stream via DDL capture+apply; the legacy diff-reconcilers
+                # that re-derived them are gone. The loop keeps exactly the
+                # jobs the stream cannot do: connect DML flow for new
+                # publication members (below) and watch subscription health.
                 result = await asyncio.to_thread(
                     auto_sync_new_tables,
                     connstr, pub_name, container, user, password, db, sub_name,
@@ -138,34 +113,6 @@ async def ddl_sync_loop():
                     )
                 if result and result.get("errors"):
                     logger.warning(f"DDL auto-sync errors: {result['errors']}")
-
-                # Sync column changes (ADD COLUMN) for existing tables
-                try:
-                    col_result = await asyncio.to_thread(
-                        sync_column_changes,
-                        connstr, pub_name, container, user, password, db,
-                    )
-                    sync_log.record_if("column_added", col_result)
-                    if col_result and col_result.get("columns_added"):
-                        logger.info(f"Column sync: added {col_result['columns_added']}")
-                    if col_result and col_result.get("errors"):
-                        logger.warning(f"Column sync errors: {col_result['errors']}")
-                except Exception as e:
-                    logger.warning(f"Column sync failed: {e}")
-
-                # Sync CHECK constraint changes for existing tables
-                try:
-                    chk_result = await asyncio.to_thread(
-                        sync_check_constraints,
-                        connstr, pub_name, container, user, password, db,
-                    )
-                    sync_log.record_if("check_constraint", chk_result)
-                    if chk_result and chk_result.get("constraints_synced"):
-                        logger.info(f"Constraint sync: {chk_result['constraints_synced']}")
-                    if chk_result and chk_result.get("errors"):
-                        logger.warning(f"Constraint sync errors: {chk_result['errors']}")
-                except Exception as e:
-                    logger.warning(f"Constraint sync failed: {e}")
 
                 # ── Subscription health watch: disabled / dead worker /
                 # apply·sync error counters. Events with error keys reach
