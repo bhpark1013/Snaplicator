@@ -155,21 +155,66 @@ EOF
   [ -n "$PRIMARY_HOST" ] || die "could not parse host from: $CONNSTR"
 fi
 
-# ── 4. btrfs pool (snaplicator-init: measure → plan → apply) ─────────
+# ── 4. btrfs pool (snaplicator-init: measure → plan → ask → apply) ───
+info "surveying this host for a pool location..."
+PLAN_JSON=$(mktemp /tmp/snaplicator-plan.XXXXXX)
+PLAN_ARGS=(--json)
+if [ -n "${ROOT_DATA_DIR:-}" ]; then
+  PLAN_ARGS+=(--data-dir "$ROOT_DATA_DIR")
+fi
+if [ "$DEMO" = "1" ]; then
+  PLAN_ARGS+=(--pool-bytes $((DEMO_POOL_GIB * 1024 * 1024 * 1024)))
+else
+  PLAN_ARGS+=("$CONNSTR")
+fi
+set +e
+(cd "$SNAP_HOME/cli" && python3 -m snaplicator_init "${PLAN_ARGS[@]}") > "$PLAN_JSON"
+PLAN_RC=$?
+set -e
+# 0 = a home exists, 1 = no-fit (a bare disk may still save the day)
+[ "$PLAN_RC" -le 1 ] || { cat "$PLAN_JSON" >&2; die "host survey / payload measurement failed"; }
+
+# Empty disks are never formatted silently — approval happens here, at
+# decision time. A preset FORMAT_DISK=/dev/sdX (for automation) skips
+# the question; answering nothing/no falls back to the planner's choice.
+if [ -z "${FORMAT_DISK:-}" ]; then
+  DISKS=$(python3 -c '
+import json, sys
+p = json.load(open(sys.argv[1]))
+for c in p["candidates"]:
+    if c["priority"] == 3 and c["fits"]:
+        print(c["target"], c["size_bytes"] // 2**30)
+' "$PLAN_JSON")
+  if [ -n "$DISKS" ] && [ -r /dev/tty ]; then
+    while read -r dev gib; do
+      ans=""
+      read -r -p "[snaplicator] found empty disk $dev (${gib} GiB). Format it as the pool? ALL DATA ON IT WILL BE LOST. [y/N] " ans < /dev/tty || ans=""
+      case "$ans" in
+        y|Y|yes|YES) FORMAT_DISK=$dev; break ;;
+      esac
+    done <<< "$DISKS"
+  elif [ -n "$DISKS" ]; then
+    info "empty disk(s) available but no TTY to ask — pass FORMAT_DISK=/dev/... to use one"
+  fi
+fi
+
+CHOSEN=$(python3 -c '
+import json, sys
+p = json.load(open(sys.argv[1]))
+print("" if p["chosen"] is None else p["chosen"]["target"])
+' "$PLAN_JSON")
+if [ -z "${FORMAT_DISK:-}" ] && [ -z "$CHOSEN" ]; then
+  (cd "$SNAP_HOME/cli" && python3 -m snaplicator_init --plan "$PLAN_JSON") >&2 || true
+  die "no home for the pool — free up space, attach a disk, or answer y to the disk question"
+fi
+
 info "provisioning the btrfs pool..."
-INIT_ARGS=(--apply --yes)
+INIT_ARGS=(--plan "$PLAN_JSON" --apply --yes)
 if [ -n "${ROOT_DATA_DIR:-}" ]; then
   INIT_ARGS+=(--data-dir "$ROOT_DATA_DIR")
 fi
-# FORMAT_DISK=/dev/sdX formats that bare disk as the pool (destructive —
-# snaplicator-init re-verifies the disk carries no data before touching it)
 if [ -n "${FORMAT_DISK:-}" ]; then
   INIT_ARGS+=(--format-disk "$FORMAT_DISK")
-fi
-if [ "$DEMO" = "1" ]; then
-  INIT_ARGS+=(--pool-bytes $((DEMO_POOL_GIB * 1024 * 1024 * 1024)))
-else
-  INIT_ARGS+=("$CONNSTR")
 fi
 POOL_OUT=$(cd "$SNAP_HOME/cli" && python3 -m snaplicator_init "${INIT_ARGS[@]}") \
   || { printf '%s\n' "$POOL_OUT" >&2; die "pool provisioning failed — see the plan above (attach a disk or pass ROOT_DATA_DIR=/path)"; }
