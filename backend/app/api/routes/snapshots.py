@@ -45,12 +45,15 @@ def get_snapshots():
 
 @router.get("/usage")
 def get_snapshots_usage():
-	"""Per-snapshot disk usage from the daily cache — never measures inline.
-	Entries without cached bytes come back with refreshing=true; the UI polls
-	until the background measurements land (~10s per subvolume)."""
+	"""Per-snapshot disk usage from the cache — never measures inline. A page
+	view re-measures entries older than VIEW_TTL (cooldown against the UI's
+	5s polling); entries without cached bytes come back with refreshing=true
+	and the UI polls until the measurements land (~10s per subvolume)."""
 	try:
 		snaps = list_snapshots(settings.root_data_dir, settings.main_data_dir)
-		by_path = usage_svc.get_usage([s["path"] for s in snaps])
+		by_path = usage_svc.get_usage(
+			[s["path"] for s in snaps], max_age=usage_svc.VIEW_TTL,
+		)
 		items = {s["name"]: by_path.get(s["path"], {}) for s in snaps}
 		return {
 			"items": items,

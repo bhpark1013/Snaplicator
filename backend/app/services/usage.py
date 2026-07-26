@@ -27,7 +27,13 @@ logger = logging.getLogger(__name__)
 
 _LOCK = threading.Lock()  # guards cache-file read/modify/write and _inflight
 _inflight: set = set()  # subvolume paths queued or being measured right now
-_TTL = timedelta(hours=24)
+_TTL = timedelta(hours=24)  # warm-sweep freshness floor (no page visits needed)
+
+# Page views re-measure too, but at most this often. The cooldown matters
+# because the UI polls /usage every 5s while refreshing=true — without it,
+# each poll would re-queue the just-measured entries and a kept-open page
+# would measure forever.
+VIEW_TTL = timedelta(minutes=10)
 
 
 def _path() -> Path:
@@ -79,11 +85,11 @@ def measure_subvolume(path: str) -> Optional[dict]:
     return None
 
 
-def _is_stale(entry: Optional[dict]) -> bool:
+def _is_stale(entry: Optional[dict], max_age: timedelta) -> bool:
     if not entry or not entry.get("measured_at"):
         return True
     try:
-        return datetime.now() - datetime.fromisoformat(entry["measured_at"]) > _TTL
+        return datetime.now() - datetime.fromisoformat(entry["measured_at"]) > max_age
     except Exception:
         return True
 
@@ -99,18 +105,21 @@ def _refresh_worker(paths: List[str]) -> None:
                 _store(cache)
 
 
-def get_usage(paths: List[str], refresh: bool = True) -> Dict[str, dict]:
+def get_usage(paths: List[str], refresh: bool = True,
+              max_age: Optional[timedelta] = None) -> Dict[str, dict]:
     """Cached usage keyed by subvolume path. Never blocks on a measurement:
-    stale/missing entries return with refreshing=True and are queued for the
-    background worker (dedup'd via _inflight, so concurrent calls and the
-    hourly sweep can't double-measure)."""
+    entries older than max_age (default: the 24h sweep TTL; API routes pass
+    VIEW_TTL so a page visit re-measures) return with refreshing=True and are
+    queued for the background worker (dedup'd via _inflight, so concurrent
+    calls and the hourly sweep can't double-measure)."""
+    ttl = max_age if max_age is not None else _TTL
     to_measure: List[str] = []
     out: Dict[str, dict] = {}
     with _LOCK:
         cache = _load()
         for path in paths:
             entry = cache.get(path)
-            stale = _is_stale(entry)
+            stale = _is_stale(entry, ttl)
             if stale and refresh and path not in _inflight:
                 _inflight.add(path)
                 to_measure.append(path)
