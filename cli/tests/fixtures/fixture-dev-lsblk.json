@@ -1,0 +1,60 @@
+{
+   "blockdevices": [
+      {
+         "name": "sda",
+         "type": "disk",
+         "fstype": "LVM2_member",
+         "size": 214748364800,
+         "mountpoint": null,
+         "ro": false,
+         "children": [
+            {
+               "name": "snaplicator--vg-snapdata",
+               "type": "lvm",
+               "fstype": "btrfs",
+               "size": 214744170496,
+               "mountpoint": "/data/snaplicator",
+               "ro": false
+            }
+         ]
+      },{
+         "name": "sdb",
+         "type": "disk",
+         "fstype": null,
+         "size": 32213303296,
+         "mountpoint": null,
+         "ro": false,
+         "children": [
+            {
+               "name": "sdb1",
+               "type": "part",
+               "fstype": "ext4",
+               "size": 31138496000,
+               "mountpoint": "/",
+               "ro": false
+            },{
+               "name": "sdb14",
+               "type": "part",
+               "fstype": null,
+               "size": 4194304,
+               "mountpoint": null,
+               "ro": false
+            },{
+               "name": "sdb15",
+               "type": "part",
+               "fstype": "vfat",
+               "size": 111149056,
+               "mountpoint": "/boot/efi",
+               "ro": false
+            },{
+               "name": "sdb16",
+               "type": "part",
+               "fstype": "ext4",
+               "size": 957350400,
+               "mountpoint": "/boot",
+               "ro": false
+            }
+         ]
+      }
+   ]
+}

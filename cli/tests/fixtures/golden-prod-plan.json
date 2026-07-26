@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "payload_bytes": 83751862272,
+  "required_bytes": 167503724544,
+  "candidates": [
+    {
+      "priority": 1,
+      "kind": "btrfs-mount",
+      "target": "/data/snaplicator",
+      "source": "/dev/mapper/snaplicator--vg-snapdata",
+      "fstype": "btrfs",
+      "size_bytes": 1099511627776,
+      "avail_bytes": 820465233920,
+      "action": "subvolume",
+      "fits": true
+    },
+    {
+      "priority": 2,
+      "kind": "fs-loopback",
+      "target": "/",
+      "source": "/dev/sda1",
+      "fstype": "ext4",
+      "size_bytes": 30084825088,
+      "avail_bytes": 5223448576,
+      "action": "loopback-file",
+      "fits": false
+    }
+  ],
+  "chosen": {
+    "priority": 1,
+    "kind": "btrfs-mount",
+    "target": "/data/snaplicator",
+    "source": "/dev/mapper/snaplicator--vg-snapdata",
+    "fstype": "btrfs",
+    "size_bytes": 1099511627776,
+    "avail_bytes": 820465233920,
+    "action": "subvolume",
+    "fits": true
+  },
+  "auto_selected": true,
+  "needs_confirmation": false,
+  "remediation": [],
+  "status": "ok"
+}

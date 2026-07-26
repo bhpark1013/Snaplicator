@@ -1,0 +1,126 @@
+{
+   "blockdevices": [
+      {
+         "name": "loop1",
+         "type": "loop",
+         "fstype": "squashfs",
+         "size": 52535296,
+         "mountpoint": "/snap/snapd/27591",
+         "ro": true
+      },{
+         "name": "loop2",
+         "type": "loop",
+         "fstype": "squashfs",
+         "size": 12423168,
+         "mountpoint": "/snap/golangci-lint/611",
+         "ro": true
+      },{
+         "name": "loop3",
+         "type": "loop",
+         "fstype": "squashfs",
+         "size": 52531200,
+         "mountpoint": "/snap/snapd/27406",
+         "ro": true
+      },{
+         "name": "loop4",
+         "type": "loop",
+         "fstype": "squashfs",
+         "size": 12419072,
+         "mountpoint": "/snap/golangci-lint/604",
+         "ro": true
+      },{
+         "name": "loop5",
+         "type": "loop",
+         "fstype": "squashfs",
+         "size": 77574144,
+         "mountpoint": "/snap/core22/2411",
+         "ro": true
+      },{
+         "name": "loop6",
+         "type": "loop",
+         "fstype": "squashfs",
+         "size": 77545472,
+         "mountpoint": "/snap/core22/2339",
+         "ro": true
+      },{
+         "name": "sda",
+         "type": "disk",
+         "fstype": null,
+         "size": 32213303296,
+         "mountpoint": null,
+         "ro": false,
+         "children": [
+            {
+               "name": "sda1",
+               "type": "part",
+               "fstype": "ext4",
+               "size": 31138496000,
+               "mountpoint": "/",
+               "ro": false
+            },{
+               "name": "sda14",
+               "type": "part",
+               "fstype": null,
+               "size": 4194304,
+               "mountpoint": null,
+               "ro": false
+            },{
+               "name": "sda15",
+               "type": "part",
+               "fstype": "vfat",
+               "size": 111149056,
+               "mountpoint": null,
+               "ro": false
+            },{
+               "name": "sda16",
+               "type": "part",
+               "fstype": null,
+               "size": 957350400,
+               "mountpoint": null,
+               "ro": false
+            }
+         ]
+      },{
+         "name": "sdb",
+         "type": "disk",
+         "fstype": null,
+         "size": 34359738368,
+         "mountpoint": null,
+         "ro": false,
+         "children": [
+            {
+               "name": "sdb1",
+               "type": "part",
+               "fstype": "zfs_member",
+               "size": 10726932480,
+               "mountpoint": null,
+               "ro": false
+            },{
+               "name": "sdb9",
+               "type": "part",
+               "fstype": null,
+               "size": 8388608,
+               "mountpoint": null,
+               "ro": false
+            }
+         ]
+      },{
+         "name": "sdc",
+         "type": "disk",
+         "fstype": "LVM2_member",
+         "size": 1103806595072,
+         "mountpoint": null,
+         "ro": false,
+         "children": [
+            {
+               "name": "snaplicator--vg-snapdata",
+               "type": "lvm",
+               "fstype": null,
+               "size": 1099511627776,
+               "mountpoint": "/data/snaplicator",
+               "ro": false
+            }
+         ]
+      }
+   ]
+}
