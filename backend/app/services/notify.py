@@ -115,8 +115,10 @@ def notify_event(kind: str, detail: dict) -> None:
         if not err_bits:
             return
         summary = json.dumps(err_bits, ensure_ascii=False, default=str)
-        if len(summary) > 500:
-            summary = summary[:500] + "…"
+        # Roomy enough for a few recent_errors/error_samples lines — a page
+        # whose diagnostic clue is truncated defeats the point of carrying it.
+        if len(summary) > 1500:
+            summary = summary[:1500] + "…"
         send(f":rotating_light: snaplicator `{kind}`\n```{summary}```", kind=kind)
     except Exception:
         pass

@@ -21,6 +21,8 @@ from .services.replication import (
     get_ddl_apply_status,
     run_deferred_ddl,
     check_subscription_health,
+    get_recent_ddl_failures,
+    get_recent_replication_errors,
 )
 
 logger = logging.getLogger("snaplicator.ddl_sync")
@@ -131,13 +133,16 @@ async def ddl_sync_loop():
                         if prev.get("enabled", True):
                             issues["error"] = (
                                 f"subscription '{sub_name}' is DISABLED "
-                                "(disable_on_error or manual) — replication stopped"
+                                "(disable_on_error or manual) — replication stopped. "
+                                f"Fix: resolve the cause, then ALTER SUBSCRIPTION {sub_name} ENABLE; "
+                                "(WAL piles up on the publisher until then)"
                             )
                     elif not h["worker_running"]:
                         if prev.get("worker_running", True):
                             issues["worker_error"] = (
                                 f"subscription '{sub_name}' apply worker not running "
-                                "(dead or crash-looping)"
+                                "(dead or crash-looping) — check recent_errors below "
+                                "and the publisher connection"
                             )
                     for key, label in (("apply_errors", "apply_error"), ("sync_errors", "sync_error")):
                         if prev.get(key) is not None and h[key] > prev[key]:
@@ -146,6 +151,13 @@ async def ddl_sync_loop():
                                 f"on '{sub_name}' (total {h[key]})"
                             )
                     if issues:
+                        # Attach the WHY: PG stats views carry only counts;
+                        # the failing statement/relation is in the postgres log.
+                        recent = await asyncio.to_thread(
+                            get_recent_replication_errors, container, 15, 3,
+                        )
+                        if recent:
+                            issues["recent_errors"] = recent
                         logger.warning(f"Subscription health: {issues}")
                         # dedupe=False: transition gating above already
                         # ensures once-per-outage; content dedupe would
@@ -170,11 +182,17 @@ async def ddl_sync_loop():
                         )
                         prev = _ddl_apply_seen["failures"]
                         if prev is not None and st["failures"] > prev:
+                            samples = await asyncio.to_thread(
+                                get_recent_ddl_failures, container, user, password, db,
+                                min(st["failures"] - prev, 3),
+                            )
                             sync_log.record("ddl_apply_failure", {
                                 "error": (
                                     f"{st['failures'] - prev} new DDL apply failure(s) "
                                     f"(total {st['failures']}) — see _snaplicator_ddl_failures"
                                 ),
+                                # key must contain "error" to reach Slack via notify_event
+                                "error_samples": samples,
                             })
                         _ddl_apply_seen["failures"] = st["failures"]
 

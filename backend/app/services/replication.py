@@ -1111,6 +1111,47 @@ def check_subscription_health(
     }
 
 
+def get_recent_ddl_failures(
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+    limit: int = 3,
+) -> List[str]:
+    """Newest rows from _snaplicator_ddl_failures, compacted to one line
+    each — attached to alerts so the page itself carries the failing DDL
+    and the error, not just a count."""
+    out = _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password,
+        subscriber_db,
+        "SELECT 'log_id=' || log_id || ' [' || left(error, 160) || '] ddl: ' || left(ddl_text, 140) "
+        "FROM public._snaplicator_ddl_failures "
+        f"ORDER BY id DESC LIMIT {int(limit)};",
+    )
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def get_recent_replication_errors(
+    container_name: str, minutes: int = 15, limit: int = 3
+) -> List[str]:
+    """Recent ERROR lines from the subscriber container's postgres log —
+    the only place PG records WHY apply/tablesync failed (the stats views
+    carry counts only). Best-effort; empty list on any problem."""
+    try:
+        proc = subprocess.run(
+            ["docker", "logs", "--since", f"{int(minutes)}m", container_name],
+            capture_output=True, text=True, timeout=20,
+        )
+        lines = [
+            ln.strip()[:220]
+            for ln in (proc.stdout + proc.stderr).splitlines()
+            if " ERROR:" in ln
+        ]
+        return lines[-limit:]
+    except Exception:
+        return []
+
+
 def get_ddl_apply_status(
     subscriber_container: str,
     subscriber_user: str,
