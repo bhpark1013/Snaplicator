@@ -201,6 +201,12 @@ if [ -z "${FORMAT_DISK:-}" ] && [ -z "${ROOT_DATA_DIR:-}" ]; then
 import json, sys
 p = json.load(open(sys.argv[1]))
 GiB = 2 ** 30
+
+def human(n):
+    if n >= GiB:
+        return f"{n / GiB:.1f} GiB"
+    return f"{n // 2**20} MiB"
+
 fit = [c for c in p["candidates"] if c["fits"]]
 chosen = p["chosen"]
 rec = 1
@@ -209,8 +215,14 @@ if chosen:
         if c["target"] == chosen["target"] and c["kind"] == chosen["kind"]:
             rec = i
             break
+req = p["required_bytes"]
+pay = p["payload_bytes"]
+hdr = "[snaplicator] pool size needed: " + human(req)
+if pay:
+    hdr += "  (payload " + human(pay) + " × 2, floor 10 GiB)"
+print(hdr, file=sys.stderr)
 if fit:
-    print("[snaplicator] pool location options:", file=sys.stderr)
+    print("[snaplicator] locations with that much room:", file=sys.stderr)
 for i, c in enumerate(fit, 1):
     target = c["target"]
     if c["priority"] == 3:
@@ -229,6 +241,10 @@ for i, c in enumerate(fit, 1):
     mark = "   [recommended]" if i == rec else ""
     print(str(i) + "|" + arg)
     print("  " + str(i) + ". " + desc + mark, file=sys.stderr)
+for c in p["candidates"]:
+    if not c["fits"]:
+        print("  ✗  " + c["target"] + " — only " + human(c["avail_bytes"])
+              + " free (< " + human(req) + " needed)", file=sys.stderr)
 if fit:
     print("REC|" + str(rec))
 ' "$PLAN_JSON")
