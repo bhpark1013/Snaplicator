@@ -86,9 +86,9 @@ async def ddl_sync_loop():
                     logger.warning(f"Capture trigger verification failed: {e}")
 
                 # Sync table schema moves (ALTER TABLE ... SET SCHEMA) FIRST,
-                # before auto_sync_new_tables so a moved table is relocated on
-                # the subscriber instead of being re-created in its new schema
-                # while the old copy lingers as an orphan.
+                # before the subscription reconciler sees the moved table as a
+                # new publication member and refreshes while the old copy
+                # lingers as an orphan.
                 try:
                     move_result = await asyncio.to_thread(
                         sync_table_schema_moves,
@@ -118,7 +118,12 @@ async def ddl_sync_loop():
                 )
                 sync_log.record_if("table_added", result)
                 if result and result.get("synced"):
-                    logger.info(f"DDL auto-sync: synced {result['synced']}, refreshed={result.get('refreshed')}")
+                    logger.info(f"Subscription refresh: connected {result['synced']}")
+                if result and result.get("waiting"):
+                    logger.info(
+                        "Subscription refresh: waiting for in-stream CREATE of "
+                        f"{result['waiting']} (connects next cycle once applied)"
+                    )
                 if result and result.get("errors"):
                     logger.warning(f"DDL auto-sync errors: {result['errors']}")
 

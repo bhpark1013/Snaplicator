@@ -517,70 +517,69 @@ def auto_sync_new_tables(
     subscriber_db: str,
     subscription_name: str,
 ) -> Dict | None:
-    """Detect tables in publication but not on subscriber, sync schema and refresh.
+    """Connect DML flow for tables that joined the publication — pure
+    subscription reconciler.
 
-    Returns None if nothing to sync, otherwise dict with sync details.
+    Compares publication membership (publisher's pg_publication_tables)
+    against what the subscription actually replicates (subscriber's
+    pg_subscription_rel) and runs one REFRESH PUBLICATION when a published
+    table is not yet connected. Table existence on the subscriber is checked
+    only as a REFRESH precondition: REFRESH hard-fails on a published
+    relation that is missing locally.
+
+    Schema creation is fully delegated to in-stream DDL apply. A table whose
+    CREATE has not been applied yet is reported in "waiting" and connects on
+    a later cycle, once the stream materializes it. If the in-stream CREATE
+    failed, that failure is already recorded in _snaplicator_ddl_failures
+    for human resolution — deliberately not repaired here (same philosophy
+    as the apply trigger: record loudly, never self-heal schema).
+
+    Returns None when subscription membership already matches.
     """
-    # Tables in publication
     pub_sql = f"SELECT schemaname || '.' || tablename FROM pg_publication_tables WHERE pubname = '{publication_name}';"
     pub_out = _run_publisher_sql(publisher_connstr, pub_sql)
     pub_tables = {line.strip() for line in pub_out.splitlines() if line.strip()}
 
-    # Tables on subscriber
-    sub_sql = (
+    # Relations the subscription already replicates. Any srsubstate counts:
+    # a rel mid-COPY is connected and must not trigger another refresh.
+    sub_rel_sql = (
+        "SELECT n.nspname || '.' || c.relname "
+        "FROM pg_subscription_rel sr "
+        "JOIN pg_class c ON c.oid = sr.srrelid "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "JOIN pg_subscription s ON s.oid = sr.srsubid "
+        f"WHERE s.subname = '{subscription_name}';"
+    )
+    try:
+        rel_out = _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sub_rel_sql)
+    except Exception:
+        # Cannot see subscription state — reconciling blind could refresh in
+        # a bad moment; try again next cycle.
+        return None
+    sub_rels = {line.strip() for line in rel_out.splitlines() if line.strip()}
+
+    missing = sorted(pub_tables - sub_rels)
+    if not missing:
+        return None
+
+    # REFRESH precondition: the relation must exist on the subscriber.
+    exists_sql = (
         "SELECT table_schema || '.' || table_name "
         "FROM information_schema.tables "
         "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') AND table_type = 'BASE TABLE';"
     )
     try:
-        sub_out = _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sub_sql)
+        sub_out = _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, exists_sql)
     except Exception:
         sub_out = ""
     sub_tables = {line.strip() for line in sub_out.splitlines() if line.strip()}
 
-    # Find tables in publication but missing from subscriber
-    missing = [t for t in pub_tables if t not in sub_tables]
-    if not missing:
-        return None
+    refreshable = [t for t in missing if t in sub_tables]
+    waiting = [t for t in missing if t not in sub_tables]
 
-    # Sync schemas
-    import tempfile, os
-    synced = []
-    errors = []
-    for table in missing:
-        try:
-            dump_proc = subprocess.run(
-                ["pg_dump", publisher_connstr, "--schema-only", "-t", table],
-                text=True, capture_output=True, check=True,
-            )
-            ddl = dump_proc.stdout
-            if not ddl.strip():
-                errors.append({"table": table, "error": "Empty schema dump"})
-                continue
-
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.sql', delete=False) as tmp:
-                tmp.write(ddl)
-                tmp_path = tmp.name
-
-            try:
-                subprocess.run(
-                    ["docker", "cp", tmp_path, f"{subscriber_container}:/tmp/_auto_sync.sql"],
-                    text=True, capture_output=True, check=True,
-                )
-                exec_cmd = ["docker", "exec"]
-                if subscriber_password:
-                    exec_cmd += ["-e", f"PGPASSWORD={subscriber_password}"]
-                exec_cmd += [subscriber_container, "psql", "-U", subscriber_user, "-d", subscriber_db, "-f", "/tmp/_auto_sync.sql"]
-                subprocess.run(exec_cmd, text=True, capture_output=True, check=True)
-                synced.append(table)
-            finally:
-                os.unlink(tmp_path)
-        except subprocess.CalledProcessError as e:
-            errors.append({"table": table, "error": (e.stderr or e.stdout or str(e)).strip()})
-
-    # Refresh subscription if any tables were synced
     refresh_ok = False
-    if synced:
+    errors = []
+    if refreshable:
         try:
             sql = f"ALTER SUBSCRIPTION {subscription_name} REFRESH PUBLICATION;"
             _run_subscriber_sql(subscriber_container, subscriber_user, subscriber_password, subscriber_db, sql)
@@ -588,7 +587,7 @@ def auto_sync_new_tables(
         except Exception as e:
             errors.append({"table": "_refresh", "error": str(e)})
 
-    return {"synced": synced, "errors": errors, "refreshed": refresh_ok}
+    return {"synced": refreshable, "waiting": waiting, "errors": errors, "refreshed": refresh_ok}
 
 
 
