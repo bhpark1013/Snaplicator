@@ -18,6 +18,7 @@ import {
     computeMoveUpdates,
     type Slot,
     type SnapshotItem,
+    type UsageEntry,
 } from '@/components/LineageGraph'
 
 export function Snapshots() {
@@ -63,10 +64,33 @@ export function Snapshots() {
             .finally(() => setLoading(false))
     }
 
+    // Per-snapshot disk usage, loaded async so the page never waits on it.
+    // The backend serves a daily cache; while it back-fills missing entries
+    // (refreshing=true) we poll until every measurement has landed.
+    const [usage, setUsage] = useState<Record<string, UsageEntry>>({})
+    const [usageRefreshing, setUsageRefreshing] = useState(false)
+    const loadUsage = () => {
+        fetch(`${base}/snapshots/usage`)
+            .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+            .then((data) => {
+                setUsage(data.items || {})
+                setUsageRefreshing(!!data.refreshing)
+            })
+            .catch(() => { /* usage is decoration — never surface as a page error */ })
+    }
+
     useEffect(() => {
         loadSnapshots()
+        loadUsage()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
+
+    useEffect(() => {
+        if (!usageRefreshing) return
+        const t = setInterval(loadUsage, 5000)
+        return () => clearInterval(t)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [usageRefreshing])
 
     // ---- search (by description) ----
     const matches = useMemo(() => {
@@ -258,6 +282,7 @@ export function Snapshots() {
                     items={items}
                     mode="list"
                     highlightName={highlight}
+                    usage={usage}
                     moveTarget={nodeFor?.name ?? null}
                     draggable={false}
                     onNodeClick={openNode}

@@ -14,10 +14,10 @@ import {
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
-import { copyText } from '@/lib/utils'
+import { copyText, formatBytes } from '@/lib/utils'
 import { McpConnect } from '@/components/McpConnect'
 import { RetentionSelect } from '@/components/RetentionSelect'
-import { LineageGraph, computeInsertParams, computeMoveUpdates, type Slot, type SnapshotItem } from '@/components/LineageGraph'
+import { LineageGraph, computeInsertParams, computeMoveUpdates, type Slot, type SnapshotItem, type UsageEntry } from '@/components/LineageGraph'
 
 interface CloneDetailResponse {
     name: string
@@ -49,6 +49,14 @@ interface CloneSnapshotItem {
     readonly: boolean
     description?: string | null
     metadata?: Record<string, unknown> | null
+}
+
+interface CloneUsageResponse {
+    usage_bytes?: number | null // btrfs exclusive bytes (freed if deleted)
+    total_bytes?: number | null
+    measured_at?: string | null
+    stale?: boolean
+    refreshing?: boolean
 }
 
 export function CloneDetail() {
@@ -129,11 +137,47 @@ export function CloneDetail() {
         }
     }, [base])
 
+    // Disk usage (async, from the backend's daily cache — the page never waits
+    // on a live btrfs measurement). While the cache back-fills (refreshing) we
+    // poll every 5s until both the clone's and the snapshots' numbers land.
+    const [cloneUsage, setCloneUsage] = useState<CloneUsageResponse | null>(null)
+    const [snapUsage, setSnapUsage] = useState<Record<string, UsageEntry>>({})
+    const [usageRefreshing, setUsageRefreshing] = useState(false)
+
+    const fetchUsage = useCallback(async () => {
+        if (!cloneId) return
+        let anyRefreshing = false
+        try {
+            const r = await fetch(`${base}/clones/${encodeURIComponent(cloneId)}/usage`)
+            if (r.ok) {
+                const data: CloneUsageResponse = await r.json()
+                setCloneUsage(data)
+                anyRefreshing = anyRefreshing || !!data.refreshing
+            }
+        } catch { /* usage is decoration — never surface as a page error */ }
+        try {
+            const r = await fetch(`${base}/snapshots/usage`)
+            if (r.ok) {
+                const data = await r.json()
+                setSnapUsage(data.items || {})
+                anyRefreshing = anyRefreshing || !!data.refreshing
+            }
+        } catch { /* ditto */ }
+        setUsageRefreshing(anyRefreshing)
+    }, [base, cloneId])
+
+    useEffect(() => {
+        if (!usageRefreshing) return
+        const t = setInterval(fetchUsage, 5000)
+        return () => clearInterval(t)
+    }, [usageRefreshing, fetchUsage])
+
     useEffect(() => {
         fetchDetail()
         fetchCloneSnapshots()
         fetchAllSnapshots()
-    }, [fetchDetail, fetchCloneSnapshots, fetchAllSnapshots])
+        fetchUsage()
+    }, [fetchDetail, fetchCloneSnapshots, fetchAllSnapshots, fetchUsage])
 
     useEffect(() => {
         setShowPassword(false)
@@ -491,6 +535,28 @@ export function CloneDetail() {
                                 <div className="mb-1 text-xs font-medium text-muted-foreground">Updated</div>
                                 <div className="text-[13px] text-zinc-200">{updatedAt ? new Date(updatedAt).toLocaleString() : 'Never'}</div>
                             </div>
+                            <div>
+                                <div className="mb-1 text-xs font-medium text-muted-foreground" title="btrfs exclusive bytes: space only this clone references — freed if it were deleted">
+                                    Disk (exclusive)
+                                </div>
+                                <div className="text-[13px] text-zinc-200">
+                                    {cloneUsage?.usage_bytes != null ? (
+                                        <>
+                                            {formatBytes(cloneUsage.usage_bytes)}
+                                            {cloneUsage.total_bytes != null && (
+                                                <span className="text-muted-foreground"> · total {formatBytes(cloneUsage.total_bytes)}</span>
+                                            )}
+                                            {cloneUsage.measured_at && (
+                                                <span className="text-muted-foreground"> · measured {new Date(cloneUsage.measured_at).toLocaleString()}</span>
+                                            )}
+                                        </>
+                                    ) : cloneUsage?.refreshing ? (
+                                        <span className="text-muted-foreground">measuring…</span>
+                                    ) : (
+                                        '—'
+                                    )}
+                                </div>
+                            </div>
                         </div>
                         {conn && (
                             <div>
@@ -559,6 +625,7 @@ export function CloneDetail() {
                 <LineageGraph
                     items={mySnapshots}
                     mode="list"
+                    usage={snapUsage}
                     draggable={false}
                     moveTarget={nodeActionFor}
                     onNodeClick={(s) => setNodeActionFor(s.name)}
@@ -596,6 +663,7 @@ export function CloneDetail() {
                 <LineageGraph
                     items={otherSnapshots}
                     mode="list"
+                    usage={snapUsage}
                     draggable={false}
                     moveTarget={nodeActionFor}
                     onNodeClick={(s) => setNodeActionFor(s.name)}

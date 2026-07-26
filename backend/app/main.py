@@ -13,6 +13,7 @@ from .api.routes.replication import router as replication_router
 from .api.routes.notifications import router as notifications_router
 from .services import fdw as fdw_svc
 from .services import sync_log
+from .services import usage as usage_svc
 from .services.replication import (
     auto_sync_new_tables,
     install_capture_triggers,
@@ -265,6 +266,27 @@ async def ddl_sync_loop():
         await asyncio.sleep(interval)
 
 
+async def usage_refresh_loop():
+    """Keep per-subvolume disk usage warm: hourly, queue any subvolume whose
+    cached measurement is older than the 24h TTL (usage.get_usage measures in
+    a worker thread — one pass over all ~30 subvolumes costs ~5 min of
+    sequential btrfs fi du, once a day). Also prunes entries for deleted
+    subvolumes so the cache tracks reality."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            if settings.root_data_dir:
+                paths = await asyncio.to_thread(
+                    usage_svc.all_subvolume_paths, settings.root_data_dir,
+                )
+                if paths:
+                    await asyncio.to_thread(usage_svc.get_usage, paths, True)
+                    await asyncio.to_thread(usage_svc.prune_except, paths)
+        except Exception as e:
+            logger.warning(f"usage warm sweep failed: {e}")
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Best-effort: install the DDL capture triggers (outbox) on the publisher
@@ -279,13 +301,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not install capture triggers at startup (will retry in polling loop): {e}")
 
-    task = asyncio.create_task(ddl_sync_loop())
+    tasks = [
+        asyncio.create_task(ddl_sync_loop()),
+        asyncio.create_task(usage_refresh_loop()),
+    ]
     yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Snaplicator API", version="0.1.0", lifespan=lifespan)
