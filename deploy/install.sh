@@ -161,6 +161,11 @@ INIT_ARGS=(--apply --yes)
 if [ -n "${ROOT_DATA_DIR:-}" ]; then
   INIT_ARGS+=(--data-dir "$ROOT_DATA_DIR")
 fi
+# FORMAT_DISK=/dev/sdX formats that bare disk as the pool (destructive —
+# snaplicator-init re-verifies the disk carries no data before touching it)
+if [ -n "${FORMAT_DISK:-}" ]; then
+  INIT_ARGS+=(--format-disk "$FORMAT_DISK")
+fi
 if [ "$DEMO" = "1" ]; then
   INIT_ARGS+=(--pool-bytes $((DEMO_POOL_GIB * 1024 * 1024 * 1024)))
 else
