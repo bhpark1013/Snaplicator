@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"ssh bhpark-dev 'ls ~/snapinit-e2e-src/cli/snaplicator_init/ && findmnt -n -o FSTYPE,SOURCE,AVAIL --target /home/bhpark'\",\"description\":\"Verify extracted files and dev home filesystem type/...",
+  "error": "Exit code 1\n__init__.py\n__main__.py\n__pycache__\ncollect.py\nexecute.py\nmeasure.py\nplan.py\nreport.py",
+  "timestamp": "2026-07-26T14:54:40.272Z",
+  "retry_count": 2
+}

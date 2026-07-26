@@ -291,6 +291,22 @@ def test_data_dir_pins_choice():
     assert plan["auto_selected"] is True
 
 
+def test_data_dir_on_existing_btrfs_mount_is_reused():
+    # Re-run after provisioning: the pool itself is now a mounted btrfs
+    # filesystem at data_dir. It must be chosen as-is — its remaining free
+    # space is an operational concern, not an install gate.
+    fm = findmnt_of(
+        fs_entry("/", "/dev/sda1", "ext4", avail=16 * GiB),
+        fs_entry("/home/u/pool", "/dev/loop0", "btrfs", avail=900 * 1024 ** 2),
+    )
+    plan = make_plan(fm, EMPTY_LSBLK, payload_bytes=0,
+                     required_override=1 * GiB, data_dir="/home/u/pool")
+    assert plan["status"] == "ok"
+    assert plan["chosen"]["target"] == "/home/u/pool"
+    assert plan["chosen"]["fits"] is False       # reused despite not fitting
+    assert plan["auto_selected"] is True
+
+
 def test_data_dir_too_small_needs_force():
     fm = findmnt_of(
         fs_entry("/", "/dev/sda1", "ext4", avail=500 * GiB),

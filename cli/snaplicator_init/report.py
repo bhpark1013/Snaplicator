@@ -23,14 +23,15 @@ _ACTION_LABEL = {
 }
 
 
-def render(plan: Dict[str, Any], payload_source: str) -> str:
+def render(plan: Dict[str, Any], payload_source: str,
+           required_source: str = "payload × 2, floor 10 GiB") -> str:
     lines = []
     lines.append("snaplicator init plan (read-only — nothing was changed)")
     lines.append(
         f"  payload:  {human_bytes(plan['payload_bytes'])}  ({payload_source})"
     )
     lines.append(
-        f"  required: {human_bytes(plan['required_bytes'])}  (payload × 2, floor 10 GiB)"
+        f"  required: {human_bytes(plan['required_bytes'])}  ({required_source})"
     )
     lines.append("")
     lines.append("candidates (ranked):")

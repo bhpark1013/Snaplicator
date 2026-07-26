@@ -184,6 +184,7 @@ def make_plan(
     data_dir: Optional[str] = None,
     force: bool = False,
     top_tables: Optional[List[Dict[str, Any]]] = None,
+    required_override: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Assemble the full plan.
 
@@ -196,7 +197,8 @@ def make_plan(
       needs_confirmation  True when several fit and a human should pick
       remediation         actionable strings, non-empty when status == "no-fit"
     """
-    required = required_bytes(payload_bytes)
+    required = (int(required_override) if required_override
+                else required_bytes(payload_bytes))
     candidates = mount_candidates(findmnt_raw) + bare_disk_candidates(lsblk_raw)
     for c in candidates:
         c["fits"] = c["avail_bytes"] >= required
@@ -207,7 +209,20 @@ def make_plan(
     needs_confirmation = False
     remediation: List[str] = []
 
+    exact_btrfs = None
     if data_dir:
+        exact_btrfs = next(
+            (c for c in candidates
+             if c["priority"] == 1 and c["target"] == data_dir),
+            None,
+        )
+    if exact_btrfs is not None:
+        # data_dir IS a mounted btrfs filesystem — the pool already exists
+        # (typically a re-run after provisioning). Reuse it; its remaining
+        # free space is an operational concern, not an install gate.
+        chosen = exact_btrfs
+        auto_selected = True
+    elif data_dir:
         pinned = _find_mount_for_path(candidates, data_dir)
         if pinned is None:
             remediation.append(
@@ -254,6 +269,7 @@ def make_plan(
         "version": 1,
         "payload_bytes": int(payload_bytes),
         "required_bytes": required,
+        "data_dir": data_dir,
         "candidates": candidates,
         "chosen": chosen,
         "auto_selected": auto_selected,
