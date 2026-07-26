@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
 import logging
+import time
 
 from .core.config import settings
 from .api.routes.health import router as health_router
@@ -22,13 +23,23 @@ from .services.replication import (
     enable_ddl_apply,
     get_ddl_apply_status,
     run_deferred_ddl,
+    check_subscription_health,
 )
 
 logger = logging.getLogger("snaplicator.ddl_sync")
+# Root logger defaults to WARNING, which silently swallowed every
+# logger.info() in this module (loop start, refresh/apply progress,
+# cycle heartbeat). Give app loggers a real INFO handler.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # Baseline for change-detection of DDL apply failures across loop iterations.
 # None until the first successful status read after process start.
 _ddl_apply_seen = {"failures": None}
+
+# Previous-cycle subscription health, for transition/delta alerting. Booleans
+# alert on the ok→broken transition (one event per outage, not one per cycle);
+# counters alert on any increase. Empty until the first successful check.
+_sub_health_seen: dict = {}
 
 
 def _build_publisher_connstr() -> str | None:
@@ -63,6 +74,7 @@ async def ddl_sync_loop():
     logger.info(f"DDL auto-sync started (interval={interval}s)")
 
     while True:
+        cycle_t0 = time.monotonic()
         try:
             connstr = _build_publisher_connstr()
             pub_name = settings.publication_name
@@ -155,6 +167,46 @@ async def ddl_sync_loop():
                 except Exception as e:
                     logger.warning(f"Constraint sync failed: {e}")
 
+                # ── Subscription health watch: disabled / dead worker /
+                # apply·sync error counters. Events with error keys reach
+                # Slack automatically via sync_log → notify_event.
+                try:
+                    h = await asyncio.to_thread(
+                        check_subscription_health, container, user, password, db, sub_name,
+                    )
+                    prev = dict(_sub_health_seen)
+                    _sub_health_seen.update(h)
+                    issues = {}
+                    if not h["exists"]:
+                        if prev.get("exists", True):
+                            issues["error"] = f"subscription '{sub_name}' does not exist"
+                    elif not h["enabled"]:
+                        if prev.get("enabled", True):
+                            issues["error"] = (
+                                f"subscription '{sub_name}' is DISABLED "
+                                "(disable_on_error or manual) — replication stopped"
+                            )
+                    elif not h["worker_running"]:
+                        if prev.get("worker_running", True):
+                            issues["worker_error"] = (
+                                f"subscription '{sub_name}' apply worker not running "
+                                "(dead or crash-looping)"
+                            )
+                    for key, label in (("apply_errors", "apply_error"), ("sync_errors", "sync_error")):
+                        if prev.get(key) is not None and h[key] > prev[key]:
+                            issues[label] = (
+                                f"{h[key] - prev[key]} new {label.replace('_', ' ')}(s) "
+                                f"on '{sub_name}' (total {h[key]})"
+                            )
+                    if issues:
+                        logger.warning(f"Subscription health: {issues}")
+                        # dedupe=False: transition gating above already
+                        # ensures once-per-outage; content dedupe would
+                        # silently swallow an identical future outage.
+                        sync_log.record("subscription_error", issues, dedupe=False)
+                except Exception as e:
+                    logger.warning(f"Subscription health check failed: {e}")
+
                 # ── In-stream DDL apply (subscriber side) — flag-gated switch ──
                 if settings.ddl_apply_enabled:
                     try:
@@ -244,6 +296,7 @@ async def ddl_sync_loop():
             logger.error(f"DDL auto-sync error: {e}")
             sync_log.record("loop_error", {"error": str(e)})
 
+        logger.info(f"sync cycle done in {time.monotonic() - cycle_t0:.0f}s")
         await asyncio.sleep(interval)
 
 

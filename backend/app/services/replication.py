@@ -1440,6 +1440,53 @@ def add_log_table_to_publication(
     return {"added": True}
 
 
+def check_subscription_health(
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+    subscription_name: str,
+) -> Dict:
+    """Subscription health snapshot for the sync loop's alerting.
+
+    Three subscriber-side signals:
+      * enabled        — pg_subscription.subenabled; false after
+                         disable_on_error or a manual disable
+      * worker_running — an apply worker row (relid IS NULL) with a live pid
+                         in pg_stat_subscription; absent while the worker is
+                         down or crash-looping between restarts
+      * apply_errors / sync_errors — cumulative counters from
+                         pg_stat_subscription_stats (PG15+); monotonically
+                         increasing, so the caller change-detects deltas
+    """
+    # NB: no ::text cast on subenabled — psql -At prints bare booleans as
+    # t/f, while an explicit cast yields 'true'/'false'.
+    sql = (
+        "SELECT s.subenabled, "
+        "(SELECT count(*) FROM pg_stat_subscription st "
+        " WHERE st.subname = s.subname AND st.relid IS NULL AND st.pid IS NOT NULL), "
+        "coalesce(ss.apply_error_count, 0), coalesce(ss.sync_error_count, 0) "
+        "FROM pg_subscription s "
+        "LEFT JOIN pg_stat_subscription_stats ss ON ss.subname = s.subname "
+        f"WHERE s.subname = '{subscription_name}';"
+    )
+    out = _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password,
+        subscriber_db, sql,
+    ).strip()
+    if not out:
+        return {"exists": False, "enabled": False, "worker_running": False,
+                "apply_errors": 0, "sync_errors": 0}
+    enabled, workers, apply_errs, sync_errs = out.split(",")
+    return {
+        "exists": True,
+        "enabled": enabled == "t",
+        "worker_running": int(workers) > 0,
+        "apply_errors": int(apply_errs),
+        "sync_errors": int(sync_errs),
+    }
+
+
 def get_ddl_apply_status(
     subscriber_container: str,
     subscriber_user: str,
