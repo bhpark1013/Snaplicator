@@ -1243,8 +1243,22 @@ def install_ddl_apply(
     that exact position — no LSN gates, no polling, no ordering logic.
 
     Safety rules baked into the trigger:
-      * id <= watermark            -> skip (initial COPY replay, clone
-                                     artifacts, re-subscription)
+      * id <= watermark (seed)     -> skip. The watermark is the install-time
+                                     seed only and never advances: log ids are
+                                     assigned at INSERT time but the stream
+                                     delivers in commit order, so with two
+                                     overlapping DDL transactions a lower id
+                                     can arrive after a higher one — an
+                                     advancing high-watermark would misread
+                                     the late lower id as already-processed
+                                     and silently drop its DDL.
+      * id in _snaplicator_ddl_applied -> skip. Exact-id dedupe set — one row
+                                     per processed log id (applied, deferred
+                                     or failed), immune to arrival order.
+                                     Covers clone artifacts and
+                                     re-subscription re-delivery. Unbounded
+                                     only in theory: one row per DDL
+                                     statement ever captured.
       * ddl_text ~* CONCURRENTLY   -> queue to _snaplicator_ddl_deferred
                                      (cannot run inside the apply worker's
                                      transaction; the sync loop executes it
@@ -1258,8 +1272,6 @@ def install_ddl_apply(
                                      Loudness comes from monitoring the
                                      failures table, not from blocking
                                      the stream.
-      * watermark advances for every processed row (applied, deferred or
-        failed) so a restart never re-executes old rows.
 
     initial_watermark should be the publisher's max(id) at install time,
     BEFORE the log table is added to the publication, so pre-existing rows
@@ -1292,6 +1304,15 @@ CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_watermark (
     id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     last_applied_id bigint NOT NULL DEFAULT 0,
     updated_at timestamptz NOT NULL DEFAULT now()
+);
+""")
+
+    # exact-id dedupe set: one row per processed log id. Grows by one row
+    # per DDL statement ever captured — no pruning needed at that rate.
+    _sub_sql("""
+CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_applied (
+    id bigint PRIMARY KEY,
+    applied_at timestamptz NOT NULL DEFAULT now()
 );
 """)
 
@@ -1334,11 +1355,23 @@ DECLARE
     wm bigint;
     saved_sp text;
 BEGIN
+    -- Seed skip: history that predates enable (arrives via initial COPY).
+    -- The watermark never advances past the seed — ids are assigned at
+    -- INSERT time but delivery is commit-ordered, so an advancing
+    -- high-watermark would drop the DDL of a lower id committing late.
     wm := coalesce((SELECT last_applied_id
                       FROM public._snaplicator_ddl_watermark WHERE id = 1), 0);
     IF NEW.id <= wm THEN
-        RETURN NEW;  -- already processed (initial COPY, clone, re-subscribe)
+        RETURN NEW;
     END IF;
+
+    -- Exact-id dedupe: re-delivery (clone, re-subscription) skips; a late
+    -- lower id from an overlapping publisher transaction does not.
+    IF EXISTS (SELECT 1 FROM public._snaplicator_ddl_applied a
+                WHERE a.id = NEW.id) THEN
+        RETURN NEW;
+    END IF;
+    INSERT INTO public._snaplicator_ddl_applied (id) VALUES (NEW.id);
 
     IF NEW.ddl_text ~* 'CONCURRENTLY' THEN
         INSERT INTO public._snaplicator_ddl_deferred (log_id, ddl_text, search_path)
@@ -1361,9 +1394,6 @@ BEGIN
         PERFORM set_config('search_path', coalesce(saved_sp, 'public'), true);
     END IF;
 
-    UPDATE public._snaplicator_ddl_watermark
-       SET last_applied_id = NEW.id, updated_at = now()
-     WHERE id = 1;
     RETURN NEW;
 END;
 $fn$;
@@ -1493,10 +1523,14 @@ def get_ddl_apply_status(
     subscriber_password: str | None,
     subscriber_db: str,
 ) -> Dict:
-    """Watermark position + failure/deferred counts, for the sync loop and
-    monitoring."""
+    """Apply progress + failure/deferred counts, for the sync loop and
+    monitoring. "watermark" is the highest processed log id — the frozen
+    seed or the max of the exact-id applied set, whichever is higher (the
+    stored watermark row itself never advances past the seed)."""
     sql = (
-        "SELECT coalesce((SELECT last_applied_id FROM public._snaplicator_ddl_watermark WHERE id = 1), 0) "
+        "SELECT GREATEST("
+        "coalesce((SELECT last_applied_id FROM public._snaplicator_ddl_watermark WHERE id = 1), 0), "
+        "coalesce((SELECT max(id) FROM public._snaplicator_ddl_applied), 0)) "
         "|| ',' || (SELECT count(*) FROM public._snaplicator_ddl_failures) "
         "|| ',' || (SELECT count(*) FROM public._snaplicator_ddl_deferred WHERE executed_at IS NULL);"
     )
