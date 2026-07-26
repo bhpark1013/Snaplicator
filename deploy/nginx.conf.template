@@ -1,0 +1,21 @@
+server {
+    listen ${WEB_PORT};
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # same contract as the vite dev proxy: /api/* → backend with the
+    # prefix stripped (trailing slash on proxy_pass does the rewrite)
+    location /api/ {
+        proxy_pass http://127.0.0.1:${BACKEND_PORT}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        # clone creation / snapshot restore can run for minutes
+        proxy_read_timeout 3600s;
+    }
+
+    # SPA fallback
+    location / {
+        try_files $uri /index.html;
+    }
+}
