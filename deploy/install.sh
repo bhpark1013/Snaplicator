@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # Snaplicator one-line installer (issue #19 stage 4, #10).
 #
-#   # against your own primary (URI form):
+#   # nothing to look up first — it asks which database to point at:
 #   curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh \
-#     | sudo bash -s -- "postgres://user:pw@primary:5432/mydb"
+#     | sudo bash
 #
-#   # zero-input demo: spins up a seeded sample publisher too
-#   curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh \
-#     | sudo bash -s -- --demo
+# Answer the prompt with your primary's connection URI, or with "demo" to
+# have it spin up a seeded sample publisher instead. Both answers can also be
+# given up front, which skips the prompt (useful for unattended runs):
+#
+#   ... | sudo bash -s -- "postgres://user:pw@primary:5432/mydb"
+#   ... | sudo bash -s -- --demo
 #
 # Every setting can be overridden by appending VAR=VALUE arguments, e.g.
 #   ... | sudo bash -s -- --demo WEB_PORT=18080 CONTAINER_NAME=snapdemo_replica
 #
 # What it does, in order:
 #   1. checks prerequisites (linux, docker, python3; installs the compose
-#      plugin if missing)
+#      plugin if missing), then asks what to replicate unless it was given
 #   2. fetches the repository to SNAP_HOME (reused on re-run)
 #   3. [--demo] starts a seeded wal_level=logical publisher container
 #   4. provisions the btrfs pool with snaplicator-init (measure → plan →
@@ -76,8 +79,37 @@ command -v python3 >/dev/null || die "python3 (>= 3.10) is required"
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' \
   || die "python3 >= 3.10 required (found $(python3 --version))"
 
+# Nothing was passed in, so ask. A connection URI carries a password, and an
+# argument is the worst place to put one: it is visible in `ps` for the whole
+# run and it lands in the invoking shell's history. Asking keeps it out of
+# both, which makes the prompt the better default rather than a fallback.
+#
+# stdin is the script itself under `curl | bash`, so the answer has to be
+# read from the terminal directly — the same way the pool menu below does it.
+if [ "$DEMO" = "0" ] && [ -z "$CONNSTR" ]; then
+  # Opening it is the only real test. Under `curl | sudo bash` with no
+  # terminal the device node still exists and still passes -r for root; the
+  # open is what fails, and without this the prompt loop would spin against a
+  # dead fd and report "no connection URI given" instead of the real reason.
+  { : < /dev/tty; } 2>/dev/null \
+    || die "no terminal to ask on — pass the connection URI (postgres://user:pw@host:port/db) or --demo"
+  echo >&2
+  info "Point Snaplicator at the database you want clones of." >&2
+  info "No database handy? Answer 'demo' and it will seed a sample one." >&2
+  for _ in 1 2 3; do
+    read -r -p "[snaplicator] connection URI (or 'demo'): " CONNSTR < /dev/tty || CONNSTR=""
+    case "$CONNSTR" in
+      demo|DEMO|Demo) DEMO=1; CONNSTR=""; break ;;
+      postgres://*|postgresql://*) break ;;
+      # Never echo the rejected answer back: a URI that failed the pattern
+      # is usually still a URI, password and all.
+      *) printf '  need postgres://user:pw@host:port/db (or demo)\n' >&2; CONNSTR="" ;;
+    esac
+  done
+  [ "$DEMO" = "1" ] || [ -n "$CONNSTR" ] || die "no connection URI given"
+fi
+
 if [ "$DEMO" = "0" ]; then
-  [ -n "$CONNSTR" ] || die "pass your primary's connection URI (postgres://user:pw@host:port/db) or --demo"
   case "$CONNSTR" in postgres://*|postgresql://*) ;; *) die "URI form required: postgres://user:pw@host:port/db" ;; esac
   command -v psql >/dev/null || die "psql is required to measure/verify the publisher (apt install postgresql-client)"
 fi
