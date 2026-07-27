@@ -443,7 +443,12 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
         name = entry.name
         if not name.startswith(prefix):
             continue
-        if "-snapshot-" in name:
+        # Scratch subvolumes a refresh/reset creates while it stages the
+        # replacement, and the previous copy it keeps until the swap sticks.
+        # They share the clone prefix but are never clones themselves.
+        if "-snapshot-" in name or any(
+            m in name for m in ("-refresh-", "-reset-", "-prev-", "-staging-")
+        ):
             skipped_snapshot_like += 1
             continue
         p = Path(entry.path)
