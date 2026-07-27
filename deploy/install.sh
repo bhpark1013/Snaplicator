@@ -91,9 +91,25 @@ if ! docker compose version >/dev/null 2>&1; then
   docker compose version >/dev/null || die "docker compose plugin installation failed"
 fi
 
+# A port held by our own stack is not a conflict — it is the previous
+# install, which every later step is written to detect and reuse. Checking
+# only "is the port busy" made re-running fail on exactly the hosts where the
+# installer had already succeeded, contradicting the promise at the top.
+#
+# Both services run with network_mode: host, so they publish no mappings and
+# `docker ps` cannot say which port a container holds. The previous install's
+# .env is the record of which ports it took; pair it with "our containers are
+# actually up" so a stale .env alone never waves a real conflict through.
+port_is_ours() {
+  [ -f "$SNAP_HOME/deploy/.env" ] || return 1
+  [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT")" ] || return 1
+  grep -qE "^(WEB_PORT|BACKEND_PORT)=$1\$" "$SNAP_HOME/deploy/.env"
+}
 for p in "$WEB_PORT" "$BACKEND_PORT"; do
   if ss -ltn 2>/dev/null | grep -q ":$p "; then
-    die "port $p is already in use — override with WEB_PORT=/BACKEND_PORT= arguments"
+    port_is_ours "$p" \
+      || die "port $p is already in use — override with WEB_PORT=/BACKEND_PORT= arguments"
+    info "port $p is this install's own $PROJECT stack — reusing it"
   fi
 done
 
