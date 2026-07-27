@@ -713,3 +713,114 @@ def get_sync_log(limit: int = 100):
     """Recent auto-sync activity (new tables, column/constraint adds, schema
     moves, FDW drift re-imports, errors) recorded by the background loop."""
     return {"events": sync_log.read_events(limit)}
+
+
+# ── Privileged setup ────────────────────────────────────────────
+# Steps that the day-to-day publisher account is not expected to be able to
+# perform. Rather than demanding a standing superuser credential, each step
+# is offered two ways: hand over a privileged connection for one call (never
+# stored), or run the SQL yourself and re-check.
+
+
+class PrivilegedApplyBody(BaseModel):
+    connstr: str = Field(..., description="Privileged publisher connection, used once and discarded")
+    step: Optional[str] = None
+
+
+def _capture_setup_sql() -> str:
+    res = install_capture_triggers("", settings.publication_name or "", execute=False)
+    return "\n".join(s.strip() for s in res["statements"])
+
+
+def _setup_steps() -> dict:
+    pub = settings.publication_name or ""
+    try:
+        connstr = _build_publisher_connstr()
+    except Exception as e:
+        return {"configured": False, "error": str(e), "steps": [], "all_satisfied": False}
+
+    steps = []
+
+    pub_ok = None
+    try:
+        from ...services.replication import _run_publisher_sql
+        out = _run_publisher_sql(
+            connstr, f"SELECT count(*) FROM pg_publication WHERE pubname = '{pub}';"
+        )
+        pub_ok = out.strip() == "1"
+    except Exception:
+        pub_ok = None  # cannot reach the publisher; report unknown rather than missing
+    steps.append({
+        "id": "publication",
+        "title": f"Publication '{pub}' exists",
+        "requires": "CREATE on the database",
+        "why": (
+            "The publication is what the subscriber attaches to. Creating one needs "
+            "CREATE on the database, which can be granted to a dedicated account."
+        ),
+        "sql": f"CREATE PUBLICATION {pub};",
+        "satisfied": pub_ok,
+    })
+
+    trig_ok = None
+    try:
+        trig_ok = verify_capture_installed(connstr)
+    except Exception:
+        trig_ok = None
+    steps.append({
+        "id": "capture_triggers",
+        "title": "DDL capture event triggers",
+        "requires": "superuser (on RDS: membership in rds_superuser)",
+        "why": (
+            "CREATE EVENT TRIGGER is the one requirement here with no GRANT equivalent — "
+            "PostgreSQL restricts it to superusers, so it cannot be delegated to a "
+            "purpose-made account the way the other steps can. Everything the triggers "
+            "then do at runtime (writing the outbox, adding new tables to the publication) "
+            "is already delegated, so this privilege is needed only to install them."
+        ),
+        "sql": _capture_setup_sql(),
+        "satisfied": trig_ok,
+    })
+
+    return {
+        "configured": True,
+        "steps": steps,
+        "all_satisfied": all(s["satisfied"] is True for s in steps),
+    }
+
+
+@router.get("/setup")
+def get_privileged_setup():
+    """What still needs a privileged hand, and the exact SQL for each step."""
+    return _setup_steps()
+
+
+@router.post("/setup/apply")
+def apply_privileged_setup(body: PrivilegedApplyBody):
+    """Run the outstanding steps with a privileged connection supplied for this
+    call only. The credential is never written to disk or echoed back."""
+    connstr = (body.connstr or "").strip()
+    if not connstr:
+        raise HTTPException(status_code=400, detail="A connection string is required")
+    pub = settings.publication_name or ""
+    applied: List[str] = []
+    try:
+        state = _setup_steps()
+        for step in state.get("steps", []):
+            if step["satisfied"] is True:
+                continue
+            if body.step and body.step != step["id"]:
+                continue
+            if step["id"] == "publication":
+                from ...services.replication import _run_publisher_sql
+                _run_publisher_sql(connstr, f"CREATE PUBLICATION {pub};")
+            elif step["id"] == "capture_triggers":
+                install_capture_triggers(connstr, pub)
+            applied.append(step["id"])
+    except Exception as e:
+        # Never surface the connection string, which may appear in psql output.
+        msg = str(e).replace(connstr, "<connection>")
+        raise HTTPException(status_code=400, detail=f"Privileged step failed: {msg}")
+    # Re-check through the CONFIGURED account: the point is that the runtime
+    # account can see the result, not that the privileged one could do it.
+    return {"applied": applied, **_setup_steps()}
