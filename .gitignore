@@ -10,3 +10,7 @@ configs/anonymize.sql.bak*
 configs/anonymize.sql.tmp
 configs/replication_check.sql
 mcp-server/.venv/
+
+# Backups of .env carry the same credentials as the original
+.env.*
+!.env.example
