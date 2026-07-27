@@ -631,6 +631,14 @@ def install_capture_triggers(
     """
     stmts: List[str] = []
 
+    # First, before anything that runs DDL: retire the legacy auto-add event
+    # trigger. It adds every new table to the publication unconditionally, so
+    # against a FOR ALL TABLES publication it raises and takes the CREATE
+    # TABLE with it — including the CREATE TABLE below, which would leave
+    # install unable to bootstrap itself. The trigger set this installs is
+    # dropped and recreated at the end as before.
+    stmts.append("DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;")
+
     log_table_sql = f"""
 CREATE TABLE IF NOT EXISTS public.{CAPTURE_LOG_TABLE} (
     id bigserial PRIMARY KEY,

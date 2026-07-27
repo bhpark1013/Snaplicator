@@ -69,7 +69,9 @@ def _build_publisher_connstr() -> str | None:
 
 async def ddl_sync_loop():
     """Background task that periodically checks for new tables in publication and syncs them."""
-    interval = int(settings.ddl_sync_interval or 30)
+    # `or 30` would read a configured 0 as "unset" and start a 30s loop,
+    # making the documented way to turn the loop off unreachable.
+    interval = 30 if settings.ddl_sync_interval is None else int(settings.ddl_sync_interval)
     if interval <= 0:
         logger.info("DDL sync disabled (interval <= 0)")
         return
