@@ -20,6 +20,7 @@ def get_anonymize_sql():
         data.update(anon_svc.validate(data["content"]) if data["content"] else
                     {"referenced_tables": [], "missing_tables": [], "checked": False, "warnings": []})
         data["backups"] = anon_svc.list_backups()
+        data["readiness"] = anon_svc.readiness()
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read anonymize.sql: {e}")

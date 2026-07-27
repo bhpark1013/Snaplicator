@@ -46,6 +46,7 @@ interface AnonymizeConfig {
     checked: boolean
     warnings: string[]
     backups: { name: string; size_bytes: number; modified_at: string }[]
+    readiness: { ok: boolean; opted_out: boolean; reason: string }
 }
 
 type CheckStatus = 'checking' | 'ok' | 'mismatch' | 'error'
@@ -638,9 +639,13 @@ export function Config() {
                     <span className="text-[13px] font-semibold tracking-tight">Anonymization SQL</span>
                     <span className="text-xs text-muted-foreground">— masks sensitive columns on every clone from main</span>
                     {anon && (
-                        anon.missing_tables.length > 0
-                            ? <Badge variant="destructive">{anon.missing_tables.length} missing table{anon.missing_tables.length === 1 ? '' : 's'}</Badge>
-                            : <Badge variant={anon.exists ? 'success' : 'neutral'}>{anon.exists ? `${anon.referenced_tables.length} tables` : 'not configured'}</Badge>
+                        !anon.readiness.ok
+                            ? <Badge variant="destructive">blocks clone creation</Badge>
+                            : anon.readiness.opted_out
+                                ? <Badge variant="warning">masking opted out</Badge>
+                                : anon.missing_tables.length > 0
+                                    ? <Badge variant="destructive">{anon.missing_tables.length} missing table{anon.missing_tables.length === 1 ? '' : 's'}</Badge>
+                                    : <Badge variant="success">{anon.referenced_tables.length} tables masked</Badge>
                     )}
                 </button>
 
@@ -651,6 +656,17 @@ export function Config() {
                             error, so a statement targeting a table that no longer exists fails the whole clone creation.
                             {anon?.modified_at ? ` Last changed ${new Date(anon.modified_at).toLocaleString()}.` : ''}
                         </div>
+
+                        {anon && !anon.readiness.ok && (
+                            <p className="whitespace-pre-wrap rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
+                                Clone creation from main is blocked until this is fixed: {anon.readiness.reason}
+                            </p>
+                        )}
+                        {anon && anon.readiness.opted_out && (
+                            <p className="whitespace-pre-wrap rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-[13px] text-warning">
+                                {anon.readiness.reason} Clones are published with production data as-is.
+                            </p>
+                        )}
 
                         {anon && anon.warnings.length > 0 && (
                             <p className="whitespace-pre-wrap rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-[13px] text-destructive">

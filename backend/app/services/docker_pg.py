@@ -362,6 +362,23 @@ def _launch_clone_container(
 
     repo_root = str(Path(__file__).resolve().parents[3])
     anon_file = Path(repo_root) / "configs/anonymize.sql"
+    if run_anonymize:
+        # Fail closed. A missing or statement-less script used to mean "skip
+        # masking", which publishes a clone of production data that is
+        # indistinguishable from a masked one. Opting out must be declared.
+        from . import anonymize as anon_svc
+        ready = anon_svc.readiness()
+        if not ready["ok"]:
+            subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+            raise RuntimeError(
+                "Refusing to publish a clone without anonymization: " + ready["reason"]
+            )
+        if ready["opted_out"]:
+            run_anonymize = False
+            anonymize_ran = True
+            anonymize_output = ready["reason"]
+            _timing_log(f"[CLONE_TIMING] anonymize_opted_out container={container_name}")
+
     if run_anonymize and anon_file.exists():
         _timing_log(f"[CLONE_TIMING] anonymize_start file={anon_file}")
         ta0 = time.monotonic()
@@ -451,14 +468,18 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
         pass
 
     container_name = f"{opts.container_name}-{ts}"
-    host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
-        clone_path=clone_path,
-        opts=opts,
-        container_name=container_name,
-        host_port_hint=None,
-        description=opts.description,
-        run_anonymize=run_anonymize,
-    )
+    try:
+        host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
+            clone_path=clone_path,
+            opts=opts,
+            container_name=container_name,
+            host_port_hint=None,
+            description=opts.description,
+            run_anonymize=run_anonymize,
+        )
+    except Exception:
+        _delete_subvolume_quietly(clone_path)
+        raise
 
     return {
         "snapshot": str(snap_path),
@@ -548,13 +569,20 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
         pass
 
     container_name = f"{opts.container_name}-{ts}"
-    host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
-        clone_path=clone_path,
-        opts=opts,
-        container_name=container_name,
-        host_port_hint=host_port_override,
-        description=opts.description,
-    )
+    try:
+        host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
+            clone_path=clone_path,
+            opts=opts,
+            container_name=container_name,
+            host_port_hint=host_port_override,
+            description=opts.description,
+        )
+    except Exception:
+        # The subvolume holds a raw copy of production data that was never
+        # masked; leaving it behind is both a disk leak and a copy nobody
+        # accounted for.
+        _delete_subvolume_quietly(clone_path)
+        raise
 
     if db_user and db_password:
         _create_db_user(container_name, opts, db_user, db_password)
@@ -570,6 +598,16 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
         "anonymize_ran": anonymize_ran,
         "anonymize_output": anonymize_output,
     }
+
+
+def _delete_subvolume_quietly(path: Path) -> None:
+    """Best-effort subvolume removal on a cleanup path, where raising would
+    replace the real error with a less useful one."""
+    try:
+        if path.exists():
+            _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(path)])
+    except subprocess.CalledProcessError as e:
+        _timing_log(f"[CLONE_TIMING] cleanup_delete_failed path={path} err={str(e).strip()}")
 
 
 def _stage_then_swap_clone_data(
@@ -626,6 +664,12 @@ def _stage_then_swap_clone_data(
             remove_existing=True,
             run_anonymize=run_anonymize,
         )
+        if run_anonymize and not anonymize_ran:
+            # Belt and braces: the swap is the point of no return, so never
+            # cross it on a staged copy that was not actually masked.
+            raise RuntimeError(
+                "Staged clone reports no anonymization was applied; refusing to swap it in"
+            )
         # Stop cleanly, or the final container inherits an unclean shutdown
         # and starts with crash recovery.
         subprocess.run(["docker", "stop", "-t", "60", staging_container], check=False, capture_output=True)

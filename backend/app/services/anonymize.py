@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 _MAX_BYTES = 1_000_000
 _KEEP_BACKUPS = 10
 
+# Written into the script itself to declare that this deployment's data needs
+# no masking. It has to be stated in the file because the alternative — an
+# absent or empty script — is indistinguishable from a misconfiguration at
+# the one moment it matters, when a clone full of production data is handed
+# to someone.
+NO_OP_MARKER = "snaplicator: no-anonymization-needed"
+
 
 def sql_path() -> Path:
     # services/ -> app/ -> backend/ -> repo root (same walk as docker_pg.py)
@@ -36,6 +43,13 @@ def _strip_comments_and_split(sql: str) -> List[str]:
     """Split into statements, ignoring `--` comments. Quote-aware so a `--`
     or `;` inside a literal (the iamport_data JSON, bcrypt hashes) is not
     mistaken for syntax. Dollar-quoting is handled only for bare `$$`."""
+    # psql meta-commands (\set, \echo, \i) are terminated by the newline, not
+    # by a semicolon. Left in, the first one swallows every SQL statement up
+    # to the next `;` — which is how the leading `\set ON_ERROR_STOP on`
+    # would hide the statement right after it.
+    sql = "\n".join(
+        "" if ln.lstrip().startswith("\\") else ln for ln in sql.splitlines()
+    )
     out: List[str] = []
     buf: List[str] = []
     i = 0
@@ -177,6 +191,32 @@ def validate(sql: str) -> Dict:
     }
 
 
+def readiness() -> Dict:
+    """Whether the script can actually mask a clone. Callers that are about to
+    publish a clone must refuse when this is not ok — a silent skip produces
+    an unmasked clone that looks exactly like a masked one."""
+    p = sql_path()
+    if not p.exists():
+        return {"ok": False, "opted_out": False, "reason": (
+            f"{p} does not exist, so nothing would be masked. Upload one from the "
+            "Config page, or run: cp configs/anonymize-example.sql configs/anonymize.sql"
+        )}
+    try:
+        text = p.read_text(encoding="utf-8")
+    except Exception as e:
+        return {"ok": False, "opted_out": False, "reason": f"Cannot read {p}: {e}"}
+    if NO_OP_MARKER in text:
+        return {"ok": True, "opted_out": True,
+                "reason": f"Masking explicitly opted out via the {NO_OP_MARKER} marker."}
+    if not _strip_comments_and_split(text):
+        return {"ok": False, "opted_out": False, "reason": (
+            f"{p} has no statement that changes data, so a clone would be published with "
+            f"production data intact. Add the masking statements, or put "
+            f"'-- {NO_OP_MARKER}' in the file if this data genuinely needs none."
+        )}
+    return {"ok": True, "opted_out": False, "reason": ""}
+
+
 def get_content() -> Dict:
     p = sql_path()
     if not p.exists():
@@ -249,5 +289,6 @@ def save_content(content: str) -> Dict:
         "size_bytes": len(data),
         "backup": backup_name,
         "path": str(p),
+        "readiness": readiness(),
         **validate(content),
     }
