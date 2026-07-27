@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 
@@ -35,6 +35,19 @@ interface FsUsageSummary {
     calculated_at?: string | null
 }
 
+interface AnonymizeConfig {
+    exists: boolean
+    content: string
+    size_bytes: number
+    modified_at?: string | null
+    path: string
+    referenced_tables: string[]
+    missing_tables: string[]
+    checked: boolean
+    warnings: string[]
+    backups: { name: string; size_bytes: number; modified_at: string }[]
+}
+
 type CheckStatus = 'checking' | 'ok' | 'mismatch' | 'error'
 
 export function Config() {
@@ -69,6 +82,16 @@ export function Config() {
     const [notifMsg, setNotifMsg] = useState<string | null>(null)
     const [notifErr, setNotifErr] = useState<string | null>(null)
 
+    const [anon, setAnon] = useState<AnonymizeConfig | null>(null)
+    const [anonExpanded, setAnonExpanded] = useState(false)
+    const [anonText, setAnonText] = useState('')
+    const [anonLocked, setAnonLocked] = useState(true)
+    const [anonLoading, setAnonLoading] = useState(false)
+    const [anonSaving, setAnonSaving] = useState(false)
+    const [anonMsg, setAnonMsg] = useState<string | null>(null)
+    const [anonErr, setAnonErr] = useState<string | null>(null)
+    const anonFileRef = useRef<HTMLInputElement>(null)
+
     const api = import.meta.env.VITE_API_BASE_URL || ''
     const base = api ? api : '/api'
 
@@ -82,6 +105,64 @@ export function Config() {
             i++
         }
         return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`
+    }
+
+    const loadAnon = () => {
+        setAnonLoading(true)
+        setAnonErr(null)
+        fetch(`${base}/anonymize`)
+            .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+            .then((data: AnonymizeConfig) => {
+                setAnon(data)
+                setAnonText(data.content ?? '')
+                setAnonLocked(true)
+            })
+            .catch(async (e) => {
+                const text = e?.status ? `${e.status} ${await e.text()}` : String(e)
+                setAnonErr(text)
+            })
+            .finally(() => setAnonLoading(false))
+    }
+
+    // Shared by the editor's Save and by file upload — both replace the whole
+    // script, and the response carries the missing-table warnings.
+    const saveAnon = async (content: string, note: string) => {
+        setAnonSaving(true)
+        setAnonErr(null)
+        setAnonMsg(null)
+        try {
+            const r = await fetch(`${base}/anonymize`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content }),
+            })
+            if (!r.ok) {
+                let detail = `${r.status}`
+                try { const j = await r.json(); detail = j.detail || detail } catch { /* ignore */ }
+                setAnonErr(String(detail))
+                return
+            }
+            const res = await r.json()
+            setAnonMsg(`${note}${res.backup ? ` Previous version kept as ${res.backup}.` : ''}`)
+            setAnonLocked(true)
+            loadAnon()
+        } catch (e) {
+            setAnonErr(String(e))
+        } finally {
+            setAnonSaving(false)
+        }
+    }
+
+    const onAnonFile = async (file: File | undefined) => {
+        if (!file) return
+        try {
+            const text = await file.text()
+            await saveAnon(text, `Uploaded ${file.name}.`)
+        } catch (e) {
+            setAnonErr(`Could not read file: ${String(e)}`)
+        } finally {
+            if (anonFileRef.current) anonFileRef.current.value = ''
+        }
     }
 
     const loadSubStatus = () => {
@@ -222,6 +303,7 @@ export function Config() {
         loadSubStatus()
         loadNotif()
         loadCheckSql()
+        loadAnon()
         runCheck()
         // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
@@ -543,6 +625,87 @@ export function Config() {
                         </div>
                         {notifErr && <p className="text-[13px] text-destructive">{notifErr}</p>}
                         {notifMsg && <p className="text-[13px] text-success">{notifMsg}</p>}
+                    </div>
+                )}
+            </Card>
+
+            <Card className="mt-3">
+                <button
+                    onClick={() => setAnonExpanded((v) => !v)}
+                    className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                    {anonExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                    <span className="text-[13px] font-semibold tracking-tight">Anonymization SQL</span>
+                    <span className="text-xs text-muted-foreground">— masks sensitive columns on every clone from main</span>
+                    {anon && (
+                        anon.missing_tables.length > 0
+                            ? <Badge variant="destructive">{anon.missing_tables.length} missing table{anon.missing_tables.length === 1 ? '' : 's'}</Badge>
+                            : <Badge variant={anon.exists ? 'success' : 'neutral'}>{anon.exists ? `${anon.referenced_tables.length} tables` : 'not configured'}</Badge>
+                    )}
+                </button>
+
+                {anonExpanded && (
+                    <div className="mt-3 flex flex-col gap-2 pl-6">
+                        <div className="text-xs text-muted-foreground">
+                            Runs inside every clone created from the live main replica (not for snapshot-derived clones). It stops at the first
+                            error, so a statement targeting a table that no longer exists fails the whole clone creation.
+                            {anon?.modified_at ? ` Last changed ${new Date(anon.modified_at).toLocaleString()}.` : ''}
+                        </div>
+
+                        {anon && anon.warnings.length > 0 && (
+                            <p className="whitespace-pre-wrap rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
+                                {anon.warnings.join('\n')}
+                            </p>
+                        )}
+
+                        <Textarea
+                            value={anonText}
+                            onChange={(e) => setAnonText(e.target.value)}
+                            readOnly={anonLocked}
+                            spellCheck={false}
+                            placeholder="update &quot;user&quot; set email = ...;"
+                            className={`min-h-40 font-mono text-xs ${anonLocked ? 'opacity-60' : ''}`}
+                        />
+
+                        <div className="flex flex-wrap items-center gap-2">
+                            {anonLocked ? (
+                                <Button onClick={() => { setAnonErr(null); setAnonMsg(null); setAnonLocked(false) }}>Edit SQL</Button>
+                            ) : (
+                                <>
+                                    <Button onClick={() => saveAnon(anonText, 'Saved.')} disabled={anonSaving}>
+                                        {anonSaving ? 'Saving...' : 'Save'}
+                                    </Button>
+                                    <Button onClick={() => { setAnonText(anon?.content ?? ''); setAnonLocked(true); setAnonErr(null); setAnonMsg(null) }} disabled={anonSaving}>
+                                        Cancel
+                                    </Button>
+                                </>
+                            )}
+                            <input
+                                ref={anonFileRef}
+                                type="file"
+                                accept=".sql,text/plain"
+                                className="hidden"
+                                onChange={(e) => onAnonFile(e.target.files?.[0])}
+                            />
+                            <Button onClick={() => anonFileRef.current?.click()} disabled={anonSaving}>
+                                {anonSaving ? 'Uploading...' : 'Upload .sql'}
+                            </Button>
+                            <Button asChild>
+                                <a href={`${base}/anonymize/download`} download="anonymize.sql">Download</a>
+                            </Button>
+                            <Button onClick={loadAnon} disabled={anonLoading || !anonLocked}>
+                                {anonLoading ? 'Loading...' : 'Reload'}
+                            </Button>
+                            {anon && (
+                                <span className="text-xs text-muted-foreground">
+                                    {formatBytes(anon.size_bytes)}
+                                    {anon.backups.length > 0 ? ` · ${anon.backups.length} backup${anon.backups.length === 1 ? '' : 's'} kept` : ''}
+                                </span>
+                            )}
+                        </div>
+
+                        {anonErr && <p className="whitespace-pre-wrap text-[13px] text-destructive">{anonErr}</p>}
+                        {anonMsg && <p className="text-[13px] text-success">{anonMsg}</p>}
                     </div>
                 )}
             </Card>

@@ -6,5 +6,7 @@ frontend/node_modules/
 
 *.log
 configs/anonymize.sql
+configs/anonymize.sql.bak*
+configs/anonymize.sql.tmp
 configs/replication_check.sql
 mcp-server/.venv/

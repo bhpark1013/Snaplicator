@@ -14,6 +14,7 @@ from .api.routes.snapshots import router as snapshots_router
 from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
 from .api.routes.notifications import router as notifications_router
+from .api.routes.anonymize import router as anonymize_router
 from .services import fdw as fdw_svc
 from .services import sync_log
 from .services import usage as usage_svc
@@ -365,3 +366,4 @@ app.include_router(snapshots_router, prefix="/snapshots", tags=["snapshots"])
 app.include_router(clones_router, prefix="/clones", tags=["clones"]) 
 app.include_router(replication_router, prefix="/replication", tags=["replication"])
 app.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
+app.include_router(anonymize_router, prefix="/anonymize", tags=["anonymize"])
