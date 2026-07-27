@@ -1,4 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import PlainTextResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
@@ -324,6 +327,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── API-failure alerting ─────────────────────────────────────────────
+# Any 5xx leaving the API is recorded as a sync event, which forwards to
+# Slack via sync_log -> notify_event (the detail carries an "error" key;
+# notify.send's per-kind cooldown keeps a crash-looping endpoint from
+# flooding the channel). 4xx are client mistakes, not incidents.
+
+@app.exception_handler(StarletteHTTPException)
+async def _alert_http_5xx(request: Request, exc: StarletteHTTPException):
+    if exc.status_code >= 500:
+        sync_log.record("api_error", {
+            "method": request.method,
+            "path": request.url.path,
+            "status": exc.status_code,
+            "error": str(exc.detail)[:500],
+        }, dedupe=False)
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(Exception)
+async def _alert_unhandled(request: Request, exc: Exception):
+    logging.getLogger("snaplicator.api").error(
+        "unhandled error on %s %s: %r", request.method, request.url.path, exc)
+    sync_log.record("api_error", {
+        "method": request.method,
+        "path": request.url.path,
+        "status": 500,
+        "error": repr(exc)[:500],
+    }, dedupe=False)
+    # same body/status the default 500 path produces
+    return PlainTextResponse("Internal Server Error", status_code=500)
+
 
 app.include_router(health_router, prefix="/health", tags=["health"]) 
 app.include_router(snapshots_router, prefix="/snapshots", tags=["snapshots"]) 
