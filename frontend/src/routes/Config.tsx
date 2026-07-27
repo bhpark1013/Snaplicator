@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { copyText } from '@/lib/utils'
 
 interface CopyProgress {
     status: 'idle' | 'copying' | 'complete'
@@ -48,22 +47,6 @@ interface AnonymizeConfig {
     warnings: string[]
     backups: { name: string; size_bytes: number; modified_at: string }[]
     readiness: { ok: boolean; opted_out: boolean; reason: string }
-}
-
-interface PrivStep {
-    id: string
-    title: string
-    requires: string
-    why: string
-    sql: string
-    satisfied: boolean | null // null = could not be determined
-}
-
-interface PrivSetup {
-    configured: boolean
-    error?: string
-    steps: PrivStep[]
-    all_satisfied: boolean
 }
 
 type CheckStatus = 'checking' | 'ok' | 'mismatch' | 'error'
@@ -109,15 +92,6 @@ export function Config() {
     const [anonMsg, setAnonMsg] = useState<string | null>(null)
     const [anonErr, setAnonErr] = useState<string | null>(null)
     const anonFileRef = useRef<HTMLInputElement>(null)
-
-    const [setup, setSetup] = useState<PrivSetup | null>(null)
-    const [setupExpanded, setSetupExpanded] = useState(false)
-    const [setupUri, setSetupUri] = useState('')
-    const [setupUriOpen, setSetupUriOpen] = useState(false)
-    const [setupBusy, setSetupBusy] = useState(false)
-    const [setupMsg, setSetupMsg] = useState<string | null>(null)
-    const [setupErr, setSetupErr] = useState<string | null>(null)
-    const [copiedStep, setCopiedStep] = useState<string | null>(null)
 
     const api = import.meta.env.VITE_API_BASE_URL || ''
     const base = api ? api : '/api'
@@ -189,60 +163,6 @@ export function Config() {
             setAnonErr(`Could not read file: ${String(e)}`)
         } finally {
             if (anonFileRef.current) anonFileRef.current.value = ''
-        }
-    }
-
-    // Privileged setup: each step can be satisfied either by handing over a
-    // superuser connection for one call, or by running the SQL by hand and
-    // re-checking. Both converge on the same verification.
-    const loadSetup = (note?: string) => {
-        setSetupErr(null)
-        fetch(`${base}/replication/setup`)
-            .then((r) => (r.ok ? r.json() : Promise.reject(r)))
-            .then((data: PrivSetup) => {
-                setSetup(data)
-                if (note) {
-                    setSetupMsg(data.all_satisfied
-                        ? `${note} Everything is in place.`
-                        : `${note} Still outstanding — see the steps below.`)
-                }
-            })
-            .catch(async (e) => {
-                const text = e?.status ? `${e.status} ${await e.text()}` : String(e)
-                setSetupErr(text)
-            })
-    }
-
-    const applySetup = async (stepId?: string) => {
-        const connstr = setupUri.trim()
-        if (!connstr) {
-            setSetupErr('A privileged connection string is required.')
-            return
-        }
-        setSetupBusy(true)
-        setSetupErr(null)
-        setSetupMsg(null)
-        try {
-            const r = await fetch(`${base}/replication/setup/apply`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ connstr, step: stepId ?? null }),
-            })
-            if (!r.ok) {
-                let detail = `${r.status}`
-                try { const j = await r.json(); detail = j.detail || detail } catch { /* ignore */ }
-                setSetupErr(String(detail))
-                return
-            }
-            const data = await r.json()
-            setSetup(data)
-            setSetupUri('')
-            setSetupUriOpen(false)
-            setSetupMsg(`Applied: ${(data.applied || []).join(', ') || 'nothing was outstanding'}.`)
-        } catch (e) {
-            setSetupErr(String(e))
-        } finally {
-            setSetupBusy(false)
         }
     }
 
@@ -385,7 +305,6 @@ export function Config() {
         loadNotif()
         loadCheckSql()
         loadAnon()
-        loadSetup()
         runCheck()
         // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
@@ -803,105 +722,6 @@ export function Config() {
 
                         {anonErr && <p className="whitespace-pre-wrap text-[13px] text-destructive">{anonErr}</p>}
                         {anonMsg && <p className="text-[13px] text-success">{anonMsg}</p>}
-                    </div>
-                )}
-            </Card>
-
-            <Card className="mt-3">
-                <button
-                    onClick={() => setSetupExpanded((v) => !v)}
-                    className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                    {setupExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
-                    <span className="text-[13px] font-semibold tracking-tight">Publisher Setup</span>
-                    <span className="text-xs text-muted-foreground">— steps the everyday account may not have rights for</span>
-                    {setup && (
-                        setup.all_satisfied
-                            ? <Badge variant="success">ready</Badge>
-                            : <Badge variant="warning">{setup.steps.filter((s) => s.satisfied !== true).length} outstanding</Badge>
-                    )}
-                </button>
-
-                {setupExpanded && (
-                    <div className="mt-3 flex flex-col gap-3 pl-6">
-                        <div className="text-xs text-muted-foreground">
-                            For each outstanding step you can either run the SQL yourself with an account that has the rights and
-                            press <span className="text-foreground">Re-check</span>, or hand over a privileged connection below —
-                            it is used for that one call and never stored.
-                        </div>
-
-                        {setup?.error && <p className="text-[13px] text-destructive">{setup.error}</p>}
-
-                        {setup?.steps.map((s) => (
-                            <div key={s.id} className="rounded-md border border-border bg-secondary/40 p-3">
-                                <div className="flex items-center gap-2">
-                                    <Badge variant={s.satisfied === true ? 'success' : s.satisfied === false ? 'destructive' : 'neutral'}>
-                                        {s.satisfied === true ? 'done' : s.satisfied === false ? 'missing' : 'unknown'}
-                                    </Badge>
-                                    <span className="text-[13px] font-medium text-zinc-100">{s.title}</span>
-                                    <span className="text-[11px] text-muted-foreground">needs {s.requires}</span>
-                                </div>
-                                <p className="mt-1.5 text-xs text-muted-foreground">{s.why}</p>
-                                {s.satisfied !== true && (
-                                    <>
-                                        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-card p-2.5 font-mono text-[11px] leading-relaxed text-zinc-300">
-                                            {s.sql}
-                                        </pre>
-                                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                                            <Button
-                                                onClick={async () => {
-                                                    const ok = await copyText(s.sql)
-                                                    setCopiedStep(ok ? s.id : null)
-                                                    if (ok) setTimeout(() => setCopiedStep(null), 1500)
-                                                }}
-                                            >
-                                                {copiedStep === s.id ? 'Copied' : 'Copy SQL'}
-                                            </Button>
-                                            <Button onClick={() => loadSetup('Re-checked.')} disabled={setupBusy}>
-                                                Re-check
-                                            </Button>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        ))}
-
-                        {setup && !setup.all_satisfied && (
-                            <div className="flex flex-col gap-2">
-                                {setupUriOpen ? (
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        <Input
-                                            type="password"
-                                            autoFocus
-                                            value={setupUri}
-                                            onChange={(e) => setSetupUri(e.target.value)}
-                                            onKeyDown={(e) => { if (e.key === 'Enter' && setupUri.trim()) applySetup() }}
-                                            placeholder="postgresql://superuser:…@host:5432/db"
-                                            className="w-[28rem] font-mono text-xs"
-                                            spellCheck={false}
-                                        />
-                                        <Button variant="primary" onClick={() => applySetup()} disabled={setupBusy || !setupUri.trim()}>
-                                            {setupBusy ? 'Running...' : 'Run outstanding steps'}
-                                        </Button>
-                                        <Button onClick={() => { setSetupUriOpen(false); setSetupUri('') }} disabled={setupBusy}>
-                                            Cancel
-                                        </Button>
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        <Button onClick={() => loadSetup('Re-checked.')} disabled={setupBusy}>
-                                            I ran them — Re-check
-                                        </Button>
-                                        <Button variant="primary" onClick={() => setSetupUriOpen(true)} disabled={setupBusy}>
-                                            Use a privileged connection…
-                                        </Button>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {setupErr && <p className="whitespace-pre-wrap text-[13px] text-destructive">{setupErr}</p>}
-                        {setupMsg && <p className="text-[13px] text-success">{setupMsg}</p>}
                     </div>
                 )}
             </Card>

@@ -597,9 +597,7 @@ def auto_sync_new_tables(
 CAPTURE_LOG_TABLE = "_snaplicator_ddl_log"
 
 
-def install_capture_triggers(
-    publisher_connstr: str, publication_name: str, execute: bool = True,
-) -> Dict:
+def install_capture_triggers(publisher_connstr: str, publication_name: str) -> Dict:
     """Install wide DDL capture on the publisher.
 
     Creates the _snaplicator_ddl_log outbox table plus two event triggers:
@@ -629,15 +627,16 @@ def install_capture_triggers(
     a migration runs with SET search_path. A function-level SET search_path
     is not an option — it would corrupt the captured search_path value.
     """
-    stmts: List[str] = []
-
     # First, before anything that runs DDL: retire the legacy auto-add event
     # trigger. It adds every new table to the publication unconditionally, so
     # against a FOR ALL TABLES publication it raises and takes the CREATE
     # TABLE with it — including the CREATE TABLE below, which would leave
     # install unable to bootstrap itself. The trigger set this installs is
     # dropped and recreated at the end as before.
-    stmts.append("DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;")
+    _run_publisher_sql(
+        publisher_connstr,
+        "DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;",
+    )
 
     log_table_sql = f"""
 CREATE TABLE IF NOT EXISTS public.{CAPTURE_LOG_TABLE} (
@@ -652,44 +651,7 @@ CREATE TABLE IF NOT EXISTS public.{CAPTURE_LOG_TABLE} (
     search_path text
 );
 """
-    stmts.append(log_table_sql)
-
-    # The capture trigger fires as whoever ran the DDL, so every user who can
-    # run DDL must be able to write the outbox. Without this a migration by a
-    # role that does not own these objects loses its capture — and the log is
-    # the only record that the DDL happened at all.
-    grants_sql = f"""
-GRANT SELECT, INSERT ON public.{CAPTURE_LOG_TABLE} TO PUBLIC;
-GRANT USAGE, SELECT ON SEQUENCE public.{CAPTURE_LOG_TABLE}_id_seq TO PUBLIC;
-"""
-    stmts.append(grants_sql)
-
-    # ALTER PUBLICATION ... ADD TABLE demands ownership of the table, and no
-    # GRANT can confer it — so this one step runs with the privileges of the
-    # role that installed it (which owns the tables) rather than the caller's.
-    # search_path is pinned because SECURITY DEFINER without it lets a caller
-    # shadow an unqualified reference; that is safe here only because this
-    # helper captures nothing, unlike its invoker-rights caller below.
-    auto_add_fn_sql = f"""
-CREATE OR REPLACE FUNCTION public._snaplicator_auto_add_to_pub(p_identity text)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, public
-AS $fn$
-BEGIN
-    EXECUTE format('ALTER PUBLICATION {publication_name} ADD TABLE %s', p_identity);
-EXCEPTION WHEN OTHERS THEN
-    RAISE WARNING 'snaplicator: auto pub add failed for %: %', p_identity, SQLERRM;
-END;
-$fn$;
-"""
-    stmts.append(auto_add_fn_sql)
-
-    # The predecessor of the helper above was an event-trigger function of the
-    # same name. Its trigger is dropped further down, so without this the
-    # 0-arg overload lingers forever as a confusing twin of the live one.
-    stmts.append("DROP FUNCTION IF EXISTS public._snaplicator_auto_add_to_pub();")
+    _run_publisher_sql(publisher_connstr, log_table_sql)
 
     capture_fn_sql = f"""
 CREATE OR REPLACE FUNCTION _snaplicator_capture_ddl()
@@ -767,15 +729,20 @@ BEGIN
                      FROM pg_publication_tables pt
                     WHERE pt.pubname = '{publication_name}')
         LOOP
-            -- Delegated so the ALTER runs as the owner of the tables rather
-            -- than as whoever happened to run the CREATE TABLE.
-            PERFORM public._snaplicator_auto_add_to_pub(tbl.object_identity);
+            BEGIN
+                EXECUTE format(
+                    'ALTER PUBLICATION {publication_name} ADD TABLE %s',
+                    tbl.object_identity);
+            EXCEPTION WHEN OTHERS THEN
+                RAISE WARNING 'snaplicator: auto pub add failed for %: %',
+                    tbl.object_identity, SQLERRM;
+            END;
         END LOOP;
     END IF;
 END;
 $fn$;
 """
-    stmts.append(capture_fn_sql)
+    _run_publisher_sql(publisher_connstr, capture_fn_sql)
 
     drop_fn_sql = f"""
 CREATE OR REPLACE FUNCTION _snaplicator_capture_drop()
@@ -824,7 +791,7 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $fn$;
 """
-    stmts.append(drop_fn_sql)
+    _run_publisher_sql(publisher_connstr, drop_fn_sql)
 
     # DROP + CREATE so function references stay fresh; DDL on event triggers
     # does not itself fire event triggers, so this cannot recurse.
@@ -843,25 +810,12 @@ BEGIN
 END;
 $do$;
 """
-    stmts.append(triggers_sql)
-
-    if not execute:
-        # Caller wants the SQL to hand to someone with the rights to run it.
-        return {
-            "installed": False,
-            "publication": publication_name,
-            "log_table": CAPTURE_LOG_TABLE,
-            "statements": stmts,
-        }
-
-    for stmt in stmts:
-        _run_publisher_sql(publisher_connstr, stmt)
+    _run_publisher_sql(publisher_connstr, triggers_sql)
 
     return {
         "installed": True,
         "publication": publication_name,
         "log_table": CAPTURE_LOG_TABLE,
-        "statements": stmts,
     }
 
 
