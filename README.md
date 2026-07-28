@@ -2,6 +2,23 @@
 
 Snaplicator is a Postgres test-data provisioning toolkit that combines logical replication with btrfs snapshots. A continuously running replica container subscribes to the production publication, so every snapshot or clone reflects near-real-time data without touching the primary. The backend is written in FastAPI, the frontend in Vite + React, and `configs/anonymize.sql` can mask sensitive fields whenever a clone is created.
 
+### Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash
+```
+
+It asks which database to point at. Answer with your primary's connection
+URI — or with `demo`, which seeds a sample publisher so you can see the whole
+thing work without having a database ready.
+
+From there it surveys the host for somewhere to put the btrfs pool, provisions
+it, starts the management plane, and bootstraps the replica. Re-running is
+safe; every step detects what already exists. Flags for unattended runs and
+the settings you can override are in [`deploy/README.md`](deploy/README.md).
+
+Needs a Linux host with Docker — see Prerequisites below.
+
 ### Project map
 - `backend/`: FastAPI services plus Docker/btrfs orchestration
 - `frontend/`: management UI (Vite + React, powered by `pnpm`)
@@ -33,7 +50,10 @@ Reflected changes — and any loop errors — are appended to `~/.snaplicator/sy
 
 ---
 
-## Quick Start
+## Quick Start (from source)
+
+The steps the installer above performs for you, for when you are developing on
+Snaplicator itself or want to place each piece by hand.
 
 ### 1. Create `configs/.env`
 Copy the sample file and edit it with real values:

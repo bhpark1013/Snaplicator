@@ -8,6 +8,28 @@ compose deliberately does not own them.
 ## Quickstart
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash
+```
+
+`install.sh` does everything below — pool, `.env`, compose, replica bootstrap
+— and asks which database to point at. Answer with a connection URI, or with
+`demo` to have it seed a sample publisher first.
+
+Both answers can be given up front instead, which skips the prompt and is
+what unattended runs want:
+
+```sh
+... | sudo bash -s -- "postgres://user:pw@primary:5432/mydb"
+... | sudo bash -s -- --demo
+```
+
+Any setting is overridable by appending `VAR=VALUE`, e.g. `WEB_PORT=18080`,
+`ROOT_DATA_DIR=/mnt/pool`, `FORMAT_DISK=/dev/sdX`, `SNAPLICATOR_REF=<branch>`.
+Re-running is safe: every step detects existing state and reuses it.
+
+### By hand
+
+```sh
 # 0. provision the btrfs pool (stage 1–2 tool; picks/creates the pool)
 cd cli && sudo python3 -m snaplicator_init "postgres://…" --apply && cd ..
 
