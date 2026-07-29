@@ -191,11 +191,34 @@ if [ "$(uname -s)" = "Darwin" ]; then
 
   IP=$(orbctl list 2>/dev/null | awk -v m="$MACHINE" '$1 == m {print $NF}')
   case "$IP" in [0-9]*.[0-9]*.[0-9]*.[0-9]*) ;; *) IP="" ;; esac
+  # what the machine actually settled on, not what was asked for here
+  FAR_PORT=$(orb -m "$MACHINE" -u root sh -c \
+    "sed -n 's/^WEB_PORT=//p' '$SNAP_HOME/deploy/.env' 2>/dev/null | tail -1" 2>/dev/null)
+  case "$FAR_PORT" in ''|*[!0-9]*) FAR_PORT=$WEB_PORT ;; esac
+
   echo
   info "this runs inside the Linux machine '$MACHINE', not on macOS directly:"
   echo "  shell into it:  orb -m $MACHINE"
   echo "  its containers: orb -m $MACHINE docker ps    (plain 'docker ps' will not show them)"
-  [ -n "$IP" ] && echo "  reachable at:   $IP"
+  echo
+
+  # End on the one thing there is to do next. The machine's own summary has
+  # already scrolled past several minutes of build output by now, so the
+  # address is repeated here rather than left for the reader to scroll back
+  # to — and opened, since a UI that has to be found is a UI that is not yet
+  # doing anything for anyone. NO_BROWSER=1 declines.
+  if [ -n "$IP" ]; then
+    UI_URL="http://$IP:$FAR_PORT"
+    if [ "${NO_BROWSER:-0}" = "1" ]; then
+      info "open the UI:  $UI_URL"
+    elif open "$UI_URL" 2>/dev/null; then
+      info "opening the UI in your browser:  $UI_URL"
+    else
+      info "open the UI:  $UI_URL"
+    fi
+  else
+    info "the machine reported no address — 'orbctl list' will show it once it has one"
+  fi
   echo
   exit 0
 fi
