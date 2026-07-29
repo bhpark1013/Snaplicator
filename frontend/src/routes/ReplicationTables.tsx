@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { BootstrapGate } from '@/components/BootstrapGate'
 
 interface TableInfo {
     schema: string
@@ -482,6 +483,14 @@ export function ReplicationTables() {
                     </Button>
                 </div>
             </div>
+
+            {/* Before the first copy this page is the whole install: the
+                choice is made here, and the button that acts on it belongs
+                next to the choice rather than a page away. */}
+            <BootstrapGate
+                onDone={loadTables}
+                hint="Nothing has been copied from the primary yet. Pick the schemas and tables below — whatever is in the publication when the copy starts is what gets replicated, and changing it afterwards means copying again."
+            />
 
             {/* What is happening to this database, in one line. */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">

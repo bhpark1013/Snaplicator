@@ -25,7 +25,7 @@ interface BootstrapStatus {
  * Renders nothing once the replica is subscribed, which is the normal state
  * of a running installation: this is a first-run screen, not a dashboard.
  */
-export function BootstrapGate({ onDone }: { onDone?: () => void }) {
+export function BootstrapGate({ onDone, hint }: { onDone?: () => void; hint?: React.ReactNode }) {
     const [status, setStatus] = useState<BootstrapStatus | null>(null)
     const [starting, setStarting] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -113,8 +113,12 @@ export function BootstrapGate({ onDone }: { onDone?: () => void }) {
                         Replication has not started yet
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                        Nothing has been copied from the primary. The first copy is what fixes
-                        what gets replicated, so it waits for you to say go.
+                        {hint ?? (
+                            <>
+                                Nothing has been copied from the primary. The first copy is what fixes
+                                what gets replicated, so it waits for you to say go.
+                            </>
+                        )}
                     </p>
                 </>
             )}

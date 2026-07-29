@@ -308,15 +308,52 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # the pool menu over there prints its prompt and then waits on a terminal
   # nothing types into: the install hangs with no way to answer it, and no
   # test on the far side can tell the two cases apart.
+  #
+  # Handing it over means taking it back. orb puts this terminal in raw mode
+  # to forward keystrokes, and a run that ends badly ends without putting it
+  # back: the shell returns with echo and line editing off, and whatever the
+  # far side had in flight arrives as something typed at the prompt —
+  #
+  #     zsh: command not found: Creating
+  #
+  # which is the last of an error message being executed instead of read. The
+  # settings are saved here and restored on every exit, including the abrupt
+  # ones, so that a failure can be seen at all.
+  #
+  # Everything is also kept in a log inside the machine. A terminal that has
+  # scrolled, or has been overwritten by a build's progress display, is not a
+  # record — and the failure worth reading is usually the one that ended the
+  # run, i.e. the one furthest up.
   info "continuing inside '$MACHINE'..."
+  FAR_LOG=/var/log/snaplicator-install.log
+  FAR_CMD="curl -fsSL '$INSTALLER_URL' | bash -s -- $FWD"
+  # script(1) keeps a pty, so the far side still sees a terminal: its prompts
+  # still find /dev/tty and its progress ticker still knows it has a reader.
+  # -e returns the child's exit status rather than script's own.
+  FAR_CMD="if command -v script >/dev/null 2>&1; then script -qefc \"$FAR_CMD\" $FAR_LOG; else $FAR_CMD 2>&1 | tee $FAR_LOG; fi"
+
+  RC=0
   if { : < /dev/tty; } 2>/dev/null; then
-    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" \
-      bash -c "curl -fsSL '$INSTALLER_URL' | bash -s -- $FWD" < /dev/tty || exit $?
+    TTY_SAVED=$(stty -g < /dev/tty 2>/dev/null || true)
+    if [ -n "$TTY_SAVED" ]; then
+      trap 'stty "$TTY_SAVED" < /dev/tty 2>/dev/null || true' EXIT INT TERM
+    fi
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" bash -c "$FAR_CMD" < /dev/tty || RC=$?
+    if [ -n "$TTY_SAVED" ]; then
+      stty "$TTY_SAVED" < /dev/tty 2>/dev/null || true
+      trap - EXIT INT TERM
+    fi
   else
     # No terminal here means orb allocates none there either, so the far side
     # sees no /dev/tty and takes its own recommendation.
-    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" \
-      bash -c "curl -fsSL '$INSTALLER_URL' | bash -s -- $FWD" < /dev/null || exit $?
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" bash -c "$FAR_CMD" < /dev/null || RC=$?
+  fi
+  if [ "$RC" != "0" ]; then
+    echo >&2
+    info "the install failed inside '$MACHINE'. Its output was kept — the error is near the end:" >&2
+    echo "  orb -m $MACHINE tail -40 $FAR_LOG" >&2
+    echo "  orb -m $MACHINE less $FAR_LOG        # all of it" >&2
+    exit "$RC"
   fi
 
   IP=$(orbctl list 2>/dev/null | awk -v m="$MACHINE" '$1 == m {print $NF}')
@@ -338,7 +375,13 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # to — and opened, since a UI that has to be found is a UI that is not yet
   # doing anything for anyone. NO_BROWSER=1 declines.
   if [ -n "$IP" ]; then
+    # Land on the page with the decision on it, not on a list of the clones
+    # that cannot exist yet. Once the replica is up, home is the right page
+    # again — so this asks the machine which of the two situations it is in.
     UI_URL="http://$IP:$FAR_PORT"
+    if ! orb -m "$MACHINE" -u root docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true; then
+      UI_URL="$UI_URL/replication"
+    fi
     if [ "${NO_BROWSER:-0}" = "1" ]; then
       info "open the UI:  $UI_URL"
     elif open "$UI_URL" 2>/dev/null; then
@@ -721,7 +764,7 @@ if [ "$BOOTSTRAPPED" = "1" ]; then
 else
   # No replica address to print: nothing has been copied yet, and saying
   # otherwise would be advertising a database that does not exist.
-  echo "  next:      open the UI, choose what to replicate, and start it"
+  echo "  next:      http://${IP:-<host>}:$WEB_PORT/replication — choose what to replicate, then start it"
   echo "             (unattended: re-run with START_REPLICATION=1 to replicate everything)"
 fi
 echo "  pool:      $ROOT_DATA_DIR"
