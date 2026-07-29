@@ -38,6 +38,40 @@ set -euo pipefail
 info() { printf '\033[1;32m[snaplicator]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[snaplicator] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Run a step that has nothing to say while it works, and say something on its
+# behalf. A minutes-long silence is indistinguishable from a hang, and the
+# reader's only recourse is to kill an install that was fine. The seconds
+# ticking up are the whole point: they are what a progress bar would be for
+# work whose total is not knowable in advance (apt decides how many packages
+# a machine needs, and how fast the mirror feels like being).
+#
+# The output is kept, not shown, and printed only if the step fails — the
+# reason to hide it in the first place was that it is noise until it isn't.
+run_step() {
+  local label=$1; shift
+  local log rc=0 pid start=$SECONDS i=0 frames='|/-\'
+  log=$(mktemp "${TMPDIR:-/tmp}/snaplicator-step.XXXXXX")
+  "$@" >"$log" 2>&1 &
+  pid=$!
+  if [ -t 2 ]; then
+    while kill -0 "$pid" 2>/dev/null; do
+      printf '\r  %s %s (%ds)' "${frames:$i:1}" "$label" "$((SECONDS - start))" >&2
+      i=$(( (i + 1) % 4 ))
+      sleep 0.5
+    done
+    printf '\r\033[K' >&2
+  fi
+  wait "$pid" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '\033[1;31m[snaplicator] ERROR:\033[0m %s failed after %ds\n' "$label" "$((SECONDS - start))" >&2
+    tail -20 "$log" >&2
+  else
+    info "  $label — $((SECONDS - start))s"
+  fi
+  rm -f "$log"
+  return "$rc"
+}
+
 # Ask which database to point at, unless it was given. A connection URI
 # carries a password, and an argument is the worst place to put one: it is
 # visible in `ps` for the whole run and it lands in the invoking shell's
@@ -141,7 +175,8 @@ if [ "$(uname -s)" = "Darwin" ]; then
     info "reusing the Linux machine '$MACHINE'"
   else
     info "creating the Linux machine '$MACHINE' ($MACHINE_IMAGE)..."
-    orbctl create "$MACHINE_IMAGE" "$MACHINE" >/dev/null || die "could not create the machine '$MACHINE'"
+    run_step "downloading and unpacking $MACHINE_IMAGE" \
+      orbctl create "$MACHINE_IMAGE" "$MACHINE" || die "could not create the machine '$MACHINE'"
   fi
   orbctl start "$MACHINE" >/dev/null 2>&1 || true
 
@@ -151,12 +186,20 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # spares the far side from failing its own prerequisite check after the
   # machine has already been built. The machine's root filesystem is already
   # btrfs, so the pool needs no disk of its own.
+  # Split into steps that are named as they run, rather than one silent
+  # command: this is the longest wait in the install (a package index and
+  # ~150 MB of docker over whatever the mirror gives you), and the reader
+  # should be able to see which part of it is taking the time.
   info "preparing '$MACHINE' (docker, btrfs-progs, psql)..."
-  orb -m "$MACHINE" -u root bash -c '
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq >/dev/null 2>&1
-    apt-get install -y -qq docker.io btrfs-progs postgresql-client >/dev/null 2>&1
-    systemctl start docker' || die "could not prepare '$MACHINE'"
+  run_step "reading package lists" \
+    orb -m "$MACHINE" -u root env DEBIAN_FRONTEND=noninteractive \
+      apt-get update -qq || die "could not prepare '$MACHINE' (apt-get update)"
+  run_step "installing docker, btrfs-progs, postgresql-client" \
+    orb -m "$MACHINE" -u root env DEBIAN_FRONTEND=noninteractive \
+      apt-get install -y -qq docker.io btrfs-progs postgresql-client \
+      || die "could not prepare '$MACHINE' (apt-get install)"
+  run_step "starting docker" \
+    orb -m "$MACHINE" -u root systemctl start docker || die "could not start docker in '$MACHINE'"
 
   # Hand off to the same script, running as root inside the machine. The URI
   # travels in the environment, not argv: this script already honours a
