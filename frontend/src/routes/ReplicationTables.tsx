@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronDown, ChevronRight, Eye, EyeOff, Search } from 'lucide-react'
 
@@ -137,31 +137,64 @@ function formatRows(n: number) {
     return String(n)
 }
 
-/** A checkbox that can say "some of these", which a schema row usually has to. */
-function TriCheckbox({
-    checked,
-    indeterminate,
+const MODE_LABEL: Record<TableMode, string> = {
+    replicated: 'Replicate',
+    fdw: 'Live',
+    none: 'Exclude',
+}
+
+function splitFqn(fqn: string) {
+    const [schema, ...rest] = fqn.split('.')
+    return { schema, name: rest.join('.') }
+}
+
+/**
+ * The three things a table can be, as one control.
+ *
+ * Not a checkbox: "replicate or not" was never the question — a table can
+ * also be read live, and those two are alternatives rather than a flag with
+ * an extra. Showing them side by side is what makes them look like the
+ * choice they are, and makes the current one legible at a glance.
+ *
+ * `value` is null on a schema whose tables disagree; nothing is highlighted
+ * then, and pressing one settles the whole schema.
+ */
+function ModeSwitch({
+    value,
+    fdwReady,
     onChange,
-    className,
 }: {
-    checked: boolean
-    indeterminate?: boolean
-    onChange: () => void
-    className?: string
+    value: TableMode | null
+    fdwReady: boolean
+    onChange: (mode: TableMode) => void
 }) {
-    const ref = useRef<HTMLInputElement>(null)
-    useEffect(() => {
-        if (ref.current) ref.current.indeterminate = !!indeterminate && !checked
-    }, [indeterminate, checked])
+    const opts: { mode: TableMode; label: string; on: string }[] = [
+        { mode: 'replicated', label: 'Replicate', on: 'bg-success/15 text-success border-success/40' },
+        { mode: 'fdw', label: 'Live', on: 'bg-purple/15 text-purple border-purple/40' },
+        { mode: 'none', label: 'Exclude', on: 'bg-white/[0.06] text-foreground border-border-strong' },
+    ]
     return (
-        <input
-            ref={ref}
-            type="checkbox"
-            checked={checked}
-            onChange={onChange}
-            onClick={(e) => e.stopPropagation()}
-            className={cn('cursor-pointer accent-primary', className)}
-        />
+        <div className="flex overflow-hidden rounded-md border border-border" onClick={(e) => e.stopPropagation()}>
+            {opts.map((o) => {
+                const disabled = o.mode === 'fdw' && !fdwReady
+                const active = value === o.mode
+                return (
+                    <button
+                        key={o.mode}
+                        disabled={disabled}
+                        title={disabled ? 'Reading live needs a login on the primary — see "Live reads (FDW)" above' : undefined}
+                        onClick={() => onChange(o.mode)}
+                        className={cn(
+                            'border-r border-border px-2 py-0.5 text-[11.5px] leading-5 transition-colors last:border-r-0',
+                            active ? o.on : 'text-muted-foreground hover:bg-white/[0.04] hover:text-foreground',
+                            disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground',
+                        )}
+                    >
+                        {o.label}
+                    </button>
+                )
+            })}
+        </div>
     )
 }
 
@@ -220,11 +253,16 @@ export function ReplicationTables() {
 
     const [search, setSearch] = useState('')
     const [filter, setFilter] = useState<FilterTab>('all')
-    const [selected, setSelected] = useState<Set<string>>(new Set())
     const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
+    // Only the changes are held, never the whole answer: the answer is what
+    // the publisher already says, and everything starts included because
+    // that is what a fresh publication does. This page is where things are
+    // taken out, so an empty map means "leave it exactly as it is".
+    const [overrides, setOverrides] = useState<Map<string, TableMode>>(new Map())
+
     const [actionLoading, setActionLoading] = useState(false)
-    const [confirmAction, setConfirmAction] = useState<{ type: 'add' | 'remove' | 'fdw_add' | 'fdw_remove'; tables: string[] } | null>(null)
+    const [confirmOpen, setConfirmOpen] = useState(false)
     const [refreshLoading, setRefreshLoading] = useState(false)
 
     const [fdwSet, setFdwSet] = useState<Set<string>>(new Set())
@@ -240,7 +278,7 @@ export function ReplicationTables() {
             .then((r) => (r.ok ? r.json() : Promise.reject(r)))
             .then((data: TableInfo[]) => {
                 setTables(data)
-                setSelected(new Set())
+                setOverrides(new Map())
                 // Everything open is unreadable past a handful of schemas, and
                 // everything shut hides the only thing the page is for. Open
                 // what fits on a screen; shut the rest.
@@ -291,15 +329,36 @@ export function ReplicationTables() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
+    // FDW needs a role on the primary to read as. Without one the option is
+    // not a choice the user has, so it is shown as unavailable with the
+    // reason rather than offered and then refused by the server.
+    const fdwReady = !!(fdw?.server?.options?.host)
+
+    const currentMode = (t: TableInfo): TableMode => tableMode(t, fdwSet)
+    const modeOf = (t: TableInfo): TableMode => overrides.get(`${t.schema}.${t.table}`) ?? currentMode(t)
+
+    const setMode = (fqns: string[], mode: TableMode) =>
+        setOverrides((prev) => {
+            const next = new Map(prev)
+            for (const fqn of fqns) {
+                const t = tables.find((x) => `${x.schema}.${x.table}` === fqn)
+                if (!t) continue
+                if (currentMode(t) === mode) next.delete(fqn)
+                else next.set(fqn, mode)
+            }
+            return next
+        })
+
     const filtered = useMemo(() => {
         let list = tables
-        if (filter !== 'all') list = list.filter((t) => tableMode(t, fdwSet) === filter)
+        if (filter !== 'all') list = list.filter((t) => modeOf(t) === filter)
         if (search.trim()) {
             const q = search.trim().toLowerCase()
             list = list.filter((t) => `${t.schema}.${t.table}`.toLowerCase().includes(q))
         }
         return list
-    }, [tables, filter, search, fdwSet])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tables, filter, search, fdwSet, overrides])
 
     // Grouped by schema, which is the shape the database has and the shape the
     // decision has: whole schemas are what people actually keep or drop, and
@@ -313,30 +372,37 @@ export function ReplicationTables() {
         }
         return Array.from(map.entries())
             .map(([schema, items]) => {
-                let replicated = 0, fdwCount = 0, rows = 0, viaSchema = 0, missingOnSub = 0
+                let replicated = 0, fdwCount = 0, excluded = 0, rows = 0, changed = 0, missingOnSub = 0
                 for (const t of items) {
-                    const m = tableMode(t, fdwSet)
+                    const m = modeOf(t)
                     if (m === 'replicated') replicated++
                     else if (m === 'fdw') fdwCount++
+                    else excluded++
                     rows += t.estimated_rows
-                    if (t.pub_via === 'schema') viaSchema++
+                    if (m !== currentMode(t)) changed++
                     if (t.in_publication && !t.in_subscriber) missingOnSub++
                 }
-                return { schema, items: items.sort((a, b) => a.table.localeCompare(b.table)), replicated, fdwCount, rows, viaSchema, missingOnSub }
+                return {
+                    schema,
+                    items: items.slice().sort((a, b) => a.table.localeCompare(b.table)),
+                    replicated, fdwCount, excluded, rows, changed, missingOnSub,
+                }
             })
             .sort((a, b) => a.schema.localeCompare(b.schema))
-    }, [filtered, fdwSet])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [filtered, fdwSet, overrides])
 
     const stats = useMemo(() => {
         let replicated = 0, fdwCount = 0, none = 0
         for (const t of tables) {
-            const m = tableMode(t, fdwSet)
+            const m = modeOf(t)
             if (m === 'replicated') replicated++
             else if (m === 'fdw') fdwCount++
             else none++
         }
         return { total: tables.length, replicated, fdw: fdwCount, none, schemas: new Set(tables.map((t) => t.schema)).size }
-    }, [tables, fdwSet])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tables, fdwSet, overrides])
 
     // A search is a request to see what matched, so matching schemas open
     // themselves and the collapse state is left alone underneath.
@@ -351,95 +417,76 @@ export function ReplicationTables() {
             return next
         })
 
-    const toggleSelect = (fqn: string) =>
-        setSelected((prev) => {
-            const next = new Set(prev)
-            if (next.has(fqn)) next.delete(fqn)
-            else next.add(fqn)
-            return next
-        })
-
-    const setMany = (fqns: string[], on: boolean) =>
-        setSelected((prev) => {
-            const next = new Set(prev)
-            for (const f of fqns) {
-                if (on) next.add(f)
-                else next.delete(f)
-            }
-            return next
-        })
-
-    const selectedList = Array.from(selected)
-    const byFqn = useMemo(() => {
-        const m = new Map<string, TableInfo>()
-        for (const t of tables) m.set(`${t.schema}.${t.table}`, t)
-        return m
-    }, [tables])
-
-    const selectedInPub = selectedList.filter((f) => byFqn.get(f)?.in_publication && byFqn.get(f)?.pub_via === 'table')
-    const selectedSchemaLevel = selectedList.filter((f) => byFqn.get(f)?.in_publication && byFqn.get(f)?.pub_via === 'schema')
-    const selectedNotInPub = selectedList.filter((f) => byFqn.get(f) && !byFqn.get(f)!.in_publication)
-    // FDW is only addable to a table that is not published: the same name
-    // cannot be both a local replicated table and a foreign one.
-    const selectedFdwAddable = selectedList.filter((f) => byFqn.get(f) && !byFqn.get(f)!.in_publication && !fdwSet.has(f))
-    const selectedFdwRemovable = selectedList.filter((f) => fdwSet.has(f))
-
-    const executeFdwAction = async (type: 'fdw_add' | 'fdw_remove', tableList: string[]) => {
-        setActionLoading(true)
-        setError(null)
-        setMessage(null)
-        try {
-            const method = type === 'fdw_add' ? 'POST' : 'DELETE'
-            const payload = {
-                tables: tableList.map((fqn) => {
-                    const [schema, ...rest] = fqn.split('.')
-                    return { schema, name: rest.join('.') }
-                }),
-            }
-            const r = await fetch(`${base}/replication/fdw/tables`, {
-                method,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            })
-            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
-            const res = await r.json()
-            const actionWord = type === 'fdw_add' ? 'Mapped as foreign' : 'Unmapped'
-            const affected = type === 'fdw_add' ? res.added : res.removed
-            const skipped = res.skipped || res.not_found || []
-            let msg = `${actionWord}: ${affected?.length || 0} table(s)`
-            if (skipped.length > 0) msg += ` (${skipped.length} skipped)`
-            setMessage(msg)
-            setConfirmAction(null)
-            loadFdw()
-        } catch (e: any) {
-            setError(String(e?.message || e))
-        } finally {
-            setActionLoading(false)
+    const pending = useMemo(() => {
+        const out: { fqn: string; from: TableMode; to: TableMode }[] = []
+        for (const [fqn, to] of overrides) {
+            const t = tables.find((x) => `${x.schema}.${x.table}` === fqn)
+            if (!t) continue
+            const from = currentMode(t)
+            if (from !== to) out.push({ fqn, from, to })
         }
-    }
+        return out.sort((a, b) => a.fqn.localeCompare(b.fqn))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [overrides, tables, fdwSet])
 
-    const executeAction = async (type: 'add' | 'remove', tableList: string[]) => {
+    const apply = async () => {
         setActionLoading(true)
         setError(null)
         setMessage(null)
         try {
-            const method = type === 'add' ? 'POST' : 'DELETE'
-            const r = await fetch(`${base}/replication/tables`, {
-                method,
+            const wantFdw = new Set<string>()
+            const wantReplicate: string[] = []
+            for (const t of tables) {
+                const fqn = `${t.schema}.${t.table}`
+                const m = modeOf(t)
+                if (m === 'fdw') wantFdw.add(fqn)
+                else if (m === 'replicated') wantReplicate.push(fqn)
+            }
+            // A schema follows its future tables only when nothing in it is
+            // being left out — that is the server's rule, mirrored here so the
+            // request says what it means.
+            const autoSchemas = Array.from(new Set(tables.map((t) => t.schema))).filter((s) =>
+                tables.filter((t) => t.schema === s).every((t) => modeOf(t) === 'replicated'),
+            )
+
+            // Unmap first, publish second, map last: a table cannot be both a
+            // foreign table and a published one, so each change passes through
+            // the state where it is neither.
+            const leavingFdw = Array.from(fdwSet).filter((f) => !wantFdw.has(f))
+            if (leavingFdw.length) {
+                const r = await fetch(`${base}/replication/fdw/tables`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tables: leavingFdw.map(splitFqn) }),
+                })
+                if (!r.ok) throw new Error(`unmapping FDW: ${r.status} ${await r.text()}`)
+            }
+
+            const sel = await fetch(`${base}/replication/selection`, {
+                method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tables: tableList, refresh: true }),
+                body: JSON.stringify({ tables: wantReplicate, auto_schemas: autoSchemas }),
             })
-            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
-            const res = await r.json()
-            const actionWord = type === 'add' ? 'Now replicating' : 'Stopped replicating'
-            const affected = type === 'add' ? res.added : res.removed
-            const skipped = res.skipped || []
-            let msg = `${actionWord}: ${affected?.length || 0} table(s)`
-            if (skipped.length > 0) msg += ` (${skipped.length} skipped)`
-            if (res.refresh?.refreshed) msg += ' + subscription refreshed'
-            setMessage(msg)
-            setConfirmAction(null)
+            if (!sel.ok) throw new Error(`publication: ${sel.status} ${await sel.text()}`)
+            const selRes = await sel.json()
+
+            const joiningFdw = Array.from(wantFdw).filter((f) => !fdwSet.has(f))
+            if (joiningFdw.length) {
+                const r = await fetch(`${base}/replication/fdw/tables`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tables: joiningFdw.map(splitFqn) }),
+                })
+                if (!r.ok) throw new Error(`mapping FDW: ${r.status} ${await r.text()}`)
+            }
+
+            setMessage(
+                `Publication now ${selRes.form} — ${selRes.count} table(s)` +
+                (selRes.subscription_refreshed ? ', subscription refreshed' : ''),
+            )
+            setConfirmOpen(false)
             loadTables()
+            loadFdw()
         } catch (e: any) {
             setError(String(e?.message || e))
         } finally {
@@ -466,7 +513,7 @@ export function ReplicationTables() {
     const fdwTarget = fdwOpts.host ? `${fdwOpts.host}:${fdwOpts.port || 5432}/${fdwOpts.dbname || ''}` : null
 
     return (
-        <div className="mx-auto max-w-5xl animate-page-in px-6 pb-32 pt-6">
+        <div className={cn('mx-auto max-w-5xl animate-page-in px-6 pt-6', pending.length ? 'pb-32' : 'pb-20')}>
             <div className="mb-4 flex items-center justify-between gap-4 border-b border-border pb-4">
                 <div className="flex items-center gap-3">
                     <Button asChild size="sm">
@@ -489,14 +536,14 @@ export function ReplicationTables() {
                 next to the choice rather than a page away. */}
             <BootstrapGate
                 onDone={loadTables}
-                hint="Nothing has been copied from the primary yet. Pick the schemas and tables below — whatever is in the publication when the copy starts is what gets replicated, and changing it afterwards means copying again."
+                hint="Nothing has been copied from the primary yet. Everything below is included to begin with — take out what you do not want, then start. Whatever is included when the copy starts is what gets replicated."
             />
 
             {/* What is happening to this database, in one line. */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
                 <span><span className="font-semibold text-success">{stats.replicated}</span> <span className="text-muted-foreground">replicated</span></span>
                 <span><span className="font-semibold text-purple">{stats.fdw}</span> <span className="text-muted-foreground">live (FDW)</span></span>
-                <span><span className="font-semibold">{stats.none}</span> <span className="text-muted-foreground">not replicated</span></span>
+                <span><span className="font-semibold">{stats.none}</span> <span className="text-muted-foreground">excluded</span></span>
                 <span className="text-muted-foreground">·</span>
                 <span className="text-muted-foreground">{stats.total} tables in {stats.schemas} schemas</span>
             </div>
@@ -533,35 +580,46 @@ export function ReplicationTables() {
             </Disclosure>
 
             <Disclosure
-                title="Foreign tables (FDW)"
-                summary={fdwTarget ? `${fdw?.live_foreign_tables?.length || 0} live · ${fdwTarget}` : 'not configured'}
+                title="Live reads (FDW)"
+                summary={fdwReady ? `${fdw?.live_foreign_tables?.length || 0} live · ${fdwTarget}` : 'not set up — no reader role'}
+                defaultOpen={!fdwReady && pending.some((p) => p.to === 'fdw')}
             >
                 <p className="mb-3 text-[13px] leading-relaxed text-muted-foreground">
-                    A foreign table is read straight from the primary at query time — always current, never
-                    copied, and only as fast as the link. Replication is the opposite trade. A table can be
+                    A live table is read straight from the primary when queried — always current, never
+                    copied, and only as fast as the link. Replication is the opposite trade. A table is
                     one or the other, never both.
                 </p>
-                {fdw ? (
+                {fdwReady ? (
                     <div className="grid gap-6 sm:grid-cols-2">
                         <dl className="grid grid-cols-[92px_1fr] gap-y-1 text-[13px]">
-                            <dt className="text-muted-foreground">Server</dt><dd className="font-mono">{fdw.server?.name || '—'}</dd>
-                            <dt className="text-muted-foreground">Target</dt><dd className="font-mono">{fdwTarget || '—'}</dd>
-                            <dt className="text-muted-foreground">Live tables</dt><dd className="font-mono">{fdw.live_foreign_tables?.length || 0}</dd>
-                            <dt className="text-muted-foreground">Config</dt><dd className="truncate font-mono text-xs" title={fdw.yaml_path}>{fdw.yaml_path}</dd>
+                            <dt className="text-muted-foreground">Server</dt><dd className="font-mono">{fdw?.server?.name || '—'}</dd>
+                            <dt className="text-muted-foreground">Reads from</dt><dd className="font-mono">{fdwTarget}</dd>
+                            <dt className="text-muted-foreground">Live tables</dt><dd className="font-mono">{fdw?.live_foreign_tables?.length || 0}</dd>
+                            <dt className="text-muted-foreground">Config</dt><dd className="truncate font-mono text-xs" title={fdw?.yaml_path}>{fdw?.yaml_path}</dd>
                         </dl>
                         <div>
                             <div className="mb-1 text-[13px] font-semibold">Whole schemas imported</div>
-                            {fdw.schemas?.length ? (
+                            {fdw?.schemas?.length ? (
                                 <div className="flex flex-wrap gap-1">
                                     {fdw.schemas.map((s) => <Badge key={s.name} variant="purple">{s.name}</Badge>)}
                                 </div>
                             ) : (
-                                <div className="text-[13px] text-muted-foreground">None — foreign tables are listed one by one.</div>
+                                <div className="text-[13px] text-muted-foreground">None — live tables are listed one by one.</div>
                             )}
                         </div>
                     </div>
                 ) : (
-                    <div className="text-[13px] text-muted-foreground">No FDW configuration found.</div>
+                    <div className="text-[13px] leading-relaxed">
+                        <p className="mb-2">
+                            Reading live needs its own login on the primary — replication's connection cannot
+                            be reused, because a foreign table is queried as whoever asks, whenever they ask.
+                            Until one is set, <span className="font-medium">Live</span> is not offered.
+                        </p>
+                        <p className="mb-1 text-muted-foreground">Give it a read-only role and restart the stack:</p>
+                        <pre className="overflow-x-auto rounded-md bg-secondary p-2 font-mono text-[11.5px] leading-relaxed">{`# on the machine running Snaplicator
+printf 'FDW_USER=readonly_user\\nFDW_PASSWORD=…\\n' >> /opt/snaplicator/deploy/.env
+cd /opt/snaplicator/deploy && docker compose -p snaplicator up -d`}</pre>
+                    </div>
                 )}
             </Disclosure>
 
@@ -582,8 +640,8 @@ export function ReplicationTables() {
                     {([
                         ['all', `All (${stats.total})`],
                         ['replicated', `Replicated (${stats.replicated})`],
-                        ['fdw', `FDW (${stats.fdw})`],
-                        ['none', `Not replicated (${stats.none})`],
+                        ['fdw', `Live (${stats.fdw})`],
+                        ['none', `Excluded (${stats.none})`],
                     ] as [FilterTab, string][]).map(([key, label]) => (
                         <Button key={key} size="sm" variant={filter === key ? 'primary' : 'ghost'} onClick={() => setFilter(key)}>
                             {label}
@@ -612,68 +670,61 @@ export function ReplicationTables() {
 
                 {groups.map((g) => {
                     const fqns = g.items.map((t) => `${t.schema}.${t.table}`)
-                    const selectedHere = fqns.filter((f) => selected.has(f)).length
                     const open = isOpen(g.schema)
+                    const schemaMode: TableMode | null =
+                        g.replicated === g.items.length ? 'replicated'
+                            : g.fdwCount === g.items.length ? 'fdw'
+                                : g.excluded === g.items.length ? 'none'
+                                    : null
                     return (
                         <div key={g.schema} className="border-b border-border last:border-b-0">
                             <div
                                 onClick={() => toggleSchema(g.schema)}
                                 className="flex cursor-pointer items-center gap-2 bg-white/[0.015] px-3 py-2 transition-colors hover:bg-white/[0.035]"
                             >
-                                <TriCheckbox
-                                    checked={selectedHere === fqns.length && fqns.length > 0}
-                                    indeterminate={selectedHere > 0}
-                                    onChange={() => setMany(fqns, selectedHere !== fqns.length)}
-                                />
                                 {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
                                 <span className="font-mono text-[13px] font-semibold">{g.schema}</span>
                                 <span className="text-xs text-muted-foreground">{g.items.length} tables</span>
+                                {g.changed > 0 && <Badge variant="info">{g.changed} changed</Badge>}
+                                {g.missingOnSub > 0 && (
+                                    <Badge variant="warning" title="Published but not yet present on the subscriber">
+                                        {g.missingOnSub} not copied
+                                    </Badge>
+                                )}
 
-                                <div className="ml-auto flex items-center gap-1.5">
-                                    {g.viaSchema > 0 && (
-                                        <Badge variant="warning" title="Published as a whole schema — individual tables inside cannot be removed">
-                                            schema-level
-                                        </Badge>
+                                <div className="ml-auto flex items-center gap-3">
+                                    {schemaMode === null && (
+                                        <span className="text-xs text-muted-foreground">
+                                            {g.replicated} replicated · {g.fdwCount} live · {g.excluded} excluded
+                                        </span>
                                     )}
-                                    {g.missingOnSub > 0 && (
-                                        <Badge variant="warning" title="Published but not yet present on the subscriber">
-                                            {g.missingOnSub} not copied
-                                        </Badge>
-                                    )}
-                                    {g.replicated > 0 && <Badge variant="success">{g.replicated} replicated</Badge>}
-                                    {g.fdwCount > 0 && <Badge variant="purple">{g.fdwCount} FDW</Badge>}
+                                    <ModeSwitch
+                                        value={schemaMode}
+                                        fdwReady={fdwReady}
+                                        onChange={(m) => setMode(fqns, m)}
+                                    />
                                     <span className="w-16 text-right font-mono text-xs text-muted-foreground">{formatRows(g.rows)}</span>
                                 </div>
                             </div>
 
                             {open && g.items.map((t) => {
                                 const fqn = `${t.schema}.${t.table}`
-                                const isSelected = selected.has(fqn)
-                                const mode = tableMode(t, fdwSet)
+                                const m = modeOf(t)
+                                const changed = m !== currentMode(t)
                                 return (
                                     <div
                                         key={fqn}
-                                        onClick={() => toggleSelect(fqn)}
                                         className={cn(
-                                            'flex cursor-pointer items-center gap-2 border-t border-border/60 py-1.5 pl-9 pr-3 text-[13px] transition-colors',
-                                            isSelected ? 'bg-white/[0.05]' : 'hover:bg-white/[0.02]',
+                                            'flex items-center gap-2 border-t border-border/60 py-1.5 pl-9 pr-3 text-[13px]',
+                                            changed && 'bg-info/[0.06]',
                                         )}
                                     >
-                                        <TriCheckbox checked={isSelected} onChange={() => toggleSelect(fqn)} />
                                         <span className="font-mono">{t.table}</span>
-
-                                        {/* Only what disagrees with the mode is worth a second badge. */}
                                         {t.in_publication && !t.in_subscriber && (
                                             <Badge variant="warning" title="In the publication, but not on the subscriber yet">not copied</Badge>
                                         )}
-                                        {t.pub_via === 'schema' && (
-                                            <Badge variant="neutral" title="Published because its whole schema is — cannot be removed on its own">via schema</Badge>
-                                        )}
-
                                         <div className="ml-auto flex items-center gap-3">
-                                            <Badge variant={mode === 'replicated' ? 'success' : mode === 'fdw' ? 'purple' : 'neutral'} className="min-w-[92px] justify-center">
-                                                {mode === 'replicated' ? 'Replicated' : mode === 'fdw' ? 'Live (FDW)' : 'Not replicated'}
-                                            </Badge>
+                                            <ModeSwitch value={m} fdwReady={fdwReady} onChange={(next) => setMode([fqn], next)} />
                                             <span className="w-16 text-right font-mono text-xs text-muted-foreground">{formatRows(t.estimated_rows)}</span>
                                         </div>
                                     </div>
@@ -709,92 +760,57 @@ export function ReplicationTables() {
                 )}
             </Disclosure>
 
-            {/* Actions follow the selection instead of sitting there greyed out:
-                a button that cannot apply to what is selected is not shown. */}
-            {selected.size > 0 && (
+            {/* Nothing is sent until it is asked for: the switches are a draft
+                of the publication, and this is where the draft becomes it. */}
+            {pending.length > 0 && (
                 <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background/95 backdrop-blur">
                     <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-2 px-6 py-3">
                         <span className="text-[13px]">
-                            <span className="font-semibold">{selected.size}</span> <span className="text-muted-foreground">selected</span>
+                            <span className="font-semibold">{pending.length}</span>{' '}
+                            <span className="text-muted-foreground">change{pending.length === 1 ? '' : 's'} not applied</span>
                         </span>
-                        <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
-                        <span className="mx-1 h-6 w-px bg-border-strong" />
-
-                        {selectedNotInPub.length > 0 && (
-                            <Button size="sm" variant="primary" disabled={actionLoading}
-                                onClick={() => setConfirmAction({ type: 'add', tables: selectedNotInPub })}>
-                                Replicate ({selectedNotInPub.length})
-                            </Button>
-                        )}
-                        {selectedInPub.length > 0 && (
-                            <Button size="sm" variant="destructive" disabled={actionLoading}
-                                onClick={() => setConfirmAction({ type: 'remove', tables: selectedInPub })}>
-                                Stop replicating ({selectedInPub.length})
-                            </Button>
-                        )}
-                        {selectedFdwAddable.length > 0 && (
-                            <Button size="sm" disabled={actionLoading}
-                                onClick={() => setConfirmAction({ type: 'fdw_add', tables: selectedFdwAddable })}>
-                                Read live via FDW ({selectedFdwAddable.length})
-                            </Button>
-                        )}
-                        {selectedFdwRemovable.length > 0 && (
-                            <Button size="sm" variant="destructive" disabled={actionLoading}
-                                onClick={() => setConfirmAction({ type: 'fdw_remove', tables: selectedFdwRemovable })}>
-                                Unmap FDW ({selectedFdwRemovable.length})
-                            </Button>
-                        )}
-
-                        {selectedSchemaLevel.length > 0 && (
-                            <span className="text-xs text-warning">
-                                {selectedSchemaLevel.length} published via their schema — PostgreSQL cannot drop those individually
-                            </span>
-                        )}
+                        <Button size="sm" variant="ghost" onClick={() => setOverrides(new Map())} disabled={actionLoading}>
+                            Discard
+                        </Button>
+                        <Button size="sm" variant="primary" onClick={() => setConfirmOpen(true)} disabled={actionLoading}>
+                            Apply
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                            {pending.filter((p) => p.to === 'none').length} excluded ·{' '}
+                            {pending.filter((p) => p.to === 'fdw').length} live ·{' '}
+                            {pending.filter((p) => p.to === 'replicated').length} replicated
+                        </span>
                     </div>
                 </div>
             )}
 
-            <Dialog open={!!confirmAction} onOpenChange={(open) => { if (!open && !actionLoading) setConfirmAction(null) }}>
+            <Dialog open={confirmOpen} onOpenChange={(open) => { if (!open && !actionLoading) setConfirmOpen(false) }}>
                 <DialogContent className="max-w-lg">
-                    {confirmAction && (
-                        <>
-                            <DialogTitle>
-                                {confirmAction.type === 'add' && 'Start replicating these tables'}
-                                {confirmAction.type === 'remove' && 'Stop replicating these tables'}
-                                {confirmAction.type === 'fdw_add' && 'Read these tables live from the primary'}
-                                {confirmAction.type === 'fdw_remove' && 'Remove these foreign tables'}
-                            </DialogTitle>
-                            <DialogDescription>
-                                {confirmAction.type === 'add' &&
-                                    'They join the publication and the subscription is refreshed, which starts an initial copy of each.'}
-                                {confirmAction.type === 'remove' &&
-                                    'They leave the publication and the subscription is refreshed. Rows already copied stay on the subscriber, frozen where they are.'}
-                                {confirmAction.type === 'fdw_add' &&
-                                    'They become foreign tables read from the primary at query time. Local tables of the same name are dropped (their rows are presumed empty), and configs/fdw.yaml is updated.'}
-                                {confirmAction.type === 'fdw_remove' &&
-                                    'The foreign-table mappings are dropped and configs/fdw.yaml is updated.'}
-                            </DialogDescription>
-                            <div className="my-2 max-h-52 overflow-y-auto rounded-md border border-border bg-secondary p-2 font-mono text-[13px]">
-                                {confirmAction.tables.map((t) => (<div key={t}>{t}</div>))}
+                    <DialogTitle>Apply {pending.length} change{pending.length === 1 ? '' : 's'}</DialogTitle>
+                    <DialogDescription>
+                        The publication is rewritten to match — PostgreSQL cannot take a table out of one
+                        that covers everything, so the first exclusion replaces it. Schemas with nothing
+                        excluded keep picking up new tables on their own; the others stop doing that.
+                        {tables.some((t) => t.in_subscriber)
+                            ? ' The subscription is refreshed afterwards: tables added start copying, tables removed keep the rows they already have.'
+                            : ' Nothing has been copied yet, so this only decides what the first copy will include.'}
+                    </DialogDescription>
+                    <div className="my-2 max-h-52 overflow-y-auto rounded-md border border-border bg-secondary p-2 font-mono text-[13px]">
+                        {pending.map((p) => (
+                            <div key={p.fqn} className="flex items-center gap-2">
+                                <span className="truncate">{p.fqn}</span>
+                                <span className="ml-auto shrink-0 text-muted-foreground">
+                                    {MODE_LABEL[p.from]} → <span className="text-foreground">{MODE_LABEL[p.to]}</span>
+                                </span>
                             </div>
-                            <DialogFooter>
-                                <Button onClick={() => setConfirmAction(null)} disabled={actionLoading}>Cancel</Button>
-                                <Button
-                                    variant={confirmAction.type === 'remove' || confirmAction.type === 'fdw_remove' ? 'destructive' : 'primary'}
-                                    onClick={() => {
-                                        if (confirmAction.type === 'fdw_add' || confirmAction.type === 'fdw_remove') {
-                                            executeFdwAction(confirmAction.type, confirmAction.tables)
-                                        } else {
-                                            executeAction(confirmAction.type, confirmAction.tables)
-                                        }
-                                    }}
-                                    disabled={actionLoading}
-                                >
-                                    {actionLoading ? 'Working…' : 'Confirm'}
-                                </Button>
-                            </DialogFooter>
-                        </>
-                    )}
+                        ))}
+                    </div>
+                    <DialogFooter>
+                        <Button onClick={() => setConfirmOpen(false)} disabled={actionLoading}>Cancel</Button>
+                        <Button variant="primary" onClick={apply} disabled={actionLoading}>
+                            {actionLoading ? 'Working…' : 'Apply'}
+                        </Button>
+                    </DialogFooter>
                 </DialogContent>
             </Dialog>
         </div>

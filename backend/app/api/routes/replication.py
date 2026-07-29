@@ -5,6 +5,7 @@ from ...core.config import settings
 from ...services.sql_guard import assert_read_only_sql, ReadOnlyViolation
 from ...services import sync_log
 from ...services import bootstrap as bootstrap_svc
+from ...services import selection as selection_svc
 from ...services.replication import (
     get_replication_lag_seconds,
     get_initial_copy_progress,
@@ -320,6 +321,53 @@ def post_refresh():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to refresh subscription: {e}")
+
+
+class SelectionBody(BaseModel):
+    tables: List[str] = Field(default_factory=list, description="schema.table to replicate")
+    auto_schemas: List[str] = Field(
+        default_factory=list,
+        description="schemas whose future tables should join on their own",
+    )
+
+
+@router.get("/selection")
+def get_selection():
+    """The publication as a set of tables, plus which schemas follow future ones."""
+    try:
+        return selection_svc.current_selection(_build_publisher_connstr(), settings.publication_name or "")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read selection: {e}")
+
+
+@router.put("/selection")
+def put_selection(body: SelectionBody):
+    """Make the publication say exactly this.
+
+    Recreating is not an implementation detail that could be avoided: a
+    FOR ALL TABLES publication cannot have a table removed from it, so the
+    first exclusion always replaces the publication.
+    """
+    try:
+        pub = settings.publication_name
+        if not pub:
+            raise HTTPException(status_code=400, detail="Missing PUBLICATION_NAME setting")
+        sub = None
+        if settings.container_name and settings.postgres_user and settings.postgres_db:
+            sub = {
+                "container": settings.container_name,
+                "user": settings.postgres_user,
+                "password": settings.postgres_password,
+                "db": settings.postgres_db,
+                "subscription": settings.subscription_name,
+            }
+        return selection_svc.apply_selection(
+            _build_publisher_connstr(), pub, body.tables, body.auto_schemas, sub
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to apply selection: {e}")
 
 
 @router.get("/bootstrap")
