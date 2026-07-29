@@ -182,7 +182,7 @@ function ModeSwitch({
                     <button
                         key={o.mode}
                         disabled={disabled}
-                        title={disabled ? 'Reading live needs a login on the primary — see "Live reads (FDW)" above' : undefined}
+                        title={disabled ? 'Live needs a read-only account on the primary (FDW_USER / FDW_PASSWORD) — not set' : undefined}
                         onClick={() => onChange(o.mode)}
                         className={cn(
                             'border-r border-border px-2 py-0.5 text-[11.5px] leading-5 transition-colors last:border-r-0',
@@ -203,18 +203,30 @@ function Disclosure({
     title,
     summary,
     defaultOpen = false,
+    open: openProp,
+    onOpenChange,
     children,
 }: {
     title: string
     summary?: React.ReactNode
     defaultOpen?: boolean
+    // Controlled when given: something elsewhere on the page needs to be able
+    // to open this one — a note about a missing setting is only useful if it
+    // can lead to where the setting is explained.
+    open?: boolean
+    onOpenChange?: (open: boolean) => void
     children: React.ReactNode
 }) {
-    const [open, setOpen] = useState(defaultOpen)
+    const [uncontrolled, setUncontrolled] = useState(defaultOpen)
+    const open = openProp ?? uncontrolled
+    const setOpen = (next: boolean) => {
+        if (onOpenChange) onOpenChange(next)
+        else setUncontrolled(next)
+    }
     return (
         <Card className="mt-3 overflow-hidden p-0">
             <button
-                onClick={() => setOpen((o) => !o)}
+                onClick={() => setOpen(!open)}
                 className="flex w-full items-center gap-2 px-4 py-2.5 text-left transition-colors hover:bg-white/[0.02]"
             >
                 {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
@@ -254,6 +266,7 @@ export function ReplicationTables() {
     const [search, setSearch] = useState('')
     const [filter, setFilter] = useState<FilterTab>('all')
     const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+    const [fdwOpen, setFdwOpen] = useState(false)
 
     // Only the changes are held, never the whole answer: the answer is what
     // the publisher already says, and everything starts included because
@@ -582,7 +595,8 @@ export function ReplicationTables() {
             <Disclosure
                 title="Live reads (FDW)"
                 summary={fdwReady ? `${fdw?.live_foreign_tables?.length || 0} live · ${fdwTarget}` : 'not set up — no reader role'}
-                defaultOpen={!fdwReady && pending.some((p) => p.to === 'fdw')}
+                open={fdwOpen}
+                onOpenChange={setFdwOpen}
             >
                 <p className="mb-3 text-[13px] leading-relaxed text-muted-foreground">
                     A live table is read straight from the primary when queried — always current, never
@@ -610,18 +624,43 @@ export function ReplicationTables() {
                     </div>
                 ) : (
                     <div className="text-[13px] leading-relaxed">
-                        <p className="mb-2">
-                            Reading live needs its own login on the primary — replication's connection cannot
-                            be reused, because a foreign table is queried as whoever asks, whenever they ask.
-                            Until one is set, <span className="font-medium">Live</span> is not offered.
+                        <p className="mb-3">
+                            <span className="font-medium">Live needs its own read-only account on the primary.</span>{' '}
+                            Replication's account cannot stand in for it: the login is stored in the replica's
+                            catalog as a user mapping, and every clone is a copy of that catalog — so whoever
+                            you hand a clone to can query through it. Replication connects as a superuser, and
+                            handing that out with each clone is not a thing to do by default.
                         </p>
-                        <p className="mb-1 text-muted-foreground">Give it a read-only role and restart the stack:</p>
-                        <pre className="overflow-x-auto rounded-md bg-secondary p-2 font-mono text-[11.5px] leading-relaxed">{`# on the machine running Snaplicator
-printf 'FDW_USER=readonly_user\\nFDW_PASSWORD=…\\n' >> /opt/snaplicator/deploy/.env
+                        <p className="mb-1 text-muted-foreground">1 — on the primary, a role that can only read:</p>
+                        <pre className="mb-3 overflow-x-auto rounded-md bg-secondary p-2 font-mono text-[11.5px] leading-relaxed">{`CREATE ROLE snap_fdw LOGIN PASSWORD '…';
+GRANT USAGE ON SCHEMA public TO snap_fdw;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
+                        <p className="mb-1 text-muted-foreground">2 — on the machine running Snaplicator:</p>
+                        <pre className="mb-3 overflow-x-auto rounded-md bg-secondary p-2 font-mono text-[11.5px] leading-relaxed">{`printf 'FDW_USER=snap_fdw\\nFDW_PASSWORD=…\\n' >> /opt/snaplicator/deploy/.env
 cd /opt/snaplicator/deploy && docker compose -p snaplicator up -d`}</pre>
+                        <p className="text-xs text-muted-foreground">
+                            Set it before the first copy if you can: the foreign server is built when the
+                            replica is, and adding it later means building the replica again.
+                        </p>
                     </div>
                 )}
             </Disclosure>
+
+            {/* A greyed-out control that does not say why is a dead end. The
+                reason belongs where the control is, not inside a panel that
+                has to be opened to find out there was a reason at all. */}
+            {!fdwReady && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-secondary/40 px-3 py-2 text-[13px]">
+                    <span className="text-muted-foreground">
+                        <span className="font-medium text-foreground">Live</span> is off — it needs a read-only
+                        account on the primary (<span className="font-mono text-xs">FDW_USER</span> /{' '}
+                        <span className="font-mono text-xs">FDW_PASSWORD</span>), which is not set.
+                    </span>
+                    <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setFdwOpen(true)}>
+                        How to set it up
+                    </Button>
+                </div>
+            )}
 
             {message && <p className="mt-3 text-[13px] text-success">{message}</p>}
             {error && <p className="mt-3 text-[13px] text-destructive">{error}</p>}
