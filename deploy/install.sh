@@ -145,14 +145,17 @@ if [ "$(uname -s)" = "Darwin" ]; then
   fi
   orbctl start "$MACHINE" >/dev/null 2>&1 || true
 
-  # A fresh image ships curl, python3 and ss; docker and btrfs-progs are the
-  # only gaps. The machine's root filesystem is already btrfs, so the pool
-  # needs no disk of its own.
-  info "preparing '$MACHINE' (docker, btrfs-progs)..."
+  # A fresh image ships curl, python3 and ss. postgresql-client is only
+  # needed when pointing at a real publisher (measuring the payload, checking
+  # the publication), but installing it unconditionally costs one package and
+  # spares the far side from failing its own prerequisite check after the
+  # machine has already been built. The machine's root filesystem is already
+  # btrfs, so the pool needs no disk of its own.
+  info "preparing '$MACHINE' (docker, btrfs-progs, psql)..."
   orb -m "$MACHINE" -u root bash -c '
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq >/dev/null 2>&1
-    apt-get install -y -qq docker.io btrfs-progs >/dev/null 2>&1
+    apt-get install -y -qq docker.io btrfs-progs postgresql-client >/dev/null 2>&1
     systemctl start docker' || die "could not prepare '$MACHINE'"
 
   # Hand off to the same script, running as root inside the machine. The URI
