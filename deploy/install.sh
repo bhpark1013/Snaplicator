@@ -29,7 +29,10 @@
 #      apply; idempotent, reuses an existing pool)
 #   5. ensures the publication exists on the publisher
 #   6. writes deploy/.env and starts the management plane (compose)
-#   7. bootstraps the replica container + subscription (skipped if running)
+#   7. stops there, at the UI: the replica is brought up from the UI, once
+#      what to replicate has been chosen (--demo and START_REPLICATION=1 do
+#      it here instead — there is nothing to choose about a sample database,
+#      and an unattended run has no one to choose)
 #
 # Re-running is safe: every step detects existing state and skips.
 
@@ -323,6 +326,9 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' \
   || die "python3 >= 3.10 required (found $(python3 --version))"
 
 ask_target
+# Only knowable once the target is: the demo answer arrives at the prompt, not
+# only as a flag. 1 = subscribe before finishing, 0 = leave it to the UI (§7).
+: "${START_REPLICATION:=$DEMO}"
 
 if [ "$DEMO" = "0" ]; then
   case "$CONNSTR" in postgres://*|postgresql://*) ;; *) die "URI form required: postgres://user:pw@host:port/db" ;; esac
@@ -645,12 +651,24 @@ done
 curl -fsS "127.0.0.1:$BACKEND_PORT/health" >/dev/null || die "backend did not become healthy — check: docker compose -p $PROJECT logs manager"
 
 # ── 7. replica bootstrap ─────────────────────────────────────────────
+# Not run here by default. The subscription's initial copy is the point of no
+# return — what gets replicated is decided by the publication as it stands the
+# moment that copy begins — and the installer is the wrong place to ask, with
+# no table names on screen and a terminal that cannot show hundreds of them.
+# So the install ends at the UI, where the choice is made, and the copy starts
+# from there.
+#
+# START_REPLICATION=1 keeps the old end-to-end behaviour for unattended runs.
+# --demo defaults to it: a seeded sample database has nothing to decide.
+BOOTSTRAPPED=0
 if docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true; then
   info "replica $CONTAINER_NAME already running — skipping bootstrap"
-else
+  BOOTSTRAPPED=1
+elif [ "$START_REPLICATION" = "1" ]; then
   info "bootstrapping the replica (schema clone + subscription; may take a while)..."
   ( cd "$SNAP_HOME/deploy" && docker compose -p "$PROJECT" exec -T manager bash scripts/run-replica-postgres.sh </dev/null ) \
     || die "replica bootstrap failed — check $SNAP_HOME logs and re-run this installer"
+  BOOTSTRAPPED=1
 fi
 
 # ── done ─────────────────────────────────────────────────────────────
@@ -661,7 +679,14 @@ IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src")
 info "done!"
 echo
 echo "  UI:        http://${IP:-<host>}:$WEB_PORT"
-echo "  replica:   postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@${IP:-<host>}:$HOST_PORT/$POSTGRES_DB"
-echo "  clone one: curl -X POST 127.0.0.1:$BACKEND_PORT/clones -H 'Content-Type: application/json' -d '{}'"
+if [ "$BOOTSTRAPPED" = "1" ]; then
+  echo "  replica:   postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@${IP:-<host>}:$HOST_PORT/$POSTGRES_DB"
+  echo "  clone one: curl -X POST 127.0.0.1:$BACKEND_PORT/clones -H 'Content-Type: application/json' -d '{}'"
+else
+  # No replica address to print: nothing has been copied yet, and saying
+  # otherwise would be advertising a database that does not exist.
+  echo "  next:      open the UI, choose what to replicate, and start it"
+  echo "             (unattended: re-run with START_REPLICATION=1 to replicate everything)"
+fi
 echo "  pool:      $ROOT_DATA_DIR"
 echo

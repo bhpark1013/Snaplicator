@@ -17,6 +17,7 @@ import { cn, copyText } from '@/lib/utils'
 import { RetentionSelect } from '@/components/RetentionSelect'
 import { LineageGraph, computeInsertParams, type Slot, type SnapshotItem } from '@/components/LineageGraph'
 import { WhatsNew } from '@/components/WhatsNew'
+import { BootstrapGate } from '@/components/BootstrapGate'
 
 interface CloneItem {
     name: string
@@ -392,6 +393,8 @@ export function Clones() {
                     </Button>
                 </div>
             </div>
+
+            <BootstrapGate onDone={loadClones} />
 
             <WhatsNew />
 

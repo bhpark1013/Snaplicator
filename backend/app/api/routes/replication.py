@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from ...core.config import settings
 from ...services.sql_guard import assert_read_only_sql, ReadOnlyViolation
 from ...services import sync_log
+from ...services import bootstrap as bootstrap_svc
 from ...services.replication import (
     get_replication_lag_seconds,
     get_initial_copy_progress,
@@ -319,6 +320,45 @@ def post_refresh():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to refresh subscription: {e}")
+
+
+@router.get("/bootstrap")
+def get_bootstrap(tail: int = Query(default=40, le=2000)):
+    """Whether the replica has been brought up, is being brought up, or neither.
+
+    Polled by the UI, so it stays cheap and never raises for the ordinary
+    "nothing has happened yet" case — that is a state, not an error.
+    """
+    return bootstrap_svc.status(tail=tail)
+
+
+@router.post("/bootstrap")
+def post_bootstrap(force: bool = False):
+    """Clone the schema and create the subscription — the first byte moves here.
+
+    Returns immediately: an initial copy is measured in minutes to hours, and
+    the run continues independently of this request. Progress is read back
+    from GET /replication/bootstrap.
+    """
+    try:
+        return bootstrap_svc.start(force=force)
+    except RuntimeError as e:
+        # Already running, or already subscribed: the caller asked for
+        # something that has happened, which is a conflict rather than a fault.
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start bootstrap: {e}")
+
+
+@router.delete("/bootstrap")
+def delete_bootstrap():
+    """Stop a running bootstrap. Leaves whatever it managed to create."""
+    try:
+        return bootstrap_svc.cancel()
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cancel bootstrap: {e}")
 
 
 @router.get("/trigger-status")
