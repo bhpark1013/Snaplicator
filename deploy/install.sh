@@ -411,11 +411,18 @@ if fit:
     # queries programs make of it (background colour, cursor position) by
     # writing the reply into that queue, and whatever is sitting there when
     # this prompt opens is read as if it had been typed — over an orb session
-    # a reply generated during the handoff arrives with no one to consume it,
-    # and lands here minutes later glued to the front of the answer.
-    while read -r -t 0 _junk < /dev/tty 2>/dev/null; do
-      read -r -t 0.2 _junk < /dev/tty 2>/dev/null || break
-    done
+    # a reply generated during the handoff can arrive with no one to consume
+    # it and land here, minutes later, glued to the front of the answer.
+    #
+    # The terminal has to leave line mode to be emptied: in line mode nothing
+    # is readable until Enter, so a reply with no newline in it is invisible
+    # to any read that hopes to discard it, and stays queued to be delivered
+    # as part of the next line — the very line this is trying to protect.
+    if command -v stty >/dev/null 2>&1 && _saved=$(stty -g < /dev/tty 2>/dev/null); then
+      stty -icanon min 0 time 0 < /dev/tty 2>/dev/null || true
+      while read -r -t 0.05 -n 4096 _junk < /dev/tty 2>/dev/null; do :; done
+      stty "$_saved" < /dev/tty 2>/dev/null || true
+    fi
     case "$REC_ARG" in
       format:*)
         # a destructive option is never the enter-key default
