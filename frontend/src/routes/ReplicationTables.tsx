@@ -206,6 +206,41 @@ function ModeSwitch({
     )
 }
 
+/**
+ * What happens to tables that do not exist yet, per schema.
+ *
+ * Its own control because it is its own question, and the two answers are
+ * independent: a schema with tables left out can still want the next one, and
+ * a schema with nothing left out can still want to stay exactly as it is.
+ * Deriving it from the table modes — as this page did — makes both of those
+ * unsayable.
+ */
+function FollowSwitch({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+    return (
+        <div
+            className="flex overflow-hidden rounded-md border border-border"
+            onClick={(e) => e.stopPropagation()}
+            title="Tables created in this schema later"
+        >
+            <span className="border-r border-border px-2 py-0.5 text-[11.5px] leading-5 text-muted-foreground">new</span>
+            {([[true, 'follow'], [false, 'ignore']] as [boolean, string][]).map(([v, label]) => (
+                <button
+                    key={label}
+                    onClick={() => onChange(v)}
+                    className={cn(
+                        'border-r border-border px-2 py-0.5 text-[11.5px] leading-5 transition-colors last:border-r-0',
+                        on === v
+                            ? 'bg-info/15 text-info border-info/40'
+                            : 'text-muted-foreground hover:bg-white/[0.04] hover:text-foreground',
+                    )}
+                >
+                    {label}
+                </button>
+            ))}
+        </div>
+    )
+}
+
 /** A titled section that stays out of the way until asked for. */
 function Disclosure({
     title,
@@ -381,6 +416,11 @@ export function ReplicationTables() {
     // that is what a fresh publication does. This page is where things are
     // taken out, so an empty map means "leave it exactly as it is".
     const [overrides, setOverrides] = useState<Map<string, TableMode>>(new Map())
+    // Whether each schema keeps taking new tables. Separate from the table
+    // modes because it is a separate question: what happens to tables that do
+    // not exist yet cannot be read off the ones that do.
+    const [autoSchemas, setAutoSchemas] = useState<Set<string>>(new Set())
+    const [autoOverrides, setAutoOverrides] = useState<Map<string, boolean>>(new Map())
 
     const [actionLoading, setActionLoading] = useState(false)
     const [confirmOpen, setConfirmOpen] = useState(false)
@@ -420,6 +460,17 @@ export function ReplicationTables() {
             .catch(() => {})
     }
 
+    const loadSelection = () => {
+        fetch(`${base}/replication/selection`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => {
+                if (!d) return
+                setAutoSchemas(new Set<string>(d.auto_schemas || []))
+                setAutoOverrides(new Map())
+            })
+            .catch(() => {})
+    }
+
     const loadFdw = () => {
         fetch(`${base}/replication/fdw`)
             .then((r) => (r.ok ? r.json() : null))
@@ -444,6 +495,7 @@ export function ReplicationTables() {
         loadTables()
         loadInfo()
         loadFdw()
+        loadSelection()
         loadSyncLog()
         const id = setInterval(loadSyncLog, 15000)
         return () => clearInterval(id)
@@ -470,6 +522,15 @@ export function ReplicationTables() {
                 if (currentMode(t) === mode) next.delete(fqn)
                 else next.set(fqn, mode)
             }
+            return next
+        })
+
+    const autoOf = (schema: string) => autoOverrides.get(schema) ?? autoSchemas.has(schema)
+    const setAuto = (schema: string, on: boolean) =>
+        setAutoOverrides((prev) => {
+            const next = new Map(prev)
+            if (autoSchemas.has(schema) === on) next.delete(schema)
+            else next.set(schema, on)
             return next
         })
 
@@ -541,6 +602,14 @@ export function ReplicationTables() {
             return next
         })
 
+    const pendingAuto = useMemo(() => {
+        const out: { schema: string; to: boolean }[] = []
+        for (const [schema, to] of autoOverrides) {
+            if (autoSchemas.has(schema) !== to) out.push({ schema, to })
+        }
+        return out.sort((a, b) => a.schema.localeCompare(b.schema))
+    }, [autoOverrides, autoSchemas])
+
     const pending = useMemo(() => {
         const out: { fqn: string; from: TableMode; to: TableMode }[] = []
         for (const [fqn, to] of overrides) {
@@ -566,12 +635,11 @@ export function ReplicationTables() {
                 if (m === 'fdw') wantFdw.add(fqn)
                 else if (m === 'replicated') wantReplicate.push(fqn)
             }
-            // A schema follows its future tables only when nothing in it is
-            // being left out — that is the server's rule, mirrored here so the
-            // request says what it means.
-            const autoSchemas = Array.from(new Set(tables.map((t) => t.schema))).filter((s) =>
-                tables.filter((t) => t.schema === s).every((t) => modeOf(t) === 'replicated'),
-            )
+            // Sent as chosen, not inferred. Whether a schema keeps taking new
+            // tables is its own answer: a schema with two tables left out can
+            // still want the next one, and a complete schema can still want to
+            // stay exactly as it is.
+            const wantAuto = Array.from(new Set(tables.map((t) => t.schema))).filter(autoOf)
 
             // Unmap first, publish second, map last: a table cannot be both a
             // foreign table and a published one, so each change passes through
@@ -589,7 +657,7 @@ export function ReplicationTables() {
             const sel = await fetch(`${base}/replication/selection`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tables: wantReplicate, auto_schemas: autoSchemas }),
+                body: JSON.stringify({ tables: wantReplicate, auto_schemas: wantAuto }),
             })
             if (!sel.ok) throw new Error(`publication: ${sel.status} ${await sel.text()}`)
             const selRes = await sel.json()
@@ -610,6 +678,7 @@ export function ReplicationTables() {
             )
             setConfirmOpen(false)
             loadTables()
+            loadSelection()
             loadFdw()
         } catch (e: any) {
             setError(String(e?.message || e))
@@ -637,7 +706,7 @@ export function ReplicationTables() {
     const fdwTarget = fdwOpts.host ? `${fdwOpts.host}:${fdwOpts.port || 5432}/${fdwOpts.dbname || ''}` : null
 
     return (
-        <div className={cn('mx-auto max-w-5xl animate-page-in px-6 pt-6', pending.length ? 'pb-32' : 'pb-20')}>
+        <div className={cn('mx-auto max-w-5xl animate-page-in px-6 pt-6', (pending.length || pendingAuto.length) ? 'pb-32' : 'pb-20')}>
             <div className="mb-4 flex items-center justify-between gap-4 border-b border-border pb-4">
                 <div className="flex items-center gap-3">
                     <Button asChild size="sm">
@@ -842,6 +911,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                                             {g.replicated} replicated · {g.fdwCount} live · {g.excluded} excluded
                                         </span>
                                     )}
+                                    <FollowSwitch on={autoOf(g.schema)} onChange={(v) => setAuto(g.schema, v)} />
                                     <ModeSwitch
                                         value={schemaMode}
                                         fdwReady={fdwReady}
@@ -906,14 +976,16 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
 
             {/* Nothing is sent until it is asked for: the switches are a draft
                 of the publication, and this is where the draft becomes it. */}
-            {pending.length > 0 && (
+            {(pending.length > 0 || pendingAuto.length > 0) && (
                 <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background/95 backdrop-blur">
                     <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-2 px-6 py-3">
                         <span className="text-[13px]">
-                            <span className="font-semibold">{pending.length}</span>{' '}
-                            <span className="text-muted-foreground">change{pending.length === 1 ? '' : 's'} not applied</span>
+                            <span className="font-semibold">{pending.length + pendingAuto.length}</span>{' '}
+                            <span className="text-muted-foreground">
+                                change{pending.length + pendingAuto.length === 1 ? '' : 's'} not applied
+                            </span>
                         </span>
-                        <Button size="sm" variant="ghost" onClick={() => setOverrides(new Map())} disabled={actionLoading}>
+                        <Button size="sm" variant="ghost" onClick={() => { setOverrides(new Map()); setAutoOverrides(new Map()) }} disabled={actionLoading}>
                             Discard
                         </Button>
                         <Button size="sm" variant="primary" onClick={() => setConfirmOpen(true)} disabled={actionLoading}>
@@ -923,6 +995,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                             {pending.filter((p) => p.to === 'none').length} excluded ·{' '}
                             {pending.filter((p) => p.to === 'fdw').length} live ·{' '}
                             {pending.filter((p) => p.to === 'replicated').length} replicated
+                            {pendingAuto.length > 0 && ` · ${pendingAuto.length} schema follow rule${pendingAuto.length === 1 ? '' : 's'}`}
                         </span>
                     </div>
                 </div>
@@ -930,7 +1003,10 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
 
             <Dialog open={confirmOpen} onOpenChange={(open) => { if (!open && !actionLoading) setConfirmOpen(false) }}>
                 <DialogContent className="max-w-lg">
-                    <DialogTitle>Apply {pending.length} change{pending.length === 1 ? '' : 's'}</DialogTitle>
+                    <DialogTitle>
+                        Apply {pending.length + pendingAuto.length} change
+                        {pending.length + pendingAuto.length === 1 ? '' : 's'}
+                    </DialogTitle>
                     <DialogDescription>
                         The publication is rewritten to match — PostgreSQL cannot take a table out of one
                         that covers everything, so the first exclusion replaces it. Schemas with nothing
@@ -940,6 +1016,14 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                             : ' Nothing has been copied yet, so this only decides what the first copy will include.'}
                     </DialogDescription>
                     <div className="my-2 max-h-52 overflow-y-auto rounded-md border border-border bg-secondary p-2 font-mono text-[13px]">
+                        {pendingAuto.map((p) => (
+                            <div key={`auto:${p.schema}`} className="flex items-center gap-2">
+                                <span className="truncate">{p.schema}</span>
+                                <span className="ml-auto shrink-0 text-muted-foreground">
+                                    new tables → <span className="text-foreground">{p.to ? 'follow' : 'ignore'}</span>
+                                </span>
+                            </div>
+                        ))}
                         {pending.map((p) => (
                             <div key={p.fqn} className="flex items-center gap-2">
                                 <span className="truncate">{p.fqn}</span>

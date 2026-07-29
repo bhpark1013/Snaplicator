@@ -22,7 +22,13 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from .replication import _run_publisher_sql, _run_subscriber_sql
+from . import policy
+from .replication import (
+    _run_publisher_sql,
+    _run_subscriber_sql,
+    install_auto_add_trigger,
+    uninstall_auto_add_trigger,
+)
 
 
 def _quote_ident(name: str) -> str:
@@ -86,6 +92,13 @@ def current_selection(publisher_connstr: str, publication_name: str) -> Dict:
         for fqn in published_set:
             if fqn not in individual_set:
                 auto.add(fqn.split(".")[0])
+
+    # A schema followed by the trigger has ordinary table-level membership, so
+    # the catalog cannot tell it apart from one nobody asked to follow. What
+    # was asked for is the thing to report.
+    chosen = policy.load()
+    if chosen["chosen"]:
+        auto |= set(chosen["auto_schemas"])
 
     return {
         "exists": True,
@@ -164,6 +177,26 @@ def apply_selection(
     sql += ";"
     _run_publisher_sql(publisher_connstr, sql)
 
+    # Schemas that were asked to follow new tables but could not be given
+    # schema-level membership — because something in them is excluded — are
+    # exactly the ones an event trigger has to cover. Where the publication
+    # itself follows the schema, the trigger would only get in the way.
+    wanted_auto = set(auto_schemas)
+    trigger_schemas = sorted(wanted_auto - set(whole_schemas))
+    excluded = sorted(available_set - wanted)
+    policy.save(sorted(wanted_auto), excluded)
+    try:
+        if form == "all" or not trigger_schemas:
+            uninstall_auto_add_trigger(publisher_connstr)
+        else:
+            install_auto_add_trigger(
+                publisher_connstr, publication_name, trigger_schemas, excluded
+            )
+    except Exception:
+        # The publication is already what was asked for; the trigger is the
+        # part that keeps it that way tomorrow, and the loop reinstates it.
+        pass
+
     refreshed = False
     if subscriber and subscriber.get("subscription"):
         try:
@@ -183,6 +216,7 @@ def apply_selection(
     return {
         "form": "FOR ALL TABLES" if form == "all" else (body or "empty"),
         "auto_schemas": whole_schemas,
+        "trigger_schemas": trigger_schemas,
         "tables": explicit,
         "count": len(wanted),
         "unknown": unknown,

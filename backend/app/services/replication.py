@@ -725,13 +725,41 @@ def sync_column_changes(
 # ── Event Trigger Management ──────────────────────
 
 
-def install_auto_add_trigger(publisher_connstr: str, publication_name: str) -> Dict:
-    """Install or update the event trigger on publisher that auto-adds new public tables to publication.
+def _sql_text_array(values) -> str:
+    """A text[] literal, or NULL when there is nothing to match against."""
+    items = [v for v in (values or [])]
+    if not items:
+        return "NULL::text[]"
+    inner = ", ".join("'" + str(v).replace("'", "''") + "'" for v in items)
+    return f"ARRAY[{inner}]::text[]"
+
+
+def install_auto_add_trigger(
+    publisher_connstr: str,
+    publication_name: str,
+    schemas=None,
+    excluded=None,
+) -> Dict:
+    """Install or update the event trigger that adds newly created tables to the publication.
+
+    ``schemas`` is which schemas it applies to — the answer to "keep taking new
+    tables here" for each one. ``excluded`` are tables that must stay out even
+    if they reappear; a table dropped and recreated is otherwise indistinguishable
+    from a new one, and would come back into the publication on its own.
+
+    The policy is baked into the function body rather than read from a table on
+    the publisher. A table would mean creating one on someone else's primary,
+    granting the DDL issuer rights to read it, and having a failure to do so
+    break their CREATE TABLE — all of which has been tried here before, and all
+    of which the function body avoids by carrying the answer with it.
 
     Idempotent: safe to call multiple times.
     """
-    # Create or replace the trigger function with current publication name
+    # Default to the historical behaviour so existing callers keep working.
+    schema_list = list(schemas) if schemas is not None else ["public"]
     publication_literal = "'" + publication_name.replace("'", "''") + "'"
+    schemas_sql = _sql_text_array(schema_list)
+    excluded_sql = _sql_text_array(excluded)
     func_sql = f"""
 CREATE OR REPLACE FUNCTION _snaplicator_auto_add_to_pub()
 RETURNS event_trigger
@@ -757,7 +785,7 @@ BEGIN
 
     FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands()
     WHERE command_tag = 'CREATE TABLE'
-      AND schema_name = 'public'
+      AND schema_name = ANY ({schemas_sql})
     LOOP
         -- Same trap one level down: a table created in a schema the
         -- publication takes whole (FOR TABLES IN SCHEMA) is published the
@@ -766,6 +794,12 @@ BEGIN
             SELECT 1 FROM pg_publication_tables pt
             WHERE pt.pubname = {publication_literal}
               AND format('%I.%I', pt.schemaname, pt.tablename)::regclass = obj.objid
+        );
+        -- A table that was taken out by hand stays out when it comes back.
+        CONTINUE WHEN EXISTS (
+            SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.oid = obj.objid
+              AND n.nspname || '.' || c.relname = ANY ({excluded_sql})
         );
         EXECUTE format('ALTER PUBLICATION {publication_name} ADD TABLE %s', obj.object_identity);
         RAISE NOTICE 'snaplicator: auto-added % to publication {publication_name}', obj.object_identity;
@@ -798,6 +832,18 @@ def verify_trigger_installed(publisher_connstr: str) -> bool:
     sql = "SELECT 1 FROM pg_event_trigger WHERE evtname = '_snaplicator_auto_pub_add';"
     out = _run_publisher_sql(publisher_connstr, sql)
     return out.strip() == "1"
+
+
+def uninstall_auto_add_trigger(publisher_connstr: str) -> Dict:
+    """Remove the trigger, for when nothing should follow new tables any more.
+
+    Trigger first, then the function, in that order and never together: the
+    DROP FUNCTION is itself DDL, so a trigger still installed would fire on it
+    and call the function being dropped.
+    """
+    _run_publisher_sql(publisher_connstr, "DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;")
+    _run_publisher_sql(publisher_connstr, "DROP FUNCTION IF EXISTS public._snaplicator_auto_add_to_pub();")
+    return {"installed": False}
 
 
 def sync_check_constraints(

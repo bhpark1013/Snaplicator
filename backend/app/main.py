@@ -11,6 +11,7 @@ from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
 from .services import fdw as fdw_svc
 from .services import fdw_creds
+from .services import policy as policy_svc
 from .services import sync_log
 from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, sync_table_schema_moves, install_auto_add_trigger, verify_trigger_installed
 from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, install_auto_add_trigger, verify_trigger_installed
@@ -62,10 +63,15 @@ async def ddl_sync_loop():
             if connstr and pub_name and sub_name and container and user and db:
                 # Safety net: verify event trigger exists on publisher
                 try:
+                    chosen = policy_svc.load()
+                    wants_trigger = not chosen["chosen"] or bool(chosen["auto_schemas"])
                     trigger_ok = await asyncio.to_thread(verify_trigger_installed, connstr)
-                    if not trigger_ok:
+                    if wants_trigger and not trigger_ok:
                         logger.warning("Auto-add trigger missing on publisher, reinstalling...")
-                        await asyncio.to_thread(install_auto_add_trigger, connstr, pub_name)
+                        await asyncio.to_thread(
+                            install_auto_add_trigger, connstr, pub_name,
+                            chosen["auto_schemas"] or None, chosen["excluded"] or None,
+                        )
                         logger.info("Auto-add trigger reinstalled successfully")
                         sync_log.record("trigger_reinstalled", {"publication": pub_name})
                 except Exception as e:
@@ -201,8 +207,15 @@ async def lifespan(app: FastAPI):
     try:
         connstr = _build_publisher_connstr()
         pub_name = settings.publication_name
-        if connstr and pub_name:
-            await asyncio.to_thread(install_auto_add_trigger, connstr, pub_name)
+        chosen = policy_svc.load()
+        if connstr and pub_name and (not chosen["chosen"] or chosen["auto_schemas"]):
+            # Reinstate what was asked for, not a default. Installing the
+            # trigger unconditionally would resurrect following on schemas
+            # someone deliberately stopped following.
+            await asyncio.to_thread(
+                install_auto_add_trigger, connstr, pub_name,
+                chosen["auto_schemas"] or None, chosen["excluded"] or None,
+            )
             logger.info(f"Auto-add event trigger installed on publisher for publication '{pub_name}'")
     except Exception as e:
         logger.warning(f"Could not install auto-add trigger at startup (will retry in polling loop): {e}")
