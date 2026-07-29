@@ -80,13 +80,17 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 	# Active details from pg_subscription_rel
 	details: List[Dict] = []
 	try:
+		# Every table, not only the unfinished ones. What is left is only half
+		# the picture — "3 of 8" says nothing about which three, and a copy
+		# that has been running for an hour is judged by what it has got
+		# through, not by what it is holding.
 		detail_sql = (
-			"SELECT r.srsubstate, n.nspname, c.relname "
+			"SELECT r.srsubstate, n.nspname, c.relname, "
+			"       pg_total_relation_size(c.oid) "
 			"FROM pg_subscription_rel r "
 			"JOIN pg_class c ON c.oid = r.srrelid "
 			"JOIN pg_namespace n ON n.oid = c.relnamespace "
-			"WHERE r.srsubstate <> 'r' "
-			"ORDER BY 1,2,3;"
+			"ORDER BY 2,3;"
 		)
 		p2 = subprocess.run(
 			[
@@ -101,10 +105,18 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 				continue
 			parts = ln.split(",")
 			if len(parts) >= 3:
+				try:
+					size = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+				except ValueError:
+					size = 0
 				details.append({
 					"state": parts[0],
 					"schema": parts[1],
 					"table": parts[2],
+					# The subscriber's copy of it: what has landed so far,
+					# which is what makes "how far along" answerable for a
+					# table PostgreSQL reports no byte progress for.
+					"size_bytes": size,
 				})
 	except subprocess.CalledProcessError:
 		pass

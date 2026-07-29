@@ -177,12 +177,15 @@ function ModeSwitch({
     onChange: (mode: TableMode) => void
 }) {
     const opts: { mode: TableMode; label: string; on: string }[] = [
-        { mode: 'replicated', label: 'Replicate', on: 'bg-success/15 text-success border-success/40' },
-        { mode: 'fdw', label: 'Live', on: 'bg-purple/15 text-purple border-purple/40' },
-        { mode: 'none', label: 'Exclude', on: 'bg-white/[0.06] text-foreground border-border-strong' },
+        { mode: 'replicated', label: 'Replicate', on: 'bg-success/15 text-success' },
+        { mode: 'fdw', label: 'Live', on: 'bg-purple/15 text-purple' },
+        { mode: 'none', label: 'Exclude', on: 'bg-white/[0.07] text-foreground' },
     ]
+    // The alternatives are dimmed until the row is under the cursor. A page of
+    // four hundred rows, each showing three equally loud buttons, is a wall —
+    // and only one of the three is information; the other two are an offer.
     return (
-        <div className="flex overflow-hidden rounded-md border border-border" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
             {opts.map((o) => {
                 const disabled = o.mode === 'fdw' && !fdwReady
                 const active = value === o.mode
@@ -193,9 +196,11 @@ function ModeSwitch({
                         title={disabled ? 'Live needs a read-only account on the primary — none is set yet' : undefined}
                         onClick={() => onChange(o.mode)}
                         className={cn(
-                            'border-r border-border px-2 py-0.5 text-[11.5px] leading-5 transition-colors last:border-r-0',
-                            active ? o.on : 'text-muted-foreground hover:bg-white/[0.04] hover:text-foreground',
-                            disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground',
+                            'rounded px-1.5 py-0.5 text-[11.5px] leading-5 transition-all',
+                            active
+                                ? o.on
+                                : 'text-muted-foreground/30 group-hover:text-muted-foreground hover:!bg-white/[0.06] hover:!text-foreground',
+                            disabled && 'cursor-not-allowed opacity-30 hover:!bg-transparent',
                         )}
                     >
                         {o.label}
@@ -217,27 +222,18 @@ function ModeSwitch({
  */
 function FollowSwitch({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
     return (
-        <div
-            className="flex overflow-hidden rounded-md border border-border"
-            onClick={(e) => e.stopPropagation()}
-            title="Tables created in this schema later"
+        <button
+            onClick={(e) => { e.stopPropagation(); onChange(!on) }}
+            title={on
+                ? 'Tables created in this schema later join on their own — click to stop'
+                : 'Tables created in this schema later are left out — click to follow them'}
+            className={cn(
+                'rounded px-1.5 py-0.5 text-[11.5px] leading-5 transition-colors',
+                on ? 'bg-info/15 text-info' : 'text-muted-foreground/50 hover:text-foreground',
+            )}
         >
-            <span className="border-r border-border px-2 py-0.5 text-[11.5px] leading-5 text-muted-foreground">new</span>
-            {([[true, 'follow'], [false, 'ignore']] as [boolean, string][]).map(([v, label]) => (
-                <button
-                    key={label}
-                    onClick={() => onChange(v)}
-                    className={cn(
-                        'border-r border-border px-2 py-0.5 text-[11.5px] leading-5 transition-colors last:border-r-0',
-                        on === v
-                            ? 'bg-info/15 text-info border-info/40'
-                            : 'text-muted-foreground hover:bg-white/[0.04] hover:text-foreground',
-                    )}
-                >
-                    {label}
-                </button>
-            ))}
-        </div>
+            {on ? 'new: follow' : 'new: ignore'}
+        </button>
     )
 }
 
@@ -893,22 +889,18 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                         <div key={g.schema} className="border-b border-border last:border-b-0">
                             <div
                                 onClick={() => toggleSchema(g.schema)}
-                                className="flex cursor-pointer items-center gap-2 bg-white/[0.015] px-3 py-2 transition-colors hover:bg-white/[0.035]"
+                                className="group flex cursor-pointer items-center gap-2 bg-white/[0.02] px-3 py-2 transition-colors hover:bg-white/[0.04]"
                             >
                                 {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
                                 <span className="font-mono text-[13px] font-semibold">{g.schema}</span>
-                                <span className="text-xs text-muted-foreground">{g.items.length} tables</span>
+                                <span className="text-xs text-muted-foreground">{g.items.length}</span>
                                 {g.changed > 0 && <Badge variant="info">{g.changed} changed</Badge>}
-                                {g.missingOnSub > 0 && (
-                                    <Badge variant="warning" title="Published but not yet present on the subscriber">
-                                        {g.missingOnSub} not copied
-                                    </Badge>
-                                )}
 
                                 <div className="ml-auto flex items-center gap-3">
                                     {schemaMode === null && (
                                         <span className="text-xs text-muted-foreground">
-                                            {g.replicated} replicated · {g.fdwCount} live · {g.excluded} excluded
+                                            {g.replicated}/{g.items.length} replicated
+                                            {g.fdwCount > 0 && ` · ${g.fdwCount} live`}
                                         </span>
                                     )}
                                     <FollowSwitch on={autoOf(g.schema)} onChange={(v) => setAuto(g.schema, v)} />
@@ -929,13 +921,18 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                                     <div
                                         key={fqn}
                                         className={cn(
-                                            'flex items-center gap-2 border-t border-border/60 py-1.5 pl-9 pr-3 text-[13px]',
-                                            changed && 'bg-info/[0.06]',
+                                            'group flex items-center gap-2 border-t border-border/40 py-1 pl-9 pr-3 text-[13px] transition-colors hover:bg-white/[0.02]',
+                                            changed && 'bg-info/[0.07]',
                                         )}
                                     >
                                         <span className="font-mono">{t.table}</span>
                                         {t.in_publication && !t.in_subscriber && (
-                                            <Badge variant="warning" title="In the publication, but not on the subscriber yet">not copied</Badge>
+                                            <span
+                                                className="text-warning"
+                                                title="In the publication, but not on the subscriber yet"
+                                            >
+                                                ·
+                                            </span>
                                         )}
                                         <div className="ml-auto flex items-center gap-3">
                                             <ModeSwitch value={m} fdwReady={fdwReady} onChange={(next) => setMode([fqn], next)} />

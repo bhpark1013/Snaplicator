@@ -21,8 +21,14 @@ interface CopyProgress {
     finished_tables: number
     percent: number
     active?: { schema: string; table: string; bytes_processed: number; bytes_total: number; percent: number | null }[] | null
-    details?: { state: string; schema: string; table: string }[] | null
+    details?: { state: string; schema: string; table: string; size_bytes?: number }[] | null
 }
+
+type Phase = 'done' | 'copying' | 'waiting'
+
+// The five states PostgreSQL tracks collapse into the three anyone watching a
+// copy actually asks about: what is through, what is moving, what is left.
+const PHASE_OF: Record<string, Phase> = { r: 'done', s: 'done', d: 'copying', f: 'copying', i: 'waiting' }
 
 // pg_subscription_rel.srsubstate, in words. The letters are the only place
 // PostgreSQL says where a table is, and they are not words anyone should have
@@ -33,6 +39,33 @@ const SUB_STATE: Record<string, { label: string; tone: string }> = {
     f: { label: 'finishing', tone: 'text-info' },
     s: { label: 'synchronised', tone: 'text-success' },
     r: { label: 'ready', tone: 'text-success' },
+}
+
+/** A short, foldable list of table names — enough to check, not to read. */
+function NameList({
+    title,
+    tone,
+    items,
+    expanded,
+}: {
+    title: string
+    tone: string
+    items: { schema: string; table: string }[]
+    expanded: boolean
+}) {
+    if (!items.length) return null
+    const shown = expanded ? items : items.slice(0, 3)
+    return (
+        <div className="min-w-48 text-xs">
+            <div className={cn('mb-0.5 font-medium', tone)}>{title} ({items.length})</div>
+            <div className="font-mono leading-relaxed text-muted-foreground">
+                {shown.map((d) => (
+                    <div key={`${d.schema}.${d.table}`} className="truncate">{d.schema}.{d.table}</div>
+                ))}
+                {!expanded && items.length > shown.length && <div>+{items.length - shown.length} more</div>}
+            </div>
+        </div>
+    )
 }
 
 function fmtBytes(n: number) {
@@ -125,13 +158,20 @@ export function BootstrapGate({ onDone, hint }: { onDone?: () => void; hint?: Re
     const ss = String(elapsed % 60).padStart(2, '0')
 
     // In flight first, then queued: what is happening beats what is about to.
-    const pending = (copy?.details || []).slice().sort((a, b) => {
-        const rank = (s: string) => (s === 'd' ? 0 : s === 'f' ? 1 : s === 'i' ? 2 : 3)
-        return rank(a.state) - rank(b.state) || `${a.schema}.${a.table}`.localeCompare(`${b.schema}.${b.table}`)
-    })
-    const shown = showAll ? pending : pending.slice(0, 8)
+    const details = copy?.details || []
+    const groups: Record<Phase, typeof details> = { copying: [], waiting: [], done: [] }
+    for (const d of details) groups[PHASE_OF[d.state] || 'waiting'].push(d)
+    for (const k of Object.keys(groups) as Phase[]) {
+        groups[k].sort((a, b) => `${a.schema}.${a.table}`.localeCompare(`${b.schema}.${b.table}`))
+    }
     const bytesFor = (schema: string, table: string) =>
         (copy?.active || []).find((a) => a.schema === schema && a.table === table)
+
+    // Bytes landed against bytes expected, so a run made of one large table
+    // and twenty small ones does not sit at "1 of 21" for most of its life.
+    const bytesDone = details.reduce((n, d) => n + (PHASE_OF[d.state] === 'done' ? (d.size_bytes || 0) : 0), 0)
+    const bytesMoving = (copy?.active || []).reduce((n, a) => n + a.bytes_processed, 0)
+    const pctOf = (n: number) => (details.length ? (n / details.length) * 100 : 0)
 
     const busy = status.state === 'running' || copying
 
@@ -154,39 +194,73 @@ export function BootstrapGate({ onDone, hint }: { onDone?: () => void; hint?: Re
 
                     {copying && (
                         <>
-                            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-secondary">
+                            {/* One bar, three parts: through, moving, left.
+                                A single filled fraction answers "how far" and
+                                nothing else — the interesting question during
+                                an hour-long copy is what is still to come. */}
+                            <div className="mt-3 flex h-2 overflow-hidden rounded-full bg-secondary">
                                 <div
-                                    className="h-full rounded-full bg-info transition-[width] duration-500"
-                                    style={{ width: `${Math.min(100, Math.max(2, copy!.percent))}%` }}
+                                    className="bg-success transition-[width] duration-500"
+                                    style={{ width: `${pctOf(groups.done.length)}%` }}
+                                />
+                                <div
+                                    className="animate-pulse bg-info transition-[width] duration-500"
+                                    style={{ width: `${pctOf(groups.copying.length)}%` }}
                                 />
                             </div>
 
-                            {shown.length > 0 && (
+                            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                                <span className="text-success">✓ {groups.done.length} done</span>
+                                <span className="text-info">⟳ {groups.copying.length} copying</span>
+                                <span className="text-muted-foreground">· {groups.waiting.length} to go</span>
+                                {bytesDone + bytesMoving > 0 && (
+                                    <span className="ml-auto font-mono text-muted-foreground">
+                                        {fmtBytes(bytesDone + bytesMoving)} copied
+                                    </span>
+                                )}
+                            </div>
+
+                            {/* In flight, always and in full: it is the part
+                                that is changing. */}
+                            {groups.copying.length > 0 && (
                                 <div className="mt-3 rounded-md border border-border">
-                                    {shown.map((d) => {
-                                        const st = SUB_STATE[d.state] || { label: d.state, tone: 'text-muted-foreground' }
+                                    {groups.copying.map((d) => {
                                         const b = bytesFor(d.schema, d.table)
+                                        const pct = b && b.bytes_total > 0 ? (b.bytes_processed / b.bytes_total) * 100 : null
                                         return (
                                             <div
                                                 key={`${d.schema}.${d.table}`}
-                                                className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5 text-[13px] last:border-b-0"
+                                                className="border-b border-border/60 px-3 py-2 last:border-b-0"
                                             >
-                                                <span className="font-mono">{d.schema}.{d.table}</span>
-                                                {b && (
-                                                    <span className="text-xs text-muted-foreground">
-                                                        {fmtBytes(b.bytes_processed)}
-                                                        {b.bytes_total > 0 ? ` of ${fmtBytes(b.bytes_total)}` : ''}
+                                                <div className="flex items-center gap-2 text-[13px]">
+                                                    <Loader2 className="h-3 w-3 shrink-0 animate-spin text-info" />
+                                                    <span className="font-mono">{d.schema}.{d.table}</span>
+                                                    <span className="ml-auto font-mono text-xs text-muted-foreground">
+                                                        {b
+                                                            ? `${fmtBytes(b.bytes_processed)}${b.bytes_total > 0 ? ` / ${fmtBytes(b.bytes_total)}` : ''}`
+                                                            : SUB_STATE[d.state]?.label}
                                                     </span>
+                                                </div>
+                                                {pct != null && (
+                                                    <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-secondary">
+                                                        <div className="h-full bg-info" style={{ width: `${Math.min(100, pct)}%` }} />
+                                                    </div>
                                                 )}
-                                                <span className={cn('ml-auto text-xs', st.tone)}>{st.label}</span>
                                             </div>
                                         )
                                     })}
                                 </div>
                             )}
-                            {pending.length > 8 && (
-                                <Button size="sm" variant="ghost" className="mt-2" onClick={() => setShowAll((s) => !s)}>
-                                    {showAll ? 'Show fewer' : `Show all ${pending.length}`}
+
+                            {/* Done and queued as names, folded away: worth
+                                being able to check, not worth the room. */}
+                            <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1">
+                                <NameList title="Copied" tone="text-success" items={groups.done} expanded={showAll} />
+                                <NameList title="Waiting" tone="text-muted-foreground" items={groups.waiting} expanded={showAll} />
+                            </div>
+                            {groups.done.length + groups.waiting.length > 6 && (
+                                <Button size="sm" variant="ghost" className="mt-1" onClick={() => setShowAll((v) => !v)}>
+                                    {showAll ? 'Show fewer' : 'Show every table'}
                                 </Button>
                             )}
                         </>
