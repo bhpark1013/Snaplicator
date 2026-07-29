@@ -731,6 +731,7 @@ def install_auto_add_trigger(publisher_connstr: str, publication_name: str) -> D
     Idempotent: safe to call multiple times.
     """
     # Create or replace the trigger function with current publication name
+    publication_literal = "'" + publication_name.replace("'", "''") + "'"
     func_sql = f"""
 CREATE OR REPLACE FUNCTION _snaplicator_auto_add_to_pub()
 RETURNS event_trigger
@@ -739,10 +740,33 @@ AS $fn$
 DECLARE
     obj record;
 BEGIN
+    -- A publication that already covers everything has nothing to add to, and
+    -- ALTER ... ADD TABLE on one is an error — raised inside an event trigger,
+    -- which means it does not fail the ALTER, it fails the CREATE TABLE that
+    -- fired it. Left unguarded, installing Snaplicator makes every CREATE
+    -- TABLE on the primary fail:
+    --
+    --   ERROR: publication "..." is defined as FOR ALL TABLES
+    --   CONTEXT: ... PL/pgSQL function _snaplicator_auto_add_to_pub()
+    IF EXISTS (
+        SELECT 1 FROM pg_publication
+        WHERE pubname = {publication_literal} AND puballtables
+    ) THEN
+        RETURN;
+    END IF;
+
     FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands()
     WHERE command_tag = 'CREATE TABLE'
       AND schema_name = 'public'
     LOOP
+        -- Same trap one level down: a table created in a schema the
+        -- publication takes whole (FOR TABLES IN SCHEMA) is published the
+        -- moment it exists, and adding it again is an error.
+        CONTINUE WHEN EXISTS (
+            SELECT 1 FROM pg_publication_tables pt
+            WHERE pt.pubname = {publication_literal}
+              AND format('%I.%I', pt.schemaname, pt.tablename)::regclass = obj.objid
+        );
         EXECUTE format('ALTER PUBLICATION {publication_name} ADD TABLE %s', obj.object_identity);
         RAISE NOTICE 'snaplicator: auto-added % to publication {publication_name}', obj.object_identity;
     END LOOP;
