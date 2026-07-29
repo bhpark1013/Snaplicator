@@ -222,6 +222,13 @@ done
 : "${DEMO_POOL_GIB:=10}"
 # ROOT_DATA_DIR: optional; unset → snaplicator-init picks the best spot
 
+if [ -z "${POSTGRES_PASSWORD:-}" ] && [ -f "$SNAP_HOME/deploy/.env" ]; then
+  # A re-run must keep the password it gave out. The replica container was
+  # created with it and is not recreated here, so inventing a new one would
+  # only make the .env — and everything printed from it, and every clone
+  # connection string — describe a password that does not open anything.
+  POSTGRES_PASSWORD=$(sed -n 's/^POSTGRES_PASSWORD=//p' "$SNAP_HOME/deploy/.env" | tail -1)
+fi
 if [ -z "${POSTGRES_PASSWORD:-}" ]; then
   POSTGRES_PASSWORD=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
 fi
@@ -465,8 +472,13 @@ if [ -d "$SNAP_HOME/deploy" ]; then
   # tree is left alone and said so, rather than reset over.
   if [ -d "$SNAP_HOME/.git" ] && command -v git >/dev/null; then
     BEFORE=$(git -C "$SNAP_HOME" rev-parse --short HEAD 2>/dev/null || echo '?')
-    if [ -n "$(git -C "$SNAP_HOME" status --porcelain 2>/dev/null)" ]; then
-      warn "$SNAP_HOME has uncommitted changes — building from it as it is, not updating to $SNAPLICATOR_REF"
+    # Tracked files only. Untracked ones are not at risk — a checkout leaves
+    # them alone — and this directory is full of them by design: deploy/.env
+    # and its backups are written here by this script, so counting them as
+    # "local changes" meant the installer blocked its own updates from the
+    # second run onwards.
+    if ! git -C "$SNAP_HOME" diff --quiet HEAD 2>/dev/null; then
+      warn "$SNAP_HOME has edits to tracked files — building from it as it is, not updating to $SNAPLICATOR_REF"
     elif git -C "$SNAP_HOME" fetch -q --depth 1 origin "$SNAPLICATOR_REF" 2>/dev/null \
       && git -C "$SNAP_HOME" checkout -q --detach FETCH_HEAD 2>/dev/null; then
       AFTER=$(git -C "$SNAP_HOME" rev-parse --short HEAD 2>/dev/null || echo '?')
@@ -734,8 +746,10 @@ fi
 
 # ── 6. management plane ──────────────────────────────────────────────
 ENV_FILE="$SNAP_HOME/deploy/.env"
-[ -f "$ENV_FILE" ] && cp "$ENV_FILE" "$ENV_FILE.bak.$(date +%Y%m%d-%H%M%S)"
-cat > "$ENV_FILE" <<EOF
+# One backup, and only when there is something to back up. A timestamped copy
+# per run left a growing pile inside the checkout — of files nobody reads,
+# holding passwords, in a directory this script also asks git about.
+cat > "$ENV_FILE.new" <<EOF
 WEB_PORT=$WEB_PORT
 BACKEND_PORT=$BACKEND_PORT
 ROOT_DATA_DIR=$ROOT_DATA_DIR
@@ -757,6 +771,12 @@ PUBLICATION_NAME=$PUBLICATION_NAME
 SUBSCRIPTION_NAME=$SUBSCRIPTION_NAME
 DDL_SYNC_INTERVAL=$DDL_SYNC_INTERVAL
 EOF
+if [ -f "$ENV_FILE" ] && cmp -s "$ENV_FILE" "$ENV_FILE.new"; then
+  rm -f "$ENV_FILE.new"
+else
+  [ -f "$ENV_FILE" ] && mv "$ENV_FILE" "$ENV_FILE.bak"
+  mv "$ENV_FILE.new" "$ENV_FILE"
+fi
 
 info "starting the management plane (first build takes a few minutes)..."
 ( cd "$SNAP_HOME/deploy" && docker compose -p "$PROJECT" up -d --build )
