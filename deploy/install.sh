@@ -171,9 +171,23 @@ if [ "$(uname -s)" = "Darwin" ]; then
     case "$a" in [A-Za-z_]*=*) FWD="$FWD $a" ;; esac
   done
 
+  # The terminal has to be handed over explicitly. Under `curl | bash` this
+  # script's stdin is the pipe, so that is what orb would inherit — and orb
+  # decides whether to forward keystrokes from its own stdin. It gives the
+  # far side a terminal either way (an openable, isatty-true /dev/tty), so
+  # the pool menu over there prints its prompt and then waits on a terminal
+  # nothing types into: the install hangs with no way to answer it, and no
+  # test on the far side can tell the two cases apart.
   info "continuing inside '$MACHINE'..."
-  orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" \
-    bash -c "curl -fsSL '$INSTALLER_URL' | bash -s -- $FWD" || exit $?
+  if { : < /dev/tty; } 2>/dev/null; then
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" \
+      bash -c "curl -fsSL '$INSTALLER_URL' | bash -s -- $FWD" < /dev/tty || exit $?
+  else
+    # No terminal here means orb allocates none there either, so the far side
+    # sees no /dev/tty and takes its own recommendation.
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" \
+      bash -c "curl -fsSL '$INSTALLER_URL' | bash -s -- $FWD" < /dev/null || exit $?
+  fi
 
   IP=$(orbctl list 2>/dev/null | awk -v m="$MACHINE" '$1 == m {print $NF}')
   case "$IP" in [0-9]*.[0-9]*.[0-9]*.[0-9]*) ;; *) IP="" ;; esac
@@ -389,7 +403,9 @@ if fit:
   fi
   REC=$(printf '%s\n' "$OPTIONS" | sed -n 's/^REC|//p')
   REC_ARG=$(printf '%s\n' "$OPTIONS" | sed -n "s/^${REC}|//p")
-  if [ -r /dev/tty ]; then
+  # -r is not the test: the device node passes it for root even with no
+  # terminal behind it, and opening is what fails. Same check as ask_target.
+  if { : < /dev/tty; } 2>/dev/null; then
     choice=""
     case "$REC_ARG" in
       format:*)
