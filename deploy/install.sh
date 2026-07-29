@@ -5,6 +5,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh \
 #     | sudo bash
 #
+#   # on macOS, the same line (without sudo — it does not touch the Mac):
+#   curl -fsSL .../install.sh | bash
+#   It provisions a Linux machine with OrbStack and continues inside it,
+#   because btrfs cannot exist on macOS. MACHINE= names it.
+#
 # Answer the prompt with your primary's connection URI, or with "demo" to
 # have it spin up a seeded sample publisher instead. Both answers can also be
 # given up front, which skips the prompt (useful for unattended runs):
@@ -32,6 +37,36 @@ set -euo pipefail
 
 info() { printf '\033[1;32m[snaplicator]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[snaplicator] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Ask which database to point at, unless it was given. A connection URI
+# carries a password, and an argument is the worst place to put one: it is
+# visible in `ps` for the whole run and it lands in the invoking shell's
+# history. Asking keeps it out of both, which makes the prompt the better
+# default rather than a fallback.
+#
+# stdin is the script itself under `curl | bash`, so the answer is read from
+# the terminal directly — the same way the pool menu below does. Opening
+# /dev/tty is the only real test that one exists: the device node passes -r
+# for root even with no terminal behind it, and the open is what fails.
+ask_target() {
+  if [ "$DEMO" = "1" ] || [ -n "$CONNSTR" ]; then return 0; fi
+  { : < /dev/tty; } 2>/dev/null \
+    || die "no terminal to ask on — pass the connection URI (postgres://user:pw@host:port/db) or --demo"
+  echo >&2
+  info "Point Snaplicator at the database you want clones of." >&2
+  info "No database handy? Answer 'demo' and it will seed a sample one." >&2
+  for _ in 1 2 3; do
+    read -r -p "[snaplicator] connection URI (or 'demo'): " CONNSTR < /dev/tty || CONNSTR=""
+    case "$CONNSTR" in
+      demo|DEMO|Demo) DEMO=1; CONNSTR=""; return 0 ;;
+      postgres://*|postgresql://*) return 0 ;;
+      # Never echo the rejected answer back: something that failed the
+      # postgres:// pattern is usually still a URI, password and all.
+      *) printf '  need postgres://user:pw@host:port/db (or demo)\n' >&2; CONNSTR="" ;;
+    esac
+  done
+  die "no connection URI given"
+}
 
 # ── argument parsing: [--demo] [CONNSTR] [VAR=VALUE ...] ─────────────
 DEMO=0
@@ -71,43 +106,89 @@ if [ -z "${POSTGRES_PASSWORD:-}" ]; then
   POSTGRES_PASSWORD=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
 fi
 
+# ── 0. macOS: get a Linux, then continue inside it ───────────────────
+# btrfs is a Linux kernel filesystem, so there is nothing here to install
+# onto. The Mac's own Docker does not help: its containers run in a VM whose
+# mount namespace you cannot add to, and the daemon resolves every -v path
+# there — so a pool mounted anywhere else is invisible to it and clones would
+# silently receive an empty directory as their PGDATA. What is needed is a
+# Linux the user owns, with the daemon living in it. Rather than making that
+# the reader's homework, do it.
+if [ "$(uname -s)" = "Darwin" ]; then
+  : "${MACHINE:=snaplicator}"
+  : "${MACHINE_IMAGE:=ubuntu}"
+  : "${INSTALLER_URL:=https://raw.githubusercontent.com/bhpark1013/Snaplicator/${SNAPLICATOR_REF}/deploy/install.sh}"
+
+  if ! command -v orbctl >/dev/null; then
+    if command -v brew >/dev/null && { : < /dev/tty; } 2>/dev/null; then
+      info "OrbStack provides the Linux machine this needs (and replaces Docker Desktop)."
+      read -r -p "[snaplicator] install OrbStack with brew? [Y/n] " reply < /dev/tty || reply=""
+      case "$reply" in
+        ""|y|Y|yes|YES) brew install --cask orbstack || die "brew install failed" ;;
+        *) die "install OrbStack (https://orbstack.dev), or run this inside a Linux VM of your own" ;;
+      esac
+    else
+      die "OrbStack is required on macOS: brew install --cask orbstack  (or run this inside a Linux VM of your own)"
+    fi
+  fi
+
+  # Ask here, where the user actually is. The handoff below runs without a
+  # terminal of its own, so a prompt on the far side would have nothing to
+  # read from.
+  ask_target
+
+  if orbctl list 2>/dev/null | awk '{print $1}' | grep -qx "$MACHINE"; then
+    info "reusing the Linux machine '$MACHINE'"
+  else
+    info "creating the Linux machine '$MACHINE' ($MACHINE_IMAGE)..."
+    orbctl create "$MACHINE_IMAGE" "$MACHINE" >/dev/null || die "could not create the machine '$MACHINE'"
+  fi
+  orbctl start "$MACHINE" >/dev/null 2>&1 || true
+
+  # A fresh image ships curl, python3 and ss; docker and btrfs-progs are the
+  # only gaps. The machine's root filesystem is already btrfs, so the pool
+  # needs no disk of its own.
+  info "preparing '$MACHINE' (docker, btrfs-progs)..."
+  orb -m "$MACHINE" -u root bash -c '
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq >/dev/null 2>&1
+    apt-get install -y -qq docker.io btrfs-progs >/dev/null 2>&1
+    systemctl start docker' || die "could not prepare '$MACHINE'"
+
+  # Hand off to the same script, running as root inside the machine. The URI
+  # travels in the environment, not argv: this script already honours a
+  # preset CONNSTR, and argv would publish the password to that machine's
+  # process list for the length of the install.
+  FWD=()
+  if [ "$DEMO" = "1" ]; then FWD+=(--demo); fi
+  for a in "$@"; do
+    case "$a" in [A-Za-z_]*=*) FWD+=("$a") ;; esac
+  done
+
+  info "continuing inside '$MACHINE'..."
+  orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" \
+    bash -c "curl -fsSL '$INSTALLER_URL' | bash -s -- ${FWD[*]}" || exit $?
+
+  IP=$(orbctl list 2>/dev/null | awk -v m="$MACHINE" '$1 == m {print $NF}')
+  case "$IP" in [0-9]*.[0-9]*.[0-9]*.[0-9]*) ;; *) IP="" ;; esac
+  echo
+  info "this runs inside the Linux machine '$MACHINE', not on macOS directly:"
+  echo "  shell into it:  orb -m $MACHINE"
+  echo "  its containers: orb -m $MACHINE docker ps    (plain 'docker ps' will not show them)"
+  [ -n "$IP" ] && echo "  reachable at:   $IP"
+  echo
+  exit 0
+fi
+
 # ── 1. prerequisites ─────────────────────────────────────────────────
-[ "$(uname -s)" = "Linux" ] || die "Linux only (btrfs is a Linux kernel filesystem). On macOS run this inside a Linux VM (OrbStack/Lima)."
+[ "$(uname -s)" = "Linux" ] || die "Linux or macOS only (btrfs is a Linux kernel filesystem)."
 [ "$(id -u)" = "0" ] || die "run as root:  curl ... | sudo bash -s -- ..."
 command -v docker >/dev/null || die "docker is required (https://docs.docker.com/engine/install/)"
 command -v python3 >/dev/null || die "python3 (>= 3.10) is required"
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' \
   || die "python3 >= 3.10 required (found $(python3 --version))"
 
-# Nothing was passed in, so ask. A connection URI carries a password, and an
-# argument is the worst place to put one: it is visible in `ps` for the whole
-# run and it lands in the invoking shell's history. Asking keeps it out of
-# both, which makes the prompt the better default rather than a fallback.
-#
-# stdin is the script itself under `curl | bash`, so the answer has to be
-# read from the terminal directly — the same way the pool menu below does it.
-if [ "$DEMO" = "0" ] && [ -z "$CONNSTR" ]; then
-  # Opening it is the only real test. Under `curl | sudo bash` with no
-  # terminal the device node still exists and still passes -r for root; the
-  # open is what fails, and without this the prompt loop would spin against a
-  # dead fd and report "no connection URI given" instead of the real reason.
-  { : < /dev/tty; } 2>/dev/null \
-    || die "no terminal to ask on — pass the connection URI (postgres://user:pw@host:port/db) or --demo"
-  echo >&2
-  info "Point Snaplicator at the database you want clones of." >&2
-  info "No database handy? Answer 'demo' and it will seed a sample one." >&2
-  for _ in 1 2 3; do
-    read -r -p "[snaplicator] connection URI (or 'demo'): " CONNSTR < /dev/tty || CONNSTR=""
-    case "$CONNSTR" in
-      demo|DEMO|Demo) DEMO=1; CONNSTR=""; break ;;
-      postgres://*|postgresql://*) break ;;
-      # Never echo the rejected answer back: a URI that failed the pattern
-      # is usually still a URI, password and all.
-      *) printf '  need postgres://user:pw@host:port/db (or demo)\n' >&2; CONNSTR="" ;;
-    esac
-  done
-  [ "$DEMO" = "1" ] || [ -n "$CONNSTR" ] || die "no connection URI given"
-fi
+ask_target
 
 if [ "$DEMO" = "0" ]; then
   case "$CONNSTR" in postgres://*|postgresql://*) ;; *) die "URI form required: postgres://user:pw@host:port/db" ;; esac
