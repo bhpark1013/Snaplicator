@@ -61,14 +61,50 @@ publisher_preflight() {
       SELECT (SELECT count(*) FROM pg_publication WHERE pubname = '$PUBLICATION_NAME') > 0,
              (SELECT rolsuper FROM pg_roles WHERE rolname = current_user),
              coalesce((SELECT bool_or(pg_has_role(current_user, oid, 'USAGE'))
-                       FROM pg_roles WHERE rolname = 'rds_superuser'), false)" 2>&1); then
+                       FROM pg_roles WHERE rolname = 'rds_superuser'), false),
+             current_setting('wal_level'),
+             (SELECT count(*) FROM pg_replication_slots),
+             current_setting('max_replication_slots')::int,
+             (SELECT rolreplication FROM pg_roles WHERE rolname = current_user),
+             (SELECT count(*) FROM pg_subscription WHERE subname LIKE 'snaplicator%')" 2>&1); then
     [ "$mode" = "soft" ] && return 0
     printf '%s\n' "$out" >&2
     die "could not reach the publisher with that URI"
   fi
-  IFS='|' read -r pub super rds <<EOF
+  IFS='|' read -r pub super rds wal slots_used slots_max repl subs <<EOF
 $out
 EOF
+
+  # Whether this database can publish at all, before whether this account may.
+  # wal_level is a restart-only setting, so there is nothing an install can do
+  # about it and nothing later in the run that will not fail — which is why it
+  # is worth a query and not a warning at the point of no return.
+  if [ "$wal" != "logical" ]; then
+    die "this database cannot publish logical changes: wal_level is '$wal', not 'logical'.
+  It is a server setting and a restart: ALTER SYSTEM SET wal_level = 'logical'; then restart.
+  (On RDS: set rds.logical_replication = 1 in the parameter group and reboot.)
+  A Snaplicator clone is one of these — clones run wal_level=replica. Point at the primary."
+  fi
+  # A Snaplicator replica does run wal_level=logical, so nothing above catches
+  # it, and replicating from one copies a copy: the same data, one hop further
+  # behind, with the clones that matter left downstream of a chain.
+  if [ "${subs:-0}" != "0" ] && [ "${subs:-0}" != "" ]; then
+    warn "this database is itself a Snaplicator subscriber — it is a replica, not a primary."
+    warn "Replicating from it works, but it copies a copy: everything arrives a hop later"
+    warn "than it needs to. Point at the primary unless this is deliberate."
+  fi
+  if [ "${slots_used:-0}" -ge "${slots_max:-0}" ]; then
+    die "the publisher has no replication slot left ($slots_used of $slots_max in use).
+  Raise max_replication_slots (a restart), or drop a slot no subscriber is using:
+    SELECT slot_name, active FROM pg_replication_slots;"
+  fi
+  # The subscriber connects back as this role, and a role without REPLICATION
+  # cannot open the stream however many table privileges it has.
+  if [ "$super" != "t" ] && [ "$rds" != "t" ] && [ "$repl" != "t" ]; then
+    die "the account in that URI cannot replicate: it has neither superuser nor the
+  REPLICATION attribute, so the subscription cannot connect.
+    ALTER ROLE <user> WITH REPLICATION;"
+  fi
   # rds_superuser is checked separately because RDS grants no superuser at
   # all: the managed role is what a superuser is there, and the ownership
   # checks are patched to accept it.
