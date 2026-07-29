@@ -36,7 +36,54 @@
 set -euo pipefail
 
 info() { printf '\033[1;32m[snaplicator]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[snaplicator] WARNING:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[snaplicator] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Ask the publisher the question that decides whether this install can finish,
+# and ask it before anything has been built. The answer used to arrive at the
+# publication step — after a machine had been created, 150 MB of packages
+# installed and a pool provisioned — and it is one round trip.
+#
+# What it costs to be wrong is the whole asymmetry: the check is a single
+# query, and skipping it buys a four-minute walk to a message the user could
+# have had immediately.
+#
+# soft on macOS, where a failure to connect says nothing: the machine that
+# will do the real connecting does not exist yet, and this Mac may not even
+# have psql. Only a definite answer is acted on there.
+publisher_preflight() {
+  local mode=$1 out pub super rds
+  command -v psql >/dev/null 2>&1 || return 0
+  if ! out=$(PGCONNECT_TIMEOUT=10 psql "$CONNSTR" -Atc "
+      SELECT (SELECT count(*) FROM pg_publication WHERE pubname = '$PUBLICATION_NAME') > 0,
+             (SELECT rolsuper FROM pg_roles WHERE rolname = current_user),
+             coalesce((SELECT bool_or(pg_has_role(current_user, oid, 'USAGE'))
+                       FROM pg_roles WHERE rolname = 'rds_superuser'), false)" 2>&1); then
+    [ "$mode" = "soft" ] && return 0
+    printf '%s\n' "$out" >&2
+    die "could not reach the publisher with that URI"
+  fi
+  IFS='|' read -r pub super rds <<EOF
+$out
+EOF
+  # rds_superuser is checked separately because RDS grants no superuser at
+  # all: the managed role is what a superuser is there, and the ownership
+  # checks are patched to accept it.
+  if [ "$super" = "t" ] || [ "$rds" = "t" ]; then
+    return 0
+  fi
+  if [ "$pub" = "t" ]; then
+    warn "$PUBLICATION_NAME exists, so replication will work, but the account in that URI"
+    warn "is not a superuser: the trigger that keeps the publication current cannot be"
+    warn "installed (CREATE EVENT TRIGGER is superuser-only), so tables created later"
+    warn "will have to be added by hand."
+    return 0
+  fi
+  die "the publication $PUBLICATION_NAME does not exist and this account cannot create it.
+  CREATE PUBLICATION ... FOR ALL TABLES is superuser-only — PostgreSQL offers no GRANT for it.
+  Either point at a superuser account (on RDS: a member of rds_superuser), or create it
+  yourself and re-run:  CREATE PUBLICATION $PUBLICATION_NAME FOR ALL TABLES;"
+}
 
 # Run a step that has nothing to say while it works, and say something on its
 # behalf. A minutes-long silence is indistinguishable from a hang, and the
@@ -170,6 +217,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # terminal of its own, so a prompt on the far side would have nothing to
   # read from.
   ask_target
+  [ "$DEMO" = "1" ] || publisher_preflight soft
 
   if orbctl list 2>/dev/null | awk '{print $1}' | grep -qx "$MACHINE"; then
     info "reusing the Linux machine '$MACHINE'"
@@ -368,6 +416,9 @@ PY
 )
 EOF
   [ -n "$PRIMARY_HOST" ] || die "could not parse host from: $CONNSTR"
+  # Here the connection is the machine's own, so a failure to reach the
+  # publisher is the answer rather than an inconclusive one.
+  publisher_preflight hard
 fi
 
 # ── 4. btrfs pool (snaplicator-init: measure → plan → ask → apply) ───
