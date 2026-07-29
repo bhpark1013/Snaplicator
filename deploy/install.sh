@@ -407,6 +407,15 @@ if fit:
   # terminal behind it, and opening is what fails. Same check as ask_target.
   if { : < /dev/tty; } 2>/dev/null; then
     choice=""
+    # Empty the terminal's input queue first. A terminal emulator answers the
+    # queries programs make of it (background colour, cursor position) by
+    # writing the reply into that queue, and whatever is sitting there when
+    # this prompt opens is read as if it had been typed — over an orb session
+    # a reply generated during the handoff arrives with no one to consume it,
+    # and lands here minutes later glued to the front of the answer.
+    while read -r -t 0 _junk < /dev/tty 2>/dev/null; do
+      read -r -t 0.2 _junk < /dev/tty 2>/dev/null || break
+    done
     case "$REC_ARG" in
       format:*)
         # a destructive option is never the enter-key default
@@ -415,6 +424,13 @@ if fit:
       *)
         read -r -p "[snaplicator] where should the pool live? [${REC}] " choice < /dev/tty || choice=""
         [ -n "$choice" ] || choice=$REC ;;
+    esac
+    # The answer is about to become part of a sed expression, so it has to be
+    # a number before it gets there: anything else is a sed syntax error
+    # instead of the message written for exactly this mistake.
+    choice=${choice%$'\r'}
+    case "$choice" in
+      ''|*[!0-9]*) die "not a number: pick one of the listed options and re-run" ;;
     esac
     SELECTED=$(printf '%s\n' "$OPTIONS" | sed -n "s/^${choice}|//p")
     [ -n "$SELECTED" ] || die "no option ${choice} — re-run and pick a listed number"
