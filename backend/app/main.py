@@ -10,6 +10,7 @@ from .api.routes.snapshots import router as snapshots_router
 from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
 from .services import fdw as fdw_svc
+from .services import fdw_creds
 from .services import sync_log
 from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, sync_table_schema_moves, install_auto_add_trigger, verify_trigger_installed
 from .services.replication import auto_sync_new_tables, sync_column_changes, sync_check_constraints, install_auto_add_trigger, verify_trigger_installed
@@ -143,11 +144,12 @@ async def ddl_sync_loop():
                     settings.container_name
                     and settings.postgres_user
                     and settings.postgres_db
-                    and settings.fdw_user
-                    and settings.fdw_password
-                    and settings.effective_fdw_host()
-                    and settings.effective_fdw_port()
-                    and settings.effective_fdw_db()
+                    # The login may have arrived through the UI rather than
+                    # .env, and drift sync has to use whichever one is real.
+                    and fdw_creds.configured()
+                    and fdw_creds.host()
+                    and fdw_creds.port()
+                    and fdw_creds.dbname()
                 ):
                     yaml_abs = settings.fdw_yaml_abs()
                     if yaml_abs.exists():
@@ -160,11 +162,11 @@ async def ddl_sync_loop():
                                 "pg_user": settings.postgres_user,
                                 "pg_db": settings.postgres_db,
                                 "pg_password": settings.postgres_password,
-                                "primary_host": settings.effective_fdw_host(),
-                                "primary_port": settings.effective_fdw_port(),
-                                "primary_db": settings.effective_fdw_db(),
-                                "fdw_user": settings.fdw_user,
-                                "fdw_password": settings.fdw_password,
+                                "primary_host": fdw_creds.host(),
+                                "primary_port": fdw_creds.port(),
+                                "primary_db": fdw_creds.dbname(),
+                                "fdw_user": fdw_creds.user(),
+                                "fdw_password": fdw_creds.password(),
                             }
                             fdw_res = await asyncio.to_thread(
                                 fdw_svc.sync_fdw_drift,

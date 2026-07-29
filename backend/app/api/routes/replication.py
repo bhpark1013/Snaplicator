@@ -6,6 +6,7 @@ from ...services.sql_guard import assert_read_only_sql, ReadOnlyViolation
 from ...services import sync_log
 from ...services import bootstrap as bootstrap_svc
 from ...services import selection as selection_svc
+from ...services import fdw_creds
 from ...services.replication import (
     get_replication_lag_seconds,
     get_initial_copy_progress,
@@ -586,10 +587,10 @@ class FdwSchemasRequest(BaseModel):
 
 
 def _require_fdw_credentials():
-    if not settings.fdw_user or not settings.fdw_password:
+    if not fdw_creds.configured():
         raise HTTPException(
             status_code=400,
-            detail="FDW_USER / FDW_PASSWORD not configured in .env",
+            detail="No FDW login configured — set one in the UI, or FDW_USER / FDW_PASSWORD in .env",
         )
 
 
@@ -610,11 +611,11 @@ def _build_fdw_apply_args() -> dict:
         "pg_user": settings.postgres_user,
         "pg_db": settings.postgres_db,
         "pg_password": settings.postgres_password,
-        "primary_host": settings.effective_fdw_host(),
-        "primary_port": settings.effective_fdw_port(),
-        "primary_db": settings.effective_fdw_db(),
-        "fdw_user": settings.fdw_user,
-        "fdw_password": settings.fdw_password,
+        "primary_host": fdw_creds.host(),
+        "primary_port": fdw_creds.port(),
+        "primary_db": fdw_creds.dbname(),
+        "fdw_user": fdw_creds.user(),
+        "fdw_password": fdw_creds.password(),
     }
 
 
@@ -641,9 +642,80 @@ def get_fdw_state():
             "live_foreign_tables": live,
             "yaml_path": str(settings.fdw_yaml_abs()),
             "sql_path": str(settings.fdw_sql_abs()),
+            # Whether a login exists and where it came from — never the login
+            # itself. A password that goes in does not come back out.
+            "credentials": {
+                "configured": fdw_creds.configured(),
+                "source": fdw_creds.source(),
+                "user": fdw_creds.user(),
+                "host": fdw_creds.host(),
+                "port": fdw_creds.port(),
+                "dbname": fdw_creds.dbname(),
+            },
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read fdw state: {e}")
+
+
+class FdwCredentialsBody(BaseModel):
+    user: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    # Blank means "wherever replication connects" — the common case, and one
+    # less thing to get wrong. A bastion or a pooler is the reason to differ.
+    host: Optional[str] = None
+    port: Optional[int] = None
+    dbname: Optional[str] = None
+
+
+@router.put("/fdw/credentials")
+def put_fdw_credentials(body: FdwCredentialsBody):
+    """Set the login foreign tables are read as, and build the server with it."""
+    try:
+        host = body.host or settings.primary_host
+        port = body.port or settings.primary_port
+        db = body.dbname or settings.primary_db
+        if not (host and port and db):
+            raise HTTPException(status_code=400, detail="No primary connection known to test against")
+
+        err = fdw_creds.check(body.user, body.password, host, int(port), db)
+        if err:
+            raise HTTPException(status_code=400, detail=f"Could not connect as '{body.user}': {err}")
+
+        fdw_creds.save(body.user, body.password, body.host, body.port, body.dbname)
+
+        # Build the foreign server now if there is a replica to build it in.
+        # Nothing about this needs the replica to be recreated: the server and
+        # its user mapping are ordinary SQL, applied the same way the table
+        # mappings are.
+        applied = None
+        try:
+            cfg = fdw_svc.load_yaml(settings.fdw_yaml_abs())
+            applied = fdw_svc._regenerate_and_apply(
+                cfg, settings.fdw_yaml_abs(), settings.fdw_sql_abs(), _build_fdw_apply_args()
+            )
+        except Exception as e:
+            applied = {"applied": False, "result": {"stderr": str(e)}}
+
+        return {
+            "configured": True,
+            "user": body.user,
+            "server_applied": bool(applied and applied.get("applied")),
+            "detail": (applied or {}).get("result", {}).get("stderr") or None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to set FDW credentials: {e}")
+
+
+@router.delete("/fdw/credentials")
+def delete_fdw_credentials():
+    """Forget the stored login. Leaves the foreign server and its mapping alone."""
+    try:
+        fdw_creds.clear()
+        return {"configured": fdw_creds.configured(), "source": fdw_creds.source()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear FDW credentials: {e}")
 
 
 @router.post("/fdw/tables")

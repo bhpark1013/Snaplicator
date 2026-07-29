@@ -39,6 +39,14 @@ interface FdwState {
     live_foreign_tables: { schema: string; table: string }[]
     yaml_path: string
     sql_path: string
+    credentials?: {
+        configured: boolean
+        source: 'env' | 'ui' | 'none'
+        user: string | null
+        host: string | null
+        port: number | null
+        dbname: string | null
+    }
 }
 
 type FilterTab = 'all' | 'replicated' | 'fdw' | 'none'
@@ -182,7 +190,7 @@ function ModeSwitch({
                     <button
                         key={o.mode}
                         disabled={disabled}
-                        title={disabled ? 'Live needs a read-only account on the primary (FDW_USER / FDW_PASSWORD) — not set' : undefined}
+                        title={disabled ? 'Live needs a read-only account on the primary — none is set yet' : undefined}
                         onClick={() => onChange(o.mode)}
                         className={cn(
                             'border-r border-border px-2 py-0.5 text-[11.5px] leading-5 transition-colors last:border-r-0',
@@ -235,6 +243,106 @@ function Disclosure({
             </button>
             {open && <div className="border-t border-border px-4 py-3">{children}</div>}
         </Card>
+    )
+}
+
+/**
+ * The FDW login, entered here instead of in a file on the host.
+ *
+ * The password is checked against the primary before it is kept: the other
+ * place to discover a wrong one is inside the replica, as a foreign table
+ * that errors on every query, and a login that was never going to work should
+ * not become part of the replica's catalog. It goes in and does not come back
+ * out — the API answers whether one is set, never what it is.
+ */
+function FdwCredentialsForm({ base, onSaved }: { base: string; onSaved: () => void }) {
+    const [user, setUser] = useState('')
+    const [password, setPassword] = useState('')
+    const [advanced, setAdvanced] = useState(false)
+    const [host, setHost] = useState('')
+    const [port, setPort] = useState('')
+    const [dbname, setDbname] = useState('')
+    const [busy, setBusy] = useState(false)
+    const [err, setErr] = useState<string | null>(null)
+
+    const save = async () => {
+        setBusy(true)
+        setErr(null)
+        try {
+            const r = await fetch(`${base}/replication/fdw/credentials`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user,
+                    password,
+                    host: host || null,
+                    port: port ? Number(port) : null,
+                    dbname: dbname || null,
+                }),
+            })
+            const body = await r.json().catch(() => ({}))
+            if (!r.ok) throw new Error(body?.detail || `${r.status}`)
+            setPassword('')
+            onSaved()
+        } catch (e: any) {
+            setErr(String(e?.message || e))
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    return (
+        <div className="rounded-md border border-border p-3">
+            <div className="flex flex-wrap items-end gap-2">
+                <label className="flex flex-col gap-1">
+                    <span className="text-xs text-muted-foreground">Role</span>
+                    <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="snap_fdw" className="w-44" />
+                </label>
+                <label className="flex flex-col gap-1">
+                    <span className="text-xs text-muted-foreground">Password</span>
+                    <Input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-52"
+                        onKeyDown={(e) => { if (e.key === 'Enter' && user && password && !busy) save() }}
+                    />
+                </label>
+                <Button variant="primary" size="sm" disabled={!user || !password || busy} onClick={save}>
+                    {busy ? 'Checking…' : 'Save and connect'}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setAdvanced((a) => !a)}>
+                    {advanced ? 'Hide' : 'Different host?'}
+                </Button>
+            </div>
+
+            {advanced && (
+                <div className="mt-3 flex flex-wrap items-end gap-2">
+                    <label className="flex flex-col gap-1">
+                        <span className="text-xs text-muted-foreground">Host</span>
+                        <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="same as replication" className="w-52" />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                        <span className="text-xs text-muted-foreground">Port</span>
+                        <Input value={port} onChange={(e) => setPort(e.target.value)} placeholder="5432" className="w-24" />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                        <span className="text-xs text-muted-foreground">Database</span>
+                        <Input value={dbname} onChange={(e) => setDbname(e.target.value)} placeholder="same as replication" className="w-44" />
+                    </label>
+                    <span className="text-xs text-muted-foreground">
+                        Only if live reads go somewhere else than replication does — a pooler, or a read replica.
+                    </span>
+                </div>
+            )}
+
+            {err && <p className="mt-2 text-xs text-destructive">{err}</p>}
+            <p className="mt-2 text-xs text-muted-foreground">
+                Checked against the primary before it is kept, and stored where this manager keeps its
+                state — not in the file on the host, which is read-only to it.
+            </p>
+        </div>
     )
 }
 
@@ -345,7 +453,10 @@ export function ReplicationTables() {
     // FDW needs a role on the primary to read as. Without one the option is
     // not a choice the user has, so it is shown as unavailable with the
     // reason rather than offered and then refused by the server.
-    const fdwReady = !!(fdw?.server?.options?.host)
+    // A login is what decides this, not the generated config: the server is
+    // built from the login, so asking about the server answers a moment later
+    // than the user acts.
+    const fdwReady = !!(fdw?.credentials?.configured || fdw?.server?.options?.host)
 
     const currentMode = (t: TableInfo): TableMode => tableMode(t, fdwSet)
     const modeOf = (t: TableInfo): TableMode => overrides.get(`${t.schema}.${t.table}`) ?? currentMode(t)
@@ -632,16 +743,11 @@ export function ReplicationTables() {
                             handing that out with each clone is not a thing to do by default.
                         </p>
                         <p className="mb-1 text-muted-foreground">1 — on the primary, a role that can only read:</p>
-                        <pre className="mb-3 overflow-x-auto rounded-md bg-secondary p-2 font-mono text-[11.5px] leading-relaxed">{`CREATE ROLE snap_fdw LOGIN PASSWORD '…';
+                        <pre className="mb-4 overflow-x-auto rounded-md bg-secondary p-2 font-mono text-[11.5px] leading-relaxed">{`CREATE ROLE snap_fdw LOGIN PASSWORD '…';
 GRANT USAGE ON SCHEMA public TO snap_fdw;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
-                        <p className="mb-1 text-muted-foreground">2 — on the machine running Snaplicator:</p>
-                        <pre className="mb-3 overflow-x-auto rounded-md bg-secondary p-2 font-mono text-[11.5px] leading-relaxed">{`printf 'FDW_USER=snap_fdw\\nFDW_PASSWORD=…\\n' >> /opt/snaplicator/deploy/.env
-cd /opt/snaplicator/deploy && docker compose -p snaplicator up -d`}</pre>
-                        <p className="text-xs text-muted-foreground">
-                            Set it before the first copy if you can: the foreign server is built when the
-                            replica is, and adding it later means building the replica again.
-                        </p>
+                        <p className="mb-2 text-muted-foreground">2 — tell Snaplicator about it:</p>
+                        <FdwCredentialsForm base={base} onSaved={() => { loadFdw(); loadTables() }} />
                     </div>
                 )}
             </Disclosure>
@@ -652,9 +758,8 @@ cd /opt/snaplicator/deploy && docker compose -p snaplicator up -d`}</pre>
             {!fdwReady && (
                 <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-secondary/40 px-3 py-2 text-[13px]">
                     <span className="text-muted-foreground">
-                        <span className="font-medium text-foreground">Live</span> is off — it needs a read-only
-                        account on the primary (<span className="font-mono text-xs">FDW_USER</span> /{' '}
-                        <span className="font-mono text-xs">FDW_PASSWORD</span>), which is not set.
+                        <span className="font-medium text-foreground">Live</span> is off — reading from the
+                        primary at query time needs its own read-only account, and none is set.
                     </span>
                     <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setFdwOpen(true)}>
                         How to set it up
