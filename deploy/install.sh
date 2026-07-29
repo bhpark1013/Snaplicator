@@ -447,7 +447,36 @@ done
 
 # ── 2. fetch the repository ──────────────────────────────────────────
 if [ -d "$SNAP_HOME/deploy" ]; then
-  info "reusing existing checkout at $SNAP_HOME"
+  # Reusing the checkout is not the same as keeping it. A re-run is how this
+  # installs a newer Snaplicator — the images are rebuilt from these files —
+  # and skipping the fetch quietly rebuilt the same code every time, which
+  # looks exactly like a fix that did not work.
+  #
+  # Local edits are the one thing worth more than being current, so a dirty
+  # tree is left alone and said so, rather than reset over.
+  if [ -d "$SNAP_HOME/.git" ] && command -v git >/dev/null; then
+    BEFORE=$(git -C "$SNAP_HOME" rev-parse --short HEAD 2>/dev/null || echo '?')
+    if [ -n "$(git -C "$SNAP_HOME" status --porcelain 2>/dev/null)" ]; then
+      warn "$SNAP_HOME has uncommitted changes — building from it as it is, not updating to $SNAPLICATOR_REF"
+    elif git -C "$SNAP_HOME" fetch -q --depth 1 origin "$SNAPLICATOR_REF" 2>/dev/null \
+      && git -C "$SNAP_HOME" checkout -q --detach FETCH_HEAD 2>/dev/null; then
+      AFTER=$(git -C "$SNAP_HOME" rev-parse --short HEAD 2>/dev/null || echo '?')
+      if [ "$BEFORE" = "$AFTER" ]; then
+        info "checkout already current ($SNAPLICATOR_REF @ $AFTER)"
+      else
+        info "updated the checkout: $BEFORE → $AFTER ($SNAPLICATOR_REF)"
+      fi
+    else
+      warn "could not update $SNAP_HOME to $SNAPLICATOR_REF — building from what is there ($BEFORE)"
+    fi
+  else
+    # Fetched as a tarball the first time (no git on the host): the same
+    # tarball over the top is the only update available, and it overwrites.
+    info "refreshing $SNAP_HOME from $SNAPLICATOR_REF..."
+    curl -fsSL "https://codeload.github.com/bhpark1013/Snaplicator/tar.gz/refs/heads/$SNAPLICATOR_REF" \
+      | tar xz --strip-components=1 -C "$SNAP_HOME" \
+      || warn "could not refresh $SNAP_HOME — building from what is there"
+  fi
 else
   info "fetching Snaplicator ($SNAPLICATOR_REF) to $SNAP_HOME..."
   mkdir -p "$SNAP_HOME"
