@@ -162,15 +162,18 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # travels in the environment, not argv: this script already honours a
   # preset CONNSTR, and argv would publish the password to that machine's
   # process list for the length of the install.
-  FWD=()
-  if [ "$DEMO" = "1" ]; then FWD+=(--demo); fi
+  # A plain string, not an array: macOS ships bash 3.2, where expanding an
+  # empty array under `set -u` is itself an "unbound variable" error — which
+  # is exactly the common case here, a run with only a URI to pass.
+  FWD=""
+  if [ "$DEMO" = "1" ]; then FWD="--demo"; fi
   for a in "$@"; do
-    case "$a" in [A-Za-z_]*=*) FWD+=("$a") ;; esac
+    case "$a" in [A-Za-z_]*=*) FWD="$FWD $a" ;; esac
   done
 
   info "continuing inside '$MACHINE'..."
   orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" \
-    bash -c "curl -fsSL '$INSTALLER_URL' | bash -s -- ${FWD[*]}" || exit $?
+    bash -c "curl -fsSL '$INSTALLER_URL' | bash -s -- $FWD" || exit $?
 
   IP=$(orbctl list 2>/dev/null | awk -v m="$MACHINE" '$1 == m {print $NF}')
   case "$IP" in [0-9]*.[0-9]*.[0-9]*.[0-9]*) ;; *) IP="" ;; esac
