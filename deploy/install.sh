@@ -326,7 +326,16 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # run, i.e. the one furthest up.
   info "continuing inside '$MACHINE'..."
   FAR_LOG=/var/log/snaplicator-install.log
-  FAR_CMD="curl -fsSL '$INSTALLER_URL' | bash -s -- $FWD"
+  # The far side used to fetch its own copy, which meant two downloads of the
+  # same file through a CDN that caches it for five minutes — so the two sides
+  # could be different versions of this script, and a fix pushed minutes ago
+  # could run on one and not the other. It is fetched once here, with a query
+  # string the cache has not seen, and handed over.
+  SCRIPT=$(curl -fsSL "${INSTALLER_URL}?cb=$$$(date +%s)") \
+    || die "could not download the installer from $INSTALLER_URL"
+  printf '%s' "$SCRIPT" | orb -m "$MACHINE" -u root bash -c 'cat > /tmp/snaplicator-install.sh' \
+    || die "could not copy the installer into '$MACHINE'"
+  FAR_CMD="bash /tmp/snaplicator-install.sh $FWD"
   # script(1) keeps a pty, so the far side still sees a terminal: its prompts
   # still find /dev/tty and its progress ticker still knows it has a reader.
   # -e returns the child's exit status rather than script's own.
