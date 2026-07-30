@@ -340,8 +340,22 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # string the cache has not seen, and handed over.
   SCRIPT=$(curl -fsSL "${INSTALLER_URL}?cb=$$$(date +%s)") \
     || die "could not download the installer from $INSTALLER_URL"
-  printf '%s' "$SCRIPT" | orb -m "$MACHINE" -u root bash -c 'cat > /tmp/snaplicator-install.sh' \
-    || die "could not copy the installer into '$MACHINE'"
+  # Kept off the terminal deliberately. orb restores the terminal when a
+  # session ends — alternate screen off, origin mode reset, mouse and
+  # bracketed-paste modes cleared, cursor put back — and it does that even for
+  # a one-shot pipe that displays nothing:
+  #
+  #     ESC]11;? ESC[6n ESC[?1049l ESC[?6l ESC[?7h ESC[?2004l ...
+  #
+  # Landing between the line above and the session below, that restore puts
+  # the cursor back where it was before either was written, so the far side's
+  # first prompt draws over this line instead of after it. With stdout off the
+  # terminal orb writes nothing at all, which is what this call has to say.
+  if ! COPY_ERR=$(printf '%s' "$SCRIPT" \
+      | orb -m "$MACHINE" -u root bash -c 'cat > /tmp/snaplicator-install.sh' 2>&1 >/dev/null); then
+    if [ -n "$COPY_ERR" ]; then printf '%s\n' "$COPY_ERR" >&2; fi
+    die "could not copy the installer into '$MACHINE'"
+  fi
   FAR_CMD="bash /tmp/snaplicator-install.sh $FWD"
   # script(1) keeps a pty, so the far side still sees a terminal: its prompts
   # still find /dev/tty and its progress ticker still knows it has a reader.
