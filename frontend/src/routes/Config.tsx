@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
+import { ChevronDown, ChevronRight, RefreshCw, Upload } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -47,6 +47,14 @@ export function Config() {
     const [checkLoading, setCheckLoading] = useState(false)
     const [checkError, setCheckError] = useState<string | null>(null)
     const [checkExpanded, setCheckExpanded] = useState(false)
+
+    const [anon, setAnon] = useState<{ configured: boolean; path: string; sql: string } | null>(null)
+    const [anonExpanded, setAnonExpanded] = useState(false)
+    const [anonPending, setAnonPending] = useState<{ name: string; sql: string; lines: number } | null>(null)
+    const [anonDragging, setAnonDragging] = useState(false)
+    const [anonSaving, setAnonSaving] = useState(false)
+    const [anonError, setAnonError] = useState<string | null>(null)
+    const [anonMsg, setAnonMsg] = useState<string | null>(null)
     const [logsExpanded, setLogsExpanded] = useState(false)
 
     const [editSql, setEditSql] = useState<string>('')
@@ -125,6 +133,58 @@ export function Config() {
             .finally(() => setCheckLoading(false))
     }
 
+    const loadAnon = () => {
+        fetch(`${base}/clones/anonymize-sql`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d) setAnon({ configured: !!d.configured, path: d.path || '', sql: d.sql || '' }) })
+            .catch(() => {})
+    }
+
+    const readAnonFile = (f: File) => {
+        setAnonError(null)
+        setAnonMsg(null)
+        if (f.size > 1_000_000) {
+            setAnonError(`${f.name} is ${(f.size / 1_000_000).toFixed(1)} MB — that is not an anonymization script.`)
+            return
+        }
+        const r = new FileReader()
+        r.onerror = () => setAnonError(`Could not read ${f.name}`)
+        r.onload = () => {
+            const text = String(r.result || '')
+            if (!text.trim()) {
+                setAnonError(`${f.name} is empty`)
+                return
+            }
+            setAnonPending({ name: f.name, sql: text, lines: text.trimEnd().split('\n').length })
+        }
+        r.readAsText(f)
+    }
+
+    // Saved only when asked. Replacing this script changes what every future
+    // clone exposes, so dropping a file in cannot be the same gesture as
+    // putting it into effect.
+    const saveAnon = async () => {
+        if (!anonPending) return
+        setAnonSaving(true)
+        setAnonError(null)
+        setAnonMsg(null)
+        try {
+            const r = await fetch(`${base}/clones/anonymize-sql`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sql: anonPending.sql }),
+            })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            setAnonMsg(`Saved from ${anonPending.name} — applies to clones made after this.`)
+            setAnonPending(null)
+            loadAnon()
+        } catch (e: any) {
+            setAnonError(String(e?.message || e))
+        } finally {
+            setAnonSaving(false)
+        }
+    }
+
     const loadCheckSql = () => {
         setSqlLoading(true)
         setSqlErr(null)
@@ -172,6 +232,7 @@ export function Config() {
         loadSubStatus()
         loadCheckSql()
         runCheck()
+        loadAnon()
         // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
 
@@ -214,6 +275,8 @@ export function Config() {
     }[checkStatus]
 
     const unconfigured = checkStatus === 'unconfigured'
+
+    const anonLineCount = anon?.sql ? anon.sql.trimEnd().split('\n').length : 0
 
     const lastSync = subStatus?.subscriptions?.find((s) => s.latest_end_time)?.latest_end_time
     const copyInProgress = !!copy && copy.status !== 'complete' && copy.total_tables > 0
@@ -408,6 +471,100 @@ export function Config() {
                                     </div>
                                 </div>
                             </div>
+                        )}
+                    </div>
+                )}
+            </Card>
+
+            {/* ── Collapsible detail: Anonymization ──
+                Reached from the clone dialog when it is missing, and from here
+                the rest of the time: a script that decides what every clone
+                exposes is not something you should have to be about to make a
+                clone in order to see. */}
+            <Card className="mt-3">
+                <button
+                    onClick={() => setAnonExpanded((v) => !v)}
+                    className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                    {anonExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                    <span className="text-[13px] font-semibold tracking-tight">Anonymization</span>
+                    <span className="text-xs text-muted-foreground">
+                        {anon === null
+                            ? ''
+                            : anon.configured
+                                ? `— runs on every new clone · ${anonLineCount} lines`
+                                : '— none, clones expose production data'}
+                    </span>
+                    {anon && !anon.configured && <Badge variant="warning" className="ml-auto">Not set up</Badge>}
+                </button>
+
+                {anonExpanded && (
+                    <div className="mt-3 pl-6">
+                        <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
+                            Run inside each clone before anyone can connect to it. With no script a clone is
+                            production data with a port on it — readable by anyone holding its connection
+                            string, and carried into every snapshot taken from it.
+                        </p>
+                        {anon?.path && (
+                            <p className="mb-2 font-mono text-[11px] text-muted-foreground">{anon.path}</p>
+                        )}
+
+                        <label
+                            onDragOver={(e) => { e.preventDefault(); setAnonDragging(true) }}
+                            onDragLeave={() => setAnonDragging(false)}
+                            onDrop={(e) => {
+                                e.preventDefault()
+                                setAnonDragging(false)
+                                const f = e.dataTransfer.files?.[0]
+                                if (f) readAnonFile(f)
+                            }}
+                            className={`flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed px-4 py-4 text-center text-[13px] transition-colors ${
+                                anonDragging ? 'border-primary bg-primary/[0.06]' : 'border-border-strong hover:bg-white/[0.03]'
+                            }`}
+                        >
+                            <input
+                                type="file"
+                                accept=".sql,text/plain"
+                                className="hidden"
+                                onChange={(e) => {
+                                    const f = e.target.files?.[0]
+                                    if (f) readAnonFile(f)
+                                    e.target.value = ''
+                                }}
+                            />
+                            <Upload className="size-4 text-muted-foreground" />
+                            {anonPending
+                                ? <span className="font-mono">{anonPending.name}</span>
+                                : <span>{anon?.configured ? 'Replace with a .sql file' : 'Choose a .sql file'}, or drop one here</span>}
+                        </label>
+
+                        {anonPending && (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <span className="text-xs text-muted-foreground">
+                                    {anonPending.lines} line{anonPending.lines === 1 ? '' : 's'} — not saved yet
+                                </span>
+                                <Button
+                                    size="sm"
+                                    variant="primary"
+                                    className="ml-auto"
+                                    disabled={anonSaving}
+                                    onClick={saveAnon}
+                                >
+                                    {anonSaving ? 'Saving…' : anon?.configured ? 'Replace script' : 'Save script'}
+                                </Button>
+                                <Button size="sm" disabled={anonSaving} onClick={() => setAnonPending(null)}>
+                                    Discard
+                                </Button>
+                            </div>
+                        )}
+
+                        {anonError && <p className="mt-2 text-xs text-destructive">{anonError}</p>}
+                        {anonMsg && <p className="mt-2 text-xs text-success">{anonMsg}</p>}
+
+                        {(anonPending?.sql || anon?.sql) && (
+                            <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-secondary p-3 font-mono text-xs leading-relaxed text-zinc-300">
+                                {anonPending?.sql || anon?.sql}
+                            </pre>
                         )}
                     </div>
                 )}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, Check, Copy, Star } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Star, Upload } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -12,7 +12,6 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { cn, copyText } from '@/lib/utils'
 import { RetentionSelect } from '@/components/RetentionSelect'
@@ -58,8 +57,36 @@ export function Clones() {
     const [anonOpen, setAnonOpen] = useState(false)
     const [anonPath, setAnonPath] = useState('')
     const [anonSql, setAnonSql] = useState('')
+    const [anonFile, setAnonFile] = useState('')
+    const [anonLines, setAnonLines] = useState(0)
+    const [anonDragging, setAnonDragging] = useState(false)
     const [anonSaving, setAnonSaving] = useState(false)
     const [anonError, setAnonError] = useState<string | null>(null)
+
+    // Read here rather than posting the file: the script is stored as text and
+    // the endpoint already takes text, so a multipart upload would only add a
+    // second way in. The checks are the ones a wrong file actually fails —
+    // empty, or so large it is not a script.
+    const readAnonFile = (f: File) => {
+        setAnonError(null)
+        if (f.size > 1_000_000) {
+            setAnonError(`${f.name} is ${(f.size / 1_000_000).toFixed(1)} MB — that is not an anonymization script.`)
+            return
+        }
+        const r = new FileReader()
+        r.onerror = () => setAnonError(`Could not read ${f.name}`)
+        r.onload = () => {
+            const text = String(r.result || '')
+            if (!text.trim()) {
+                setAnonError(`${f.name} is empty`)
+                return
+            }
+            setAnonSql(text)
+            setAnonFile(f.name)
+            setAnonLines(text.trimEnd().split('\n').length)
+        }
+        r.readAsText(f)
+    }
     const [createName, setCreateName] = useState('')
     const [createDesc, setCreateDesc] = useState('')
     const [createPort, setCreatePort] = useState('')
@@ -439,24 +466,60 @@ export function Clones() {
 
                     <div className="mt-4">
                         <div className="mb-1.5 flex items-baseline justify-between gap-3">
-                            <span className="text-[13px] font-medium">Add one now</span>
+                            <span className="text-[13px] font-medium">Upload one</span>
                             {anonPath && (
                                 <span className="truncate font-mono text-[11px] text-muted-foreground" title={anonPath}>
                                     {anonPath}
                                 </span>
                             )}
                         </div>
-                        <Textarea
-                            value={anonSql}
-                            onChange={(e) => setAnonSql(e.target.value)}
-                            spellCheck={false}
-                            placeholder={"UPDATE public.users SET\n  email = 'user' || id || '@example.invalid',\n  name  = 'User ' || id,\n  phone = NULL;"}
-                            className="min-h-32 font-mono text-xs"
-                        />
-                        <p className="mt-1.5 text-xs text-muted-foreground">
-                            Runs as SQL inside each new clone. Saved for every clone made after this, not
-                            just this one.
-                        </p>
+
+                        {/* A file, because that is where this script already
+                            lives: it is written against a schema, reviewed, and
+                            kept in a repository. Retyping it into a box is not
+                            a step anybody takes. */}
+                        <label
+                            onDragOver={(e) => { e.preventDefault(); setAnonDragging(true) }}
+                            onDragLeave={() => setAnonDragging(false)}
+                            onDrop={(e) => {
+                                e.preventDefault()
+                                setAnonDragging(false)
+                                const f = e.dataTransfer.files?.[0]
+                                if (f) readAnonFile(f)
+                            }}
+                            className={cn(
+                                'flex cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed px-4 py-6 text-center transition-colors',
+                                anonDragging ? 'border-primary bg-primary/[0.06]' : 'border-border-strong hover:bg-white/[0.03]',
+                            )}
+                        >
+                            <input
+                                type="file"
+                                accept=".sql,text/plain"
+                                className="hidden"
+                                onChange={(e) => {
+                                    const f = e.target.files?.[0]
+                                    if (f) readAnonFile(f)
+                                    e.target.value = ''
+                                }}
+                            />
+                            <Upload className="h-4 w-4 text-muted-foreground" />
+                            {anonFile ? (
+                                <>
+                                    <span className="font-mono text-[13px]">{anonFile}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                        {anonLines} line{anonLines === 1 ? '' : 's'} · click or drop to replace
+                                    </span>
+                                </>
+                            ) : (
+                                <>
+                                    <span className="text-[13px]">Choose a .sql file, or drop one here</span>
+                                    <span className="text-xs text-muted-foreground">
+                                        Runs inside every clone made after this, not just this one
+                                    </span>
+                                </>
+                            )}
+                        </label>
+
                         {anonError && <p className="mt-1.5 text-xs text-destructive">{anonError}</p>}
                     </div>
 
@@ -482,7 +545,7 @@ export function Clones() {
                                 }
                             }}
                         >
-                            {anonSaving ? 'Saving…' : 'Save script and create clone'}
+                            {anonSaving ? 'Saving…' : anonFile ? `Save ${anonFile} and create clone` : 'Save script and create clone'}
                         </Button>
 
                         {/* Second, and worded as what it does rather than what
