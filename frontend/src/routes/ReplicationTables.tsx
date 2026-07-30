@@ -563,6 +563,10 @@ export function ReplicationTables() {
     // not exist yet cannot be read off the ones that do.
     const [autoSchemas, setAutoSchemas] = useState<Set<string>>(new Set())
     const [autoOverrides, setAutoOverrides] = useState<Map<string, boolean>>(new Map())
+    // Whether a publication is already on the primary, and how much of it it
+    // covers. Before the first copy this is the difference between choosing
+    // and confirming, and the two deserve different words.
+    const [selection, setSelection] = useState<{ exists: boolean; all_tables: boolean; count: number; available: number } | null>(null)
 
     const [actionLoading, setActionLoading] = useState(false)
     const [confirmOpen, setConfirmOpen] = useState(false)
@@ -609,6 +613,12 @@ export function ReplicationTables() {
                 if (!d) return
                 setAutoSchemas(new Set<string>(d.auto_schemas || []))
                 setAutoOverrides(new Map())
+                setSelection({
+                    exists: !!d.exists,
+                    all_tables: !!d.all_tables,
+                    count: Array.isArray(d.tables) ? d.tables.length : 0,
+                    available: Array.isArray(d.available) ? d.available.length : 0,
+                })
             })
             .catch(() => {})
     }
@@ -880,7 +890,29 @@ export function ReplicationTables() {
                 next to the choice rather than a page away. */}
             <BootstrapGate
                 onDone={loadTables}
-                hint="Nothing has been copied from the primary yet. Everything below is included to begin with — take out what you do not want, then start. Whatever is included when the copy starts is what gets replicated."
+                title={selection?.exists ? 'A publication already exists — start from it?' : undefined}
+                startLabel={selection?.exists ? 'Start the copy with this selection' : undefined}
+                hint={
+                    selection?.exists ? (
+                        <>
+                            <span className="font-mono text-foreground">{info?.publication_name || 'A publication'}</span>{' '}
+                            is already on the primary, covering{' '}
+                            <span className="text-foreground">
+                                {selection.all_tables
+                                    ? `every table (${selection.available})`
+                                    : `${selection.count} of ${selection.available} tables`}
+                            </span>
+                            . The list below is that publication, not a fresh proposal — nothing has been
+                            copied yet. Start the copy as it stands, or change the selection first.
+                        </>
+                    ) : (
+                        <>
+                            Nothing has been copied from the primary, and there is no publication yet.
+                            Everything below is included to begin with — take out what you do not want, then
+                            start. Whatever is included when the copy starts is what gets replicated.
+                        </>
+                    )
+                }
             />
 
             {/* What is happening to this database, in one line. */}

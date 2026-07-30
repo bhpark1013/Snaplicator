@@ -88,7 +88,19 @@ function fmtBytes(n: number) {
  * existence as the finish line would hide exactly the part worth watching.
  * The copy is followed to its end, table by table.
  */
-export function BootstrapGate({ onDone, hint }: { onDone?: () => void; hint?: React.ReactNode }) {
+export function BootstrapGate({
+    onDone,
+    hint,
+    title,
+    startLabel,
+}: {
+    onDone?: () => void
+    hint?: React.ReactNode
+    // Overridden when the situation is not the one the default describes —
+    // arriving at an existing publication is a confirmation, not a choice.
+    title?: string
+    startLabel?: string
+}) {
     const [status, setStatus] = useState<BootstrapStatus | null>(null)
     const [copy, setCopy] = useState<CopyProgress | null>(null)
     const [starting, setStarting] = useState(false)
@@ -281,7 +293,7 @@ export function BootstrapGate({ onDone, hint }: { onDone?: () => void; hint?: Re
                 <>
                     <div className="flex items-center gap-2 text-[13px] font-medium">
                         <Database className="h-4 w-4" />
-                        Replication has not started yet
+                        {title ?? 'Replication has not started yet'}
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                         {hint ?? (
@@ -305,7 +317,7 @@ export function BootstrapGate({ onDone, hint }: { onDone?: () => void; hint?: Re
             {!busy ? (
                 <div className="mt-3">
                     <Button variant="primary" onClick={start} disabled={starting}>
-                        {starting ? 'Starting…' : status.state === 'failed' ? 'Try again' : 'Start replication'}
+                        {starting ? 'Starting…' : status.state === 'failed' ? 'Try again' : startLabel ?? 'Start replication'}
                     </Button>
                 </div>
             ) : null}

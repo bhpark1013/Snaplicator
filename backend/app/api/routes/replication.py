@@ -21,6 +21,7 @@ from ...services.replication import (
 )
 from pathlib import Path
 import os
+import re
 
 router = APIRouter()
 
@@ -75,12 +76,30 @@ def get_copy_progress():
 
 @router.get("/check")
 def get_replication_check():
-    """Run replication check SQL on both publisher and subscriber."""
+    """Run replication check SQL on both publisher and subscriber.
+
+    Returns ``configured: False`` and runs nothing when no check query has
+    been written yet. A query that was never supplied has not failed, and
+    reporting it as a failure puts a red badge on a healthy replica.
+    """
     try:
+        sql_path = _effective_sql_path()
+        try:
+            sql_text = sql_path.read_text(encoding="utf-8")
+        except Exception:
+            sql_text = None
+
+        if not _is_configured_check(sql_path, sql_text):
+            return {
+                "sql": sql_text,
+                "configured": False,
+                "publisher": {"ok": False, "output": None, "error": None},
+                "subscriber": {"ok": False, "output": None, "error": None},
+            }
+
         connstr = _build_publisher_connstr()
         _require_subscriber_settings()
 
-        sql_path = _effective_sql_path()
         res = run_replication_check_sql(
             str(sql_path),
             connstr,
@@ -89,11 +108,7 @@ def get_replication_check():
             settings.postgres_password,
             settings.postgres_db,
         )
-        try:
-            sql_text = sql_path.read_text(encoding="utf-8")
-        except Exception:
-            sql_text = None
-        return {"sql": sql_text, **res}
+        return {"sql": sql_text, "configured": True, **res}
     except ReadOnlyViolation as e:
         raise HTTPException(status_code=400, detail=f"Rejected (not read-only): {e}")
     except HTTPException:
@@ -131,6 +146,37 @@ def _effective_sql_path() -> Path:
     return p if p.exists() else _seed_sql_path()
 
 
+def _example_sql_path() -> Path:
+    """The tracked template. It is an example of a check, not a check."""
+    return Path(__file__).resolve().parents[4] / "configs" / "replication_check.example.sql"
+
+
+_SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+
+
+def _has_executable_sql(text: str) -> bool:
+    """True when anything survives stripping comments, semicolons and space."""
+    body = _SQL_BLOCK_COMMENT.sub(" ", text or "")
+    lines = []
+    for line in body.splitlines():
+        i = line.find("--")
+        lines.append(line if i < 0 else line[:i])
+    return bool(" ".join(lines).replace(";", " ").strip())
+
+
+def _is_configured_check(sql_path: Path, sql_text: Optional[str]) -> bool:
+    """Whether there is a check query at all.
+
+    Two ways there is not, and they look identical from outside: nothing but
+    comments, or the shipped template — which names tables that exist only in
+    the example, so running it always errors and always looks like broken
+    replication rather than an unanswered question.
+    """
+    if sql_path.resolve() == _example_sql_path().resolve():
+        return False
+    return _has_executable_sql(sql_text or "")
+
+
 @router.get("/check-sql")
 def get_check_sql():
     """Return the current replication-check SQL text (persistent if saved,
@@ -139,7 +185,12 @@ def get_check_sql():
     eff = _effective_sql_path()
     try:
         text = eff.read_text(encoding="utf-8") if eff.exists() else ""
-        return {"sql": text, "persisted": persist.exists(), "path": str(persist)}
+        return {
+            "sql": text,
+            "persisted": persist.exists(),
+            "configured": _is_configured_check(eff, text),
+            "path": str(persist),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read check SQL: {e}")
 

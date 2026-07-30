@@ -24,6 +24,9 @@ interface ReplicationCheckSide {
 
 interface ReplicationCheckResult {
     sql?: string | null
+    // False when no check query has been written yet — in which case nothing
+    // ran, and neither side's result means anything.
+    configured?: boolean
     publisher: ReplicationCheckSide
     subscriber: ReplicationCheckSide
 }
@@ -34,7 +37,7 @@ interface FsUsageSummary {
     calculated_at?: string | null
 }
 
-type CheckStatus = 'checking' | 'ok' | 'mismatch' | 'error'
+type CheckStatus = 'checking' | 'unconfigured' | 'ok' | 'mismatch' | 'error'
 
 export function Config() {
     const [copy, setCopy] = useState<CopyProgress | null>(null)
@@ -193,6 +196,9 @@ export function Config() {
         if (checkLoading && !check) return 'checking'
         if (checkError) return 'error'
         if (!check) return 'checking'
+        // Asked before answered: with no query there is nothing to have gone
+        // wrong, and the two sides' fields are empty rather than failing.
+        if (check.configured === false) return 'unconfigured'
         if (!check.publisher.ok || !check.subscriber.ok) return 'error'
         const pub = String(check.publisher.output || '').trim()
         const sub = String(check.subscriber.output || '').trim()
@@ -201,10 +207,13 @@ export function Config() {
 
     const checkBadge = {
         checking: { variant: 'neutral' as const, label: 'Checking…' },
+        unconfigured: { variant: 'neutral' as const, label: 'Not set up' },
         ok: { variant: 'success' as const, label: 'OK · values match' },
         mismatch: { variant: 'destructive' as const, label: 'Mismatch' },
         error: { variant: 'destructive' as const, label: 'Check failed' },
     }[checkStatus]
+
+    const unconfigured = checkStatus === 'unconfigured'
 
     const lastSync = subStatus?.subscriptions?.find((s) => s.latest_end_time)?.latest_end_time
     const copyInProgress = !!copy && copy.status !== 'complete' && copy.total_tables > 0
@@ -260,9 +269,18 @@ export function Config() {
                     <div>
                         <Badge variant={checkBadge.variant}>{checkBadge.label}</Badge>
                     </div>
-                    <div className="mt-auto text-xs text-muted-foreground">
-                        publisher vs subscriber, auto-checked
-                    </div>
+                    {unconfigured ? (
+                        <button
+                            onClick={() => { setCheckExpanded(true); setSqlErr(null); setSqlMsg(null); setSqlLocked(false) }}
+                            className="mt-auto text-left text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                        >
+                            no check query yet — write one
+                        </button>
+                    ) : (
+                        <div className="mt-auto text-xs text-muted-foreground">
+                            publisher vs subscriber, auto-checked
+                        </div>
+                    )}
                 </Card>
 
                 <Card className="flex flex-col gap-2">
@@ -317,7 +335,9 @@ export function Config() {
                 >
                     {checkExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
                     <span className="text-[13px] font-semibold tracking-tight">Replication Check</span>
-                    <span className="text-xs text-muted-foreground">— check SQL · publisher/subscriber outputs</span>
+                    <span className="text-xs text-muted-foreground">
+                        {unconfigured ? '— no query written yet' : '— check SQL · publisher/subscriber outputs'}
+                    </span>
                 </button>
 
                 {checkError && <p className="mt-2 text-[13px] text-destructive">{checkError}</p>}
@@ -355,7 +375,15 @@ export function Config() {
                         {sqlErr && <p className="mt-1.5 whitespace-pre-wrap text-[13px] text-destructive">{sqlErr}</p>}
                         {sqlMsg && <p className="mt-1.5 text-[13px] text-success">{sqlMsg}</p>}
 
-                        {check && (
+                        {check && unconfigured && (
+                            <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
+                                Nothing has been run. The check compares one query's result on the primary
+                                against the same query on the replica, and which query that is depends on
+                                what you replicate — so it ships as a template and waits for yours.
+                            </p>
+                        )}
+
+                        {check && !unconfigured && (
                             <div className="mt-3 flex flex-col gap-3">
                                 {typeof check.sql === 'string' && (
                                     <div>
