@@ -155,16 +155,32 @@ function splitFqn(fqn: string) {
     return { schema, name: rest.join('.') }
 }
 
+// Name, state, size — shared by the schema row and its tables, so the three
+// columns are the same three columns all the way down and the state of a
+// schema sits directly above the state of the tables it contains.
+const ROW_GRID = 'grid-cols-[minmax(0,1fr)_168px_52px]'
+
+const MODE_CHIP: Record<TableMode, string> = {
+    replicated: 'bg-success/12 text-success',
+    fdw: 'bg-purple/15 text-purple',
+    none: 'bg-white/[0.05] text-muted-foreground',
+}
+
+const MODE_STATE: Record<TableMode, string> = {
+    replicated: 'Replicated',
+    fdw: 'Live',
+    none: 'Excluded',
+}
+
 /**
  * The three things a table can be, as one control.
  *
  * Not a checkbox: "replicate or not" was never the question — a table can
  * also be read live, and those two are alternatives rather than a flag with
- * an extra. Showing them side by side is what makes them look like the
- * choice they are, and makes the current one legible at a glance.
+ * an extra.
  *
- * `value` is null on a schema whose tables disagree; nothing is highlighted
- * then, and pressing one settles the whole schema.
+ * `value` is null on a schema whose tables disagree; it reads as Mixed, and
+ * pressing one option settles the whole schema.
  */
 function ModeSwitch({
     value,
@@ -177,39 +193,53 @@ function ModeSwitch({
     onChange: (mode: TableMode) => void
     onNeedsFdw: () => void
 }) {
-    const opts: { mode: TableMode; label: string; on: string }[] = [
-        { mode: 'replicated', label: 'Replicate', on: 'bg-success/15 text-success' },
-        { mode: 'fdw', label: 'Live', on: 'bg-purple/15 text-purple' },
-        { mode: 'none', label: 'Exclude', on: 'bg-white/[0.07] text-foreground' },
+    const opts: { mode: TableMode; label: string }[] = [
+        { mode: 'replicated', label: 'Replicate' },
+        { mode: 'fdw', label: 'Live' },
+        { mode: 'none', label: 'Exclude' },
     ]
-    // The alternatives are dimmed until the row is under the cursor. A page of
-    // four hundred rows, each showing three equally loud buttons, is a wall —
-    // and only one of the three is information; the other two are an offer.
+    // At rest a row states what it is; under the cursor it offers what it
+    // could be. Showing all three on every row means a list of eight tables
+    // renders twenty-four words of controls against eight of content, and the
+    // controls win — which is backwards, since only one of the three is ever
+    // true and the other two are an offer nobody is currently taking up.
+    //
+    // Both layers occupy the same box, so nothing moves when they swap.
     return (
-        <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
-            {opts.map((o) => {
-                // Live without a reader role is not refused, it is answered:
-                // pressing it asks for the one missing thing. A disabled
-                // control makes the user go and find out why elsewhere, which
-                // is the same work with an extra step and no signposting.
-                const needsSetup = o.mode === 'fdw' && !fdwReady
-                const active = value === o.mode
-                return (
-                    <button
-                        key={o.mode}
-                        title={needsSetup ? 'Live reads need a read-only account on the primary — click to set one up' : undefined}
-                        onClick={() => (needsSetup ? onNeedsFdw() : onChange(o.mode))}
-                        className={cn(
-                            'rounded px-1.5 py-0.5 text-[11.5px] leading-5 transition-all',
-                            active
-                                ? o.on
-                                : 'text-muted-foreground/30 group-hover:text-muted-foreground hover:!bg-white/[0.06] hover:!text-foreground',
-                        )}
-                    >
-                        {o.label}
-                    </button>
-                )
-            })}
+        <div className="relative h-5" onClick={(e) => e.stopPropagation()}>
+            <div className="absolute inset-0 flex items-center transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
+                {value ? (
+                    <span className={cn('rounded px-1.5 py-0.5 text-[11.5px] leading-5', MODE_CHIP[value])}>
+                        {MODE_STATE[value]}
+                    </span>
+                ) : (
+                    <span className="px-1.5 text-[11.5px] leading-5 text-muted-foreground/70">Mixed</span>
+                )}
+            </div>
+
+            <div className="pointer-events-none absolute inset-0 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+                {opts.map((o) => {
+                    // Live without a reader role is not refused, it is
+                    // answered: pressing it asks for the one missing thing. A
+                    // disabled control makes the user go and find out why
+                    // elsewhere — the same work with an extra step.
+                    const needsSetup = o.mode === 'fdw' && !fdwReady
+                    const active = value === o.mode
+                    return (
+                        <button
+                            key={o.mode}
+                            title={needsSetup ? 'Live reads need a read-only account on the primary — click to set one up' : undefined}
+                            onClick={() => (needsSetup ? onNeedsFdw() : onChange(o.mode))}
+                            className={cn(
+                                'rounded px-1.5 py-0.5 text-[11.5px] leading-5 transition-colors',
+                                active ? MODE_CHIP[o.mode] : 'text-muted-foreground hover:bg-white/[0.06] hover:text-foreground',
+                            )}
+                        >
+                            {o.label}
+                        </button>
+                    )
+                })}
+            </div>
         </div>
     )
 }
@@ -220,22 +250,27 @@ function ModeSwitch({
  * Its own control because it is its own question, and the two answers are
  * independent: a schema with tables left out can still want the next one, and
  * a schema with nothing left out can still want to stay exactly as it is.
- * Deriving it from the table modes — as this page did — makes both of those
- * unsayable.
+ *
+ * Written as a sentence at the foot of the schema's tables rather than as a
+ * chip in its header. It is a rule about things that are not on screen, so it
+ * has no row of its own to sit against and nothing to be read in relation to
+ * — a two-word toggle up in the header is a label without its subject.
  */
-function FollowSwitch({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+function FollowRow({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
     return (
         <button
             onClick={(e) => { e.stopPropagation(); onChange(!on) }}
-            title={on
-                ? 'Tables created in this schema later join on their own — click to stop'
-                : 'Tables created in this schema later are left out — click to follow them'}
-            className={cn(
-                'rounded px-1.5 py-0.5 text-[11.5px] leading-5 transition-colors',
-                on ? 'bg-info/15 text-info' : 'text-muted-foreground/50 hover:text-foreground',
-            )}
+            className="group/f flex w-full items-center gap-1.5 rounded-md py-1 pl-[26px] pr-2 text-left text-xs text-muted-foreground transition-colors hover:bg-white/[0.03]"
         >
-            {on ? 'new: follow' : 'new: ignore'}
+            <span className={cn('h-1 w-1 shrink-0 rounded-full', on ? 'bg-info' : 'bg-white/20')} />
+            {on ? (
+                <>Tables added here later are replicated too</>
+            ) : (
+                <>Tables added here later are left out</>
+            )}
+            <span className="text-muted-foreground/0 transition-colors group-hover/f:text-muted-foreground">
+                — {on ? 'stop' : 'follow them'}
+            </span>
         </button>
     )
 }
@@ -817,7 +852,7 @@ export function ReplicationTables() {
     }
 
     return (
-        <div className={cn('mx-auto max-w-3xl animate-page-in px-6 pt-6', (pending.length || pendingAuto.length) ? 'pb-32' : 'pb-20')}>
+        <div className={cn('mx-auto max-w-2xl animate-page-in px-6 pt-6', (pending.length || pendingAuto.length) ? 'pb-32' : 'pb-20')}>
             <div className="mb-4 flex items-center justify-between gap-4 border-b border-border pb-4">
                 <div className="flex items-center gap-3">
                     <Button asChild size="sm">
@@ -956,43 +991,50 @@ export function ReplicationTables() {
                                 : g.excluded === g.items.length ? 'none'
                                     : null
                     return (
-                        <div key={g.schema} className="mb-1.5">
+                        <div key={g.schema} className="mb-2">
+                            {/* Header and tables share one grid, so the state
+                                and the row counts line up as columns across
+                                both — the indent lives inside the first cell
+                                rather than shifting everything after it. */}
                             <div
                                 onClick={() => toggleSchema(g.schema)}
-                                className="group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 transition-colors hover:bg-white/[0.035]"
+                                className={cn(
+                                    'group grid cursor-pointer items-center gap-2 rounded-md py-1.5 pr-2 transition-colors hover:bg-white/[0.035]',
+                                    ROW_GRID,
+                                )}
                             >
-                                {open
-                                    ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-                                    : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />}
-                                <span className={cn('font-mono text-[13px] font-semibold', schemaMode === 'none' && 'text-muted-foreground')}>
-                                    {g.schema}
-                                </span>
-                                <span className="text-xs text-muted-foreground/70">{g.items.length}</span>
-                                {g.changed > 0 && <Badge variant="info">{g.changed} changed</Badge>}
-
-                                <div className="ml-auto flex items-center gap-3">
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                    {open
+                                        ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                                        : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />}
+                                    <span className={cn('truncate font-mono text-[13px] font-semibold', schemaMode === 'none' && 'text-muted-foreground')}>
+                                        {g.schema}
+                                    </span>
+                                    <span className="shrink-0 text-xs text-muted-foreground/60">
+                                        {g.items.length} {g.items.length === 1 ? 'table' : 'tables'}
+                                    </span>
+                                    {g.changed > 0 && <Badge variant="info">{g.changed} changed</Badge>}
                                     {schemaMode === null && (
-                                        <span className="text-xs text-muted-foreground">
-                                            {g.replicated}/{g.items.length} replicated
-                                            {g.fdwCount > 0 && ` · ${g.fdwCount} live`}
+                                        <span className="shrink-0 text-xs text-muted-foreground/60">
+                                            · {g.replicated} replicated{g.fdwCount > 0 && `, ${g.fdwCount} live`}
                                         </span>
                                     )}
-                                    <FollowSwitch on={autoOf(g.schema)} onChange={(v) => setAuto(g.schema, v)} />
-                                    <ModeSwitch
-                                        value={schemaMode}
-                                        fdwReady={fdwReady}
-                                        onChange={(m) => setMode(fqns, m)}
-                                        onNeedsFdw={() => openLive(fqns)}
-                                    />
-                                    <span className="w-16 text-right font-mono text-xs text-muted-foreground">{formatRows(g.rows)}</span>
                                 </div>
+                                <ModeSwitch
+                                    value={schemaMode}
+                                    fdwReady={fdwReady}
+                                    onChange={(m) => setMode(fqns, m)}
+                                    onNeedsFdw={() => openLive(fqns)}
+                                />
+                                <span className="text-right font-mono text-xs text-muted-foreground">{formatRows(g.rows)}</span>
                             </div>
 
-                            {/* The guide line starts under the chevron and runs
-                                the height of the children — the one mark that
-                                says where the schema's tables end. */}
+                            {/* One guide line, drawn beside the children rather
+                                than by indenting them — the one mark that says
+                                where this schema's tables start and stop. */}
                             {open && (
-                                <div className="ml-[15px] border-l border-white/[0.11] pl-1.5">
+                                <div className="relative">
+                                    <span className="pointer-events-none absolute bottom-1 left-[15px] top-0 w-px bg-white/[0.09]" />
                                     {g.items.map((t) => {
                                         const fqn = `${t.schema}.${t.table}`
                                         const m = modeOf(t)
@@ -1001,47 +1043,35 @@ export function ReplicationTables() {
                                             <div
                                                 key={fqn}
                                                 className={cn(
-                                                    'group flex items-center gap-2 rounded-md py-1 pl-2.5 pr-2 text-[13px] transition-colors hover:bg-white/[0.035]',
+                                                    'group grid items-center gap-2 rounded-md py-1 pr-2 text-[13px] transition-colors hover:bg-white/[0.035]',
+                                                    ROW_GRID,
                                                     changed && 'bg-info/[0.08]',
                                                 )}
                                             >
-                                                {/* State said twice — once as a
-                                                    colour you can scan a column
-                                                    of, once as the switch that
-                                                    changes it. Reading which
-                                                    tables are out should not
-                                                    mean reading the controls. */}
-                                                <span
-                                                    className={cn(
-                                                        'h-1.5 w-1.5 shrink-0 rounded-full',
-                                                        m === 'replicated' ? 'bg-success'
-                                                            : m === 'fdw' ? 'bg-purple'
-                                                                : 'bg-white/15',
-                                                    )}
-                                                />
-                                                <span className={cn('font-mono', m === 'none' && 'text-muted-foreground/60')}>
-                                                    {t.table}
-                                                </span>
-                                                {t.in_publication && !t.in_subscriber && (
-                                                    <span
-                                                        className="text-warning"
-                                                        title="In the publication, but not on the subscriber yet"
-                                                    >
-                                                        ·
+                                                <div className="flex min-w-0 items-center gap-1.5 pl-[26px]">
+                                                    <span className={cn('truncate font-mono', m === 'none' && 'text-muted-foreground/50')}>
+                                                        {t.table}
                                                     </span>
-                                                )}
-                                                <div className="ml-auto flex items-center gap-3">
-                                                    <ModeSwitch
-                                                        value={m}
-                                                        fdwReady={fdwReady}
-                                                        onChange={(next) => setMode([fqn], next)}
-                                                        onNeedsFdw={() => openLive([fqn])}
-                                                    />
-                                                    <span className="w-16 text-right font-mono text-xs text-muted-foreground">{formatRows(t.estimated_rows)}</span>
+                                                    {t.in_publication && !t.in_subscriber && (
+                                                        <span
+                                                            className="shrink-0 text-warning"
+                                                            title="In the publication, but not on the subscriber yet"
+                                                        >
+                                                            ·
+                                                        </span>
+                                                    )}
                                                 </div>
+                                                <ModeSwitch
+                                                    value={m}
+                                                    fdwReady={fdwReady}
+                                                    onChange={(next) => setMode([fqn], next)}
+                                                    onNeedsFdw={() => openLive([fqn])}
+                                                />
+                                                <span className="text-right font-mono text-xs text-muted-foreground">{formatRows(t.estimated_rows)}</span>
                                             </div>
                                         )
                                     })}
+                                    <FollowRow on={autoOf(g.schema)} onChange={(v) => setAuto(g.schema, v)} />
                                 </div>
                             )}
                         </div>
@@ -1078,7 +1108,7 @@ export function ReplicationTables() {
                 of the publication, and this is where the draft becomes it. */}
             {(pending.length > 0 || pendingAuto.length > 0) && (
                 <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background/95 backdrop-blur">
-                    <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2 px-6 py-3">
+                    <div className="mx-auto flex max-w-2xl flex-wrap items-center gap-2 px-6 py-3">
                         <span className="text-[13px]">
                             <span className="font-semibold">{pending.length + pendingAuto.length}</span>{' '}
                             <span className="text-muted-foreground">
