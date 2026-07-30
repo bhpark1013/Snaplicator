@@ -4,7 +4,6 @@ import { ChevronDown, ChevronRight, Eye, EyeOff, Search } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import {
     Dialog,
     DialogContent,
@@ -262,18 +261,22 @@ function Disclosure({
         if (onOpenChange) onOpenChange(next)
         else setUncontrolled(next)
     }
+    // Same outline as the schemas below it: a line of text that opens, not a
+    // box. Four boxes stacked down a page read as four unrelated things.
     return (
-        <Card className="mt-3 overflow-hidden p-0">
+        <div className="mt-1">
             <button
                 onClick={() => setOpen(!open)}
-                className="flex w-full items-center gap-2 px-4 py-2.5 text-left transition-colors hover:bg-white/[0.02]"
+                className="group flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/[0.035]"
             >
-                {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
+                {open
+                    ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                    : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />}
                 <span className="text-[13px] font-semibold">{title}</span>
                 <span className="ml-auto truncate pl-3 text-xs text-muted-foreground">{summary}</span>
             </button>
-            {open && <div className="border-t border-border px-4 py-3">{children}</div>}
-        </Card>
+            {open && <div className="ml-[15px] border-l border-white/[0.07] py-1 pl-4">{children}</div>}
+        </div>
     )
 }
 
@@ -869,10 +872,16 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                 )}
             </div>
 
-            <Card className="mt-3 overflow-hidden p-0">
-                {loading && groups.length === 0 && <div className="p-8 text-center text-[13px] text-muted-foreground">Loading…</div>}
+            {/* A schema and its tables, as an outline rather than a table.
+                Rules between every row draw a cell around each one, which is
+                what a grid is for — but there is only one column of interest
+                here, and the thing worth seeing is which tables hang off which
+                schema. Indentation and a single guide line say that; twelve
+                horizontal rules say nothing and cost the eye a stop each. */}
+            <div className="mt-3">
+                {loading && groups.length === 0 && <div className="py-10 text-center text-[13px] text-muted-foreground">Loading…</div>}
                 {!loading && groups.length === 0 && (
-                    <div className="p-8 text-center text-[13px] text-muted-foreground">
+                    <div className="py-10 text-center text-[13px] text-muted-foreground">
                         {tables.length === 0 ? 'No tables on the publisher.' : 'Nothing matches this filter.'}
                     </div>
                 )}
@@ -886,14 +895,18 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                                 : g.excluded === g.items.length ? 'none'
                                     : null
                     return (
-                        <div key={g.schema} className="border-b border-border last:border-b-0">
+                        <div key={g.schema} className="mb-1.5">
                             <div
                                 onClick={() => toggleSchema(g.schema)}
-                                className="group flex cursor-pointer items-center gap-2 bg-white/[0.02] px-3 py-2 transition-colors hover:bg-white/[0.04]"
+                                className="group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 transition-colors hover:bg-white/[0.035]"
                             >
-                                {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
-                                <span className="font-mono text-[13px] font-semibold">{g.schema}</span>
-                                <span className="text-xs text-muted-foreground">{g.items.length}</span>
+                                {open
+                                    ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                                    : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />}
+                                <span className={cn('font-mono text-[13px] font-semibold', schemaMode === 'none' && 'text-muted-foreground')}>
+                                    {g.schema}
+                                </span>
+                                <span className="text-xs text-muted-foreground/70">{g.items.length}</span>
                                 {g.changed > 0 && <Badge variant="info">{g.changed} changed</Badge>}
 
                                 <div className="ml-auto flex items-center gap-3">
@@ -913,38 +926,61 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                                 </div>
                             </div>
 
-                            {open && g.items.map((t) => {
-                                const fqn = `${t.schema}.${t.table}`
-                                const m = modeOf(t)
-                                const changed = m !== currentMode(t)
-                                return (
-                                    <div
-                                        key={fqn}
-                                        className={cn(
-                                            'group flex items-center gap-2 border-t border-border/40 py-1 pl-9 pr-3 text-[13px] transition-colors hover:bg-white/[0.02]',
-                                            changed && 'bg-info/[0.07]',
-                                        )}
-                                    >
-                                        <span className="font-mono">{t.table}</span>
-                                        {t.in_publication && !t.in_subscriber && (
-                                            <span
-                                                className="text-warning"
-                                                title="In the publication, but not on the subscriber yet"
+                            {/* The guide line starts under the chevron and runs
+                                the height of the children — the one mark that
+                                says where the schema's tables end. */}
+                            {open && (
+                                <div className="ml-[15px] border-l border-white/[0.07] pl-1.5">
+                                    {g.items.map((t) => {
+                                        const fqn = `${t.schema}.${t.table}`
+                                        const m = modeOf(t)
+                                        const changed = m !== currentMode(t)
+                                        return (
+                                            <div
+                                                key={fqn}
+                                                className={cn(
+                                                    'group flex items-center gap-2 rounded-md py-1 pl-2.5 pr-2 text-[13px] transition-colors hover:bg-white/[0.035]',
+                                                    changed && 'bg-info/[0.08]',
+                                                )}
                                             >
-                                                ·
-                                            </span>
-                                        )}
-                                        <div className="ml-auto flex items-center gap-3">
-                                            <ModeSwitch value={m} fdwReady={fdwReady} onChange={(next) => setMode([fqn], next)} />
-                                            <span className="w-16 text-right font-mono text-xs text-muted-foreground">{formatRows(t.estimated_rows)}</span>
-                                        </div>
-                                    </div>
-                                )
-                            })}
+                                                {/* State said twice — once as a
+                                                    colour you can scan a column
+                                                    of, once as the switch that
+                                                    changes it. Reading which
+                                                    tables are out should not
+                                                    mean reading the controls. */}
+                                                <span
+                                                    className={cn(
+                                                        'h-1.5 w-1.5 shrink-0 rounded-full',
+                                                        m === 'replicated' ? 'bg-success'
+                                                            : m === 'fdw' ? 'bg-purple'
+                                                                : 'bg-white/15',
+                                                    )}
+                                                />
+                                                <span className={cn('font-mono', m === 'none' && 'text-muted-foreground/60')}>
+                                                    {t.table}
+                                                </span>
+                                                {t.in_publication && !t.in_subscriber && (
+                                                    <span
+                                                        className="text-warning"
+                                                        title="In the publication, but not on the subscriber yet"
+                                                    >
+                                                        ·
+                                                    </span>
+                                                )}
+                                                <div className="ml-auto flex items-center gap-3">
+                                                    <ModeSwitch value={m} fdwReady={fdwReady} onChange={(next) => setMode([fqn], next)} />
+                                                    <span className="w-16 text-right font-mono text-xs text-muted-foreground">{formatRows(t.estimated_rows)}</span>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            )}
                         </div>
                     )
                 })}
-            </Card>
+            </div>
 
             <Disclosure title="Auto-sync activity" summary={`${syncEvents.length} recent · refreshes every 15s`}>
                 {syncEvents.length === 0 ? (
