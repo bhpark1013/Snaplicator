@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronDown, ChevronRight, Eye, EyeOff, Search } from 'lucide-react'
+import { ChevronDown, ChevronRight, Eye, EyeOff, Radio, Search } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -170,10 +170,12 @@ function ModeSwitch({
     value,
     fdwReady,
     onChange,
+    onNeedsFdw,
 }: {
     value: TableMode | null
     fdwReady: boolean
     onChange: (mode: TableMode) => void
+    onNeedsFdw: () => void
 }) {
     const opts: { mode: TableMode; label: string; on: string }[] = [
         { mode: 'replicated', label: 'Replicate', on: 'bg-success/15 text-success' },
@@ -186,20 +188,22 @@ function ModeSwitch({
     return (
         <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
             {opts.map((o) => {
-                const disabled = o.mode === 'fdw' && !fdwReady
+                // Live without a reader role is not refused, it is answered:
+                // pressing it asks for the one missing thing. A disabled
+                // control makes the user go and find out why elsewhere, which
+                // is the same work with an extra step and no signposting.
+                const needsSetup = o.mode === 'fdw' && !fdwReady
                 const active = value === o.mode
                 return (
                     <button
                         key={o.mode}
-                        disabled={disabled}
-                        title={disabled ? 'Live needs a read-only account on the primary — none is set yet' : undefined}
-                        onClick={() => onChange(o.mode)}
+                        title={needsSetup ? 'Live reads need a read-only account on the primary — click to set one up' : undefined}
+                        onClick={() => (needsSetup ? onNeedsFdw() : onChange(o.mode))}
                         className={cn(
                             'rounded px-1.5 py-0.5 text-[11.5px] leading-5 transition-all',
                             active
                                 ? o.on
                                 : 'text-muted-foreground/30 group-hover:text-muted-foreground hover:!bg-white/[0.06] hover:!text-foreground',
-                            disabled && 'cursor-not-allowed opacity-30 hover:!bg-transparent',
                         )}
                     >
                         {o.label}
@@ -241,26 +245,14 @@ function Disclosure({
     title,
     summary,
     defaultOpen = false,
-    open: openProp,
-    onOpenChange,
     children,
 }: {
     title: string
     summary?: React.ReactNode
     defaultOpen?: boolean
-    // Controlled when given: something elsewhere on the page needs to be able
-    // to open this one — a note about a missing setting is only useful if it
-    // can lead to where the setting is explained.
-    open?: boolean
-    onOpenChange?: (open: boolean) => void
     children: React.ReactNode
 }) {
-    const [uncontrolled, setUncontrolled] = useState(defaultOpen)
-    const open = openProp ?? uncontrolled
-    const setOpen = (next: boolean) => {
-        if (onOpenChange) onOpenChange(next)
-        else setUncontrolled(next)
-    }
+    const [open, setOpen] = useState(defaultOpen)
     // Same outline as the schemas below it: a line of text that opens, not a
     // box. Four boxes stacked down a page read as four unrelated things.
     return (
@@ -326,57 +318,165 @@ function FdwCredentialsForm({ base, onSaved }: { base: string; onSaved: () => vo
     }
 
     return (
-        <div className="rounded-md border border-border p-3">
-            <div className="flex flex-wrap items-end gap-2">
-                <label className="flex flex-col gap-1">
+        <div>
+            <div className="grid grid-cols-2 gap-2">
+                <label className="flex flex-col gap-1.5">
                     <span className="text-xs text-muted-foreground">Role</span>
-                    <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="snap_fdw" className="w-44" />
+                    <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="snap_fdw" autoFocus />
                 </label>
-                <label className="flex flex-col gap-1">
+                <label className="flex flex-col gap-1.5">
                     <span className="text-xs text-muted-foreground">Password</span>
                     <Input
                         type="password"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="••••••••"
-                        className="w-52"
                         onKeyDown={(e) => { if (e.key === 'Enter' && user && password && !busy) save() }}
                     />
                 </label>
-                <Button variant="primary" size="sm" disabled={!user || !password || busy} onClick={save}>
-                    {busy ? 'Checking…' : 'Save and connect'}
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => setAdvanced((a) => !a)}>
-                    {advanced ? 'Hide' : 'Different host?'}
-                </Button>
             </div>
 
             {advanced && (
-                <div className="mt-3 flex flex-wrap items-end gap-2">
-                    <label className="flex flex-col gap-1">
+                <div className="mt-2 grid grid-cols-[1fr_72px_1fr] gap-2">
+                    <label className="flex flex-col gap-1.5">
                         <span className="text-xs text-muted-foreground">Host</span>
-                        <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="same as replication" className="w-52" />
+                        <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="as replication" />
                     </label>
-                    <label className="flex flex-col gap-1">
+                    <label className="flex flex-col gap-1.5">
                         <span className="text-xs text-muted-foreground">Port</span>
-                        <Input value={port} onChange={(e) => setPort(e.target.value)} placeholder="5432" className="w-24" />
+                        <Input value={port} onChange={(e) => setPort(e.target.value)} placeholder="5432" />
                     </label>
-                    <label className="flex flex-col gap-1">
+                    <label className="flex flex-col gap-1.5">
                         <span className="text-xs text-muted-foreground">Database</span>
-                        <Input value={dbname} onChange={(e) => setDbname(e.target.value)} placeholder="same as replication" className="w-44" />
+                        <Input value={dbname} onChange={(e) => setDbname(e.target.value)} placeholder="as replication" />
                     </label>
-                    <span className="text-xs text-muted-foreground">
-                        Only if live reads go somewhere else than replication does — a pooler, or a read replica.
-                    </span>
                 </div>
             )}
 
-            {err && <p className="mt-2 text-xs text-destructive">{err}</p>}
-            <p className="mt-2 text-xs text-muted-foreground">
-                Checked against the primary before it is kept, and stored where this manager keeps its
-                state — not in the file on the host, which is read-only to it.
-            </p>
+            <div className="mt-2.5 flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setAdvanced((a) => !a)}>
+                    {advanced ? 'Same host as replication' : 'Reads go somewhere else?'}
+                </Button>
+                <Button variant="primary" size="sm" className="ml-auto" disabled={!user || !password || busy} onClick={save}>
+                    {busy ? 'Checking…' : 'Save and connect'}
+                </Button>
+            </div>
+
+            {err && <p className="mt-2.5 text-xs text-destructive">{err}</p>}
         </div>
+    )
+}
+
+/**
+ * Everything about live reads, in the place the question is asked from.
+ *
+ * The panel this replaces sat above the list, which meant the answer to
+ * "why can't I press Live" lived two sections away from Live. Here the
+ * control opens the explanation, and what it explains is the only thing
+ * standing between the press and the result.
+ */
+function LiveDialog({
+    open,
+    onOpenChange,
+    base,
+    fdw,
+    fdwReady,
+    target,
+    onConfigured,
+}: {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    base: string
+    fdw: FdwState | null
+    fdwReady: boolean
+    target: string | null
+    onConfigured: () => void
+}) {
+    const opts = fdw?.server?.options || {}
+    const reads = opts.host ? `${opts.host}:${opts.port || 5432}/${opts.dbname || ''}` : '—'
+    const creds = fdw?.credentials
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="max-w-lg">
+                <DialogTitle className="mb-1 flex items-center gap-2">
+                    <Radio className="h-3.5 w-3.5 text-purple" />
+                    Live reads
+                </DialogTitle>
+                <DialogDescription className="leading-relaxed">
+                    A live table is read straight from the primary when queried — always current, never
+                    copied, and only as fast as the link. Replication is the opposite trade. A table is
+                    one or the other, never both.
+                </DialogDescription>
+
+                {fdwReady ? (
+                    <>
+                        <dl className="mt-4 grid grid-cols-[88px_1fr] gap-y-1.5 text-[13px]">
+                            <dt className="text-muted-foreground">Reads from</dt>
+                            <dd className="truncate font-mono">{reads}</dd>
+                            <dt className="text-muted-foreground">As</dt>
+                            <dd className="font-mono">{creds?.user || opts.user || '—'}</dd>
+                            <dt className="text-muted-foreground">Server</dt>
+                            <dd className="font-mono">{fdw?.server?.name || '—'}</dd>
+                            <dt className="text-muted-foreground">Live tables</dt>
+                            <dd className="font-mono">{fdw?.live_foreign_tables?.length || 0}</dd>
+                        </dl>
+
+                        {fdw?.schemas?.length ? (
+                            <div className="mt-3">
+                                <div className="mb-1.5 text-xs text-muted-foreground">Whole schemas imported</div>
+                                <div className="flex flex-wrap gap-1">
+                                    {fdw.schemas.map((s) => <Badge key={s.name} variant="purple">{s.name}</Badge>)}
+                                </div>
+                            </div>
+                        ) : null}
+
+                        <DialogFooter>
+                            <Button onClick={() => onOpenChange(false)}>Close</Button>
+                        </DialogFooter>
+                    </>
+                ) : (
+                    <>
+                        {target && (
+                            <div className="mt-3 rounded-md border border-purple/25 bg-purple/[0.07] px-3 py-2 text-[13px]">
+                                <span className="font-mono">{target}</span>
+                                <span className="text-muted-foreground"> goes live as soon as this is set.</span>
+                            </div>
+                        )}
+
+                        <p className="mt-4 text-[13px] leading-relaxed text-muted-foreground">
+                            <span className="font-medium text-foreground">Live needs its own read-only account.</span>{' '}
+                            Replication's cannot stand in for it: the login is stored in the replica's catalog
+                            as a user mapping, and every clone is a copy of that catalog — so whoever you hand
+                            a clone to can query through it. Replication connects as a superuser.
+                        </p>
+
+                        <div className="mt-4">
+                            <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+                                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-secondary font-mono text-[10px] text-foreground">1</span>
+                                On the primary, a role that can only read
+                            </div>
+                            <pre className="overflow-x-auto rounded-md border border-border bg-secondary/60 p-2.5 font-mono text-[11.5px] leading-relaxed">{`CREATE ROLE snap_fdw LOGIN PASSWORD '…';
+GRANT USAGE ON SCHEMA public TO snap_fdw;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
+                        </div>
+
+                        <div className="mt-4">
+                            <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-secondary font-mono text-[10px] text-foreground">2</span>
+                                Tell Snaplicator about it
+                            </div>
+                            <FdwCredentialsForm base={base} onSaved={onConfigured} />
+                        </div>
+
+                        <p className="mt-3 border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground">
+                            Checked against the primary before it is kept, and stored where this manager keeps
+                            its state — not in the file on the host, which is read-only to it.
+                        </p>
+                    </>
+                )}
+            </DialogContent>
+        </Dialog>
     )
 }
 
@@ -408,7 +508,10 @@ export function ReplicationTables() {
     const [search, setSearch] = useState('')
     const [filter, setFilter] = useState<FilterTab>('all')
     const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-    const [fdwOpen, setFdwOpen] = useState(false)
+    // What the user was trying to make live when they found out they could
+    // not — kept so the press can be honoured once the account exists, rather
+    // than leaving them to find the row again.
+    const [liveDialog, setLiveDialog] = useState<{ open: boolean; target: string[] | null }>({ open: false, target: null })
 
     // Only the changes are held, never the whole answer: the answer is what
     // the publisher already says, and everything starts included because
@@ -701,8 +804,17 @@ export function ReplicationTables() {
         }
     }
 
-    const fdwOpts = fdw?.server?.options || {}
-    const fdwTarget = fdwOpts.host ? `${fdwOpts.host}:${fdwOpts.port || 5432}/${fdwOpts.dbname || ''}` : null
+    const openLive = (target: string[] | null) => setLiveDialog({ open: true, target })
+
+    // The account is in place, so the press that asked for it can go through.
+    // Only the FDW state is reloaded: saving a login maps no tables, and
+    // reloading the list would clear the pending change this just made.
+    const onFdwConfigured = () => {
+        const target = liveDialog.target
+        setLiveDialog({ open: false, target: null })
+        loadFdw()
+        if (target?.length) setMode(target, 'fdw')
+    }
 
     return (
         <div className={cn('mx-auto max-w-3xl animate-page-in px-6 pt-6', (pending.length || pendingAuto.length) ? 'pb-32' : 'pb-20')}>
@@ -734,7 +846,20 @@ export function ReplicationTables() {
             {/* What is happening to this database, in one line. */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
                 <span><span className="font-semibold text-success">{stats.replicated}</span> <span className="text-muted-foreground">replicated</span></span>
-                <span><span className="font-semibold text-purple">{stats.fdw}</span> <span className="text-muted-foreground">live (FDW)</span></span>
+                {/* Also the way back in once it is set up — the switch stops
+                    asking the moment the account exists, so the count is what
+                    is left to open it with. */}
+                <button
+                    onClick={() => openLive(null)}
+                    className="group flex items-center gap-1 transition-colors"
+                    title="Live reads (FDW)"
+                >
+                    <span className="font-semibold text-purple">{stats.fdw}</span>
+                    <span className="text-muted-foreground decoration-muted-foreground/40 underline-offset-4 group-hover:text-foreground group-hover:underline">
+                        live (FDW)
+                    </span>
+                    {!fdwReady && <span className="text-muted-foreground/50">· not set up</span>}
+                </button>
                 <span><span className="font-semibold">{stats.none}</span> <span className="text-muted-foreground">excluded</span></span>
                 <span className="text-muted-foreground">·</span>
                 <span className="text-muted-foreground">{stats.total} tables in {stats.schemas} schemas</span>
@@ -770,70 +895,6 @@ export function ReplicationTables() {
                     </div>
                 )}
             </Disclosure>
-
-            <Disclosure
-                title="Live reads (FDW)"
-                summary={fdwReady ? `${fdw?.live_foreign_tables?.length || 0} live · ${fdwTarget}` : 'not set up — no reader role'}
-                open={fdwOpen}
-                onOpenChange={setFdwOpen}
-            >
-                <p className="mb-3 text-[13px] leading-relaxed text-muted-foreground">
-                    A live table is read straight from the primary when queried — always current, never
-                    copied, and only as fast as the link. Replication is the opposite trade. A table is
-                    one or the other, never both.
-                </p>
-                {fdwReady ? (
-                    <div className="grid gap-6 sm:grid-cols-2">
-                        <dl className="grid grid-cols-[92px_1fr] gap-y-1 text-[13px]">
-                            <dt className="text-muted-foreground">Server</dt><dd className="font-mono">{fdw?.server?.name || '—'}</dd>
-                            <dt className="text-muted-foreground">Reads from</dt><dd className="font-mono">{fdwTarget}</dd>
-                            <dt className="text-muted-foreground">Live tables</dt><dd className="font-mono">{fdw?.live_foreign_tables?.length || 0}</dd>
-                            <dt className="text-muted-foreground">Config</dt><dd className="truncate font-mono text-xs" title={fdw?.yaml_path}>{fdw?.yaml_path}</dd>
-                        </dl>
-                        <div>
-                            <div className="mb-1 text-[13px] font-semibold">Whole schemas imported</div>
-                            {fdw?.schemas?.length ? (
-                                <div className="flex flex-wrap gap-1">
-                                    {fdw.schemas.map((s) => <Badge key={s.name} variant="purple">{s.name}</Badge>)}
-                                </div>
-                            ) : (
-                                <div className="text-[13px] text-muted-foreground">None — live tables are listed one by one.</div>
-                            )}
-                        </div>
-                    </div>
-                ) : (
-                    <div className="text-[13px] leading-relaxed">
-                        <p className="mb-3">
-                            <span className="font-medium">Live needs its own read-only account on the primary.</span>{' '}
-                            Replication's account cannot stand in for it: the login is stored in the replica's
-                            catalog as a user mapping, and every clone is a copy of that catalog — so whoever
-                            you hand a clone to can query through it. Replication connects as a superuser, and
-                            handing that out with each clone is not a thing to do by default.
-                        </p>
-                        <p className="mb-1 text-muted-foreground">1 — on the primary, a role that can only read:</p>
-                        <pre className="mb-4 overflow-x-auto rounded-md bg-secondary p-2 font-mono text-[11.5px] leading-relaxed">{`CREATE ROLE snap_fdw LOGIN PASSWORD '…';
-GRANT USAGE ON SCHEMA public TO snap_fdw;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
-                        <p className="mb-2 text-muted-foreground">2 — tell Snaplicator about it:</p>
-                        <FdwCredentialsForm base={base} onSaved={() => { loadFdw(); loadTables() }} />
-                    </div>
-                )}
-            </Disclosure>
-
-            {/* A greyed-out control that does not say why is a dead end. The
-                reason belongs where the control is, not inside a panel that
-                has to be opened to find out there was a reason at all. */}
-            {!fdwReady && (
-                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-secondary/40 px-3 py-2 text-[13px]">
-                    <span className="text-muted-foreground">
-                        <span className="font-medium text-foreground">Live</span> is off — reading from the
-                        primary at query time needs its own read-only account, and none is set.
-                    </span>
-                    <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setFdwOpen(true)}>
-                        How to set it up
-                    </Button>
-                </div>
-            )}
 
             {message && <p className="mt-3 text-[13px] text-success">{message}</p>}
             {error && <p className="mt-3 text-[13px] text-destructive">{error}</p>}
@@ -921,6 +982,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                                         value={schemaMode}
                                         fdwReady={fdwReady}
                                         onChange={(m) => setMode(fqns, m)}
+                                        onNeedsFdw={() => openLive(fqns)}
                                     />
                                     <span className="w-16 text-right font-mono text-xs text-muted-foreground">{formatRows(g.rows)}</span>
                                 </div>
@@ -969,7 +1031,12 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                                                     </span>
                                                 )}
                                                 <div className="ml-auto flex items-center gap-3">
-                                                    <ModeSwitch value={m} fdwReady={fdwReady} onChange={(next) => setMode([fqn], next)} />
+                                                    <ModeSwitch
+                                                        value={m}
+                                                        fdwReady={fdwReady}
+                                                        onChange={(next) => setMode([fqn], next)}
+                                                        onNeedsFdw={() => openLive([fqn])}
+                                                    />
                                                     <span className="w-16 text-right font-mono text-xs text-muted-foreground">{formatRows(t.estimated_rows)}</span>
                                                 </div>
                                             </div>
@@ -1033,6 +1100,16 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                     </div>
                 </div>
             )}
+
+            <LiveDialog
+                open={liveDialog.open}
+                onOpenChange={(open) => setLiveDialog((s) => ({ open, target: open ? s.target : null }))}
+                base={base}
+                fdw={fdw}
+                fdwReady={fdwReady}
+                target={liveDialog.target?.length === 1 ? liveDialog.target[0] : null}
+                onConfigured={onFdwConfigured}
+            />
 
             <Dialog open={confirmOpen} onOpenChange={(open) => { if (!open && !actionLoading) setConfirmOpen(false) }}>
                 <DialogContent className="max-w-lg">
