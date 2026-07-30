@@ -441,6 +441,13 @@ def post_bootstrap(force: bool = False):
     from GET /replication/bootstrap.
     """
     try:
+        # The subscription needs something to subscribe to, and the primary
+        # may have nothing yet: the install no longer decides the shape of the
+        # publication. Whatever the user settled on has already been applied
+        # by then; this only covers the case where they changed nothing.
+        selection_svc.ensure_publication(
+            _build_publisher_connstr(), settings.publication_name or ""
+        )
         return bootstrap_svc.start(force=force)
     except RuntimeError as e:
         # Already running, or already subscribed: the caller asked for

@@ -734,13 +734,25 @@ POOL_DIR=$(printf '%s\n' "$POOL_OUT" | sed -n 's/^pool ready: \(.*\) (.*/\1/p' |
 ROOT_DATA_DIR=$POOL_DIR
 
 # ── 5. publication on the publisher (non-demo) ───────────────────────
+# Reported here, decided in the UI. What a publication covers is the whole
+# question this install cannot answer — it has no table names on screen and
+# no way to show what an existing one already targets. So a run that ends at
+# the UI leaves the publication alone, and the UI creates it from what was
+# chosen when the copy starts.
+#
+# An unattended run has nobody to ask, so it keeps the old behaviour: there
+# the default is the only answer available.
 if [ "$DEMO" = "0" ]; then
-  if [ "$(psql "$CONNSTR" -Atc "SELECT count(*) FROM pg_publication WHERE pubname='$PUBLICATION_NAME'")" = "0" ]; then
+  PUB_EXISTS=$(psql "$CONNSTR" -Atc "SELECT count(*) FROM pg_publication WHERE pubname='$PUBLICATION_NAME'")
+  if [ "$PUB_EXISTS" != "0" ]; then
+    PUB_TABLES=$(psql "$CONNSTR" -Atc "SELECT count(*) FROM pg_publication_tables WHERE pubname='$PUBLICATION_NAME'" 2>/dev/null)
+    info "publication $PUBLICATION_NAME already exists (${PUB_TABLES:-?} tables) — the UI shows what it covers"
+  elif [ "$START_REPLICATION" = "1" ]; then
     info "creating publication $PUBLICATION_NAME (FOR ALL TABLES)..."
     psql "$CONNSTR" -q -c "CREATE PUBLICATION $PUBLICATION_NAME FOR ALL TABLES" \
       || die "could not create the publication — create it manually and re-run"
   else
-    info "publication $PUBLICATION_NAME already exists"
+    info "no publication yet — the UI will create it from what you choose"
   fi
 fi
 

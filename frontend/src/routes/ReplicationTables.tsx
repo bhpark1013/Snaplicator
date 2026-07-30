@@ -54,10 +54,16 @@ type TableMode = 'replicated' | 'fdw' | 'none'
 
 // Resolve the table's effective sync mode. Publication + FDW are mutually
 // exclusive (enforced server-side), so a single label captures the state.
-function tableMode(t: TableInfo, fdwSet: Set<string>): TableMode {
+//
+// `noPublication` is the case where the primary has none at all: then not
+// being published is not a decision anyone made, and showing every table as
+// Excluded would contradict what this page promises — that everything starts
+// in and you take things out. The publication is written when the copy
+// starts, so until then the default is what is on screen.
+function tableMode(t: TableInfo, fdwSet: Set<string>, noPublication = false): TableMode {
     if (fdwSet.has(`${t.schema}.${t.table}`)) return 'fdw'
     if (t.in_publication) return 'replicated'
-    return 'none'
+    return noPublication ? 'replicated' : 'none'
 }
 
 const SYNC_KIND_LABEL: Record<string, string> = {
@@ -520,6 +526,67 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
     )
 }
 
+/**
+ * What the publication on the primary already covers, per schema.
+ *
+ * The install used to settle this before anyone had seen a table name, and a
+ * publication inherited from somewhere else is exactly the case where "start
+ * replicating" should not be pressed on trust. The list further down says the
+ * same thing table by table; this says it in one screenful, which is what
+ * confirming needs.
+ */
+function PublicationCoverage({ tables }: { tables: TableInfo[] }) {
+    const [open, setOpen] = useState(false)
+    const rows = useMemo(() => {
+        const by = new Map<string, { total: number; inPub: number }>()
+        for (const t of tables) {
+            const e = by.get(t.schema) || { total: 0, inPub: 0 }
+            e.total++
+            if (t.in_publication) e.inPub++
+            by.set(t.schema, e)
+        }
+        return Array.from(by.entries())
+            .map(([schema, v]) => ({ schema, ...v }))
+            .sort((a, b) => a.schema.localeCompare(b.schema))
+    }, [tables])
+
+    if (!rows.length) return null
+    const partial = rows.filter((r) => r.inPub > 0 && r.inPub < r.total).length
+    const none = rows.filter((r) => r.inPub === 0).length
+
+    return (
+        <div className="mt-2">
+            <button
+                onClick={() => setOpen((v) => !v)}
+                className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+                {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                {open ? 'Hide' : 'Show'} what it covers
+                {!open && (partial > 0 || none > 0) && (
+                    <span className="text-warning/80">
+                        · {[partial && `${partial} partial`, none && `${none} not covered`].filter(Boolean).join(', ')}
+                    </span>
+                )}
+            </button>
+            {open && (
+                <div className="ml-4 mt-1.5 grid gap-x-6 gap-y-0.5 text-xs sm:grid-cols-2">
+                    {rows.map((r) => (
+                        <div key={r.schema} className="flex items-baseline gap-2">
+                            <span className="truncate font-mono">{r.schema}</span>
+                            <span className="ml-auto shrink-0 font-mono text-muted-foreground">
+                                <span className={r.inPub === 0 ? 'text-muted-foreground' : r.inPub < r.total ? 'text-warning' : 'text-success'}>
+                                    {r.inPub}
+                                </span>
+                                /{r.total}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    )
+}
+
 function Secret({ value }: { value: string }) {
     const [shown, setShown] = useState(false)
     if (!value) return <span className="text-muted-foreground">—</span>
@@ -662,7 +729,12 @@ export function ReplicationTables() {
     // than the user acts.
     const fdwReady = !!(fdw?.credentials?.configured || fdw?.server?.options?.host)
 
-    const currentMode = (t: TableInfo): TableMode => tableMode(t, fdwSet)
+    // Only once the answer is known: while the selection is still loading,
+    // behave as though a publication exists, so a real one never flashes as
+    // "everything included" before its actual contents arrive.
+    const noPublication = selection ? !selection.exists : false
+
+    const currentMode = (t: TableInfo): TableMode => tableMode(t, fdwSet, noPublication)
     const modeOf = (t: TableInfo): TableMode => overrides.get(`${t.schema}.${t.table}`) ?? currentMode(t)
 
     const setMode = (fqns: string[], mode: TableMode) =>
@@ -695,7 +767,7 @@ export function ReplicationTables() {
         }
         return list
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tables, filter, search, fdwSet, overrides])
+    }, [tables, filter, search, fdwSet, overrides, noPublication])
 
     // Grouped by schema, which is the shape the database has and the shape the
     // decision has: whole schemas are what people actually keep or drop, and
@@ -727,7 +799,7 @@ export function ReplicationTables() {
             })
             .sort((a, b) => a.schema.localeCompare(b.schema))
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [filtered, fdwSet, overrides])
+    }, [filtered, fdwSet, overrides, noPublication])
 
     const stats = useMemo(() => {
         let replicated = 0, fdwCount = 0, none = 0
@@ -739,7 +811,7 @@ export function ReplicationTables() {
         }
         return { total: tables.length, replicated, fdw: fdwCount, none, schemas: new Set(tables.map((t) => t.schema)).size }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tables, fdwSet, overrides])
+    }, [tables, fdwSet, overrides, noPublication])
 
     // A search is a request to see what matched, so matching schemas open
     // themselves and the collapse state is left alone underneath.
@@ -772,7 +844,7 @@ export function ReplicationTables() {
         }
         return out.sort((a, b) => a.fqn.localeCompare(b.fqn))
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [overrides, tables, fdwSet])
+    }, [overrides, tables, fdwSet, noPublication])
 
     const apply = async () => {
         setActionLoading(true)
@@ -904,12 +976,14 @@ export function ReplicationTables() {
                             </span>
                             . The list below is that publication, not a fresh proposal — nothing has been
                             copied yet. Start the copy as it stands, or change the selection first.
+                            <PublicationCoverage tables={tables} />
                         </>
                     ) : (
                         <>
-                            Nothing has been copied from the primary, and there is no publication yet.
-                            Everything below is included to begin with — take out what you do not want, then
-                            start. Whatever is included when the copy starts is what gets replicated.
+                            Nothing has been copied, and the primary has no publication yet — so nothing is
+                            settled. Everything below is included to begin with; take out what you do not
+                            want, then start. The publication is written from this selection when the copy
+                            starts, and what it says then is what gets replicated.
                         </>
                     )
                 }

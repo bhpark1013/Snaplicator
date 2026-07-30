@@ -54,6 +54,29 @@ def all_tables(publisher_connstr: str) -> List[str]:
     return sorted(l.strip() for l in out.splitlines() if l.strip())
 
 
+def ensure_publication(publisher_connstr: str, publication_name: str) -> Dict:
+    """Create the publication if the primary has none, covering everything.
+
+    The install used to do this, which meant the shape of the publication was
+    settled by a script before anyone had seen a table name. It belongs here
+    instead — at the copy, which is the moment the choice stops being
+    reversible — and FOR ALL TABLES is only the default the UI already shows
+    when there is nothing to inherit. Choosing anything narrower goes through
+    apply_selection first, and this then finds a publication and leaves it be.
+    """
+    exists = _run_publisher_sql(
+        publisher_connstr,
+        f"SELECT 1 FROM pg_publication WHERE pubname = {_quote_literal(publication_name)};",
+    ).strip()
+    if exists:
+        return {"created": False}
+    _run_publisher_sql(
+        publisher_connstr,
+        f"CREATE PUBLICATION {_quote_ident(publication_name)} FOR ALL TABLES;",
+    )
+    return {"created": True}
+
+
 def current_selection(publisher_connstr: str, publication_name: str) -> Dict:
     """The publication as a set of tables, plus which schemas follow future ones."""
     exists = _run_publisher_sql(
