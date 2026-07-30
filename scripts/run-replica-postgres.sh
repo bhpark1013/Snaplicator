@@ -411,6 +411,13 @@ if [ "$USE_HOST_NETWORK" = "1" ]; then
   DOCKER_ENV_VARS+=( -e PGPORT="${HOST_PORT}" )
 fi
 
+# The three worker settings move together or not at all. A tablesync worker is
+# drawn from max_logical_replication_workers, which is itself drawn from
+# max_worker_processes, and the apply worker takes one of the first — so
+# max_sync_workers_per_subscription=5 needs at least 6 of the second, and the
+# third has to cover those plus everything else that wants a background worker.
+# Raising only the first is the common mistake: it is accepted, and then four
+# tables copy at a time because that is all the pool had left.
 CONTAINER_ID=$(docker run -d \
   --name "${CONTAINER_NAME}" \
   "${DOCKER_NET_ARGS[@]}" \
@@ -423,6 +430,9 @@ CONTAINER_ID=$(docker run -d \
   -c wal_level=${WAL_LEVEL:-logical} \
   -c max_replication_slots=${MAX_REPLICATION_SLOTS:-10} \
   -c max_wal_senders=${MAX_WAL_SENDERS:-${MAX_REPLICATION_SLOTS:-10}} \
+  -c max_sync_workers_per_subscription=${MAX_SYNC_WORKERS:-5} \
+  -c max_logical_replication_workers=${MAX_LOGICAL_REPLICATION_WORKERS:-8} \
+  -c max_worker_processes=${MAX_WORKER_PROCESSES:-16} \
   $([ "$USE_HOST_NETWORK" = "1" ] && echo "-c port=${HOST_PORT}"))
 echo "$CONTAINER_ID"
 
