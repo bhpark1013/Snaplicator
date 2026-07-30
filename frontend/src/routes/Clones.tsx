@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Check, Copy, Star } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Star } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -12,11 +12,11 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { cn, copyText } from '@/lib/utils'
 import { RetentionSelect } from '@/components/RetentionSelect'
 import { LineageGraph, computeInsertParams, type Slot, type SnapshotItem } from '@/components/LineageGraph'
-import { WhatsNew } from '@/components/WhatsNew'
 import { BootstrapGate } from '@/components/BootstrapGate'
 
 interface CloneItem {
@@ -55,6 +55,11 @@ export function Clones() {
     const [deletingBusy, setDeletingBusy] = useState(false)
 
     const [createOpen, setCreateOpen] = useState(false)
+    const [anonOpen, setAnonOpen] = useState(false)
+    const [anonPath, setAnonPath] = useState('')
+    const [anonSql, setAnonSql] = useState('')
+    const [anonSaving, setAnonSaving] = useState(false)
+    const [anonError, setAnonError] = useState<string | null>(null)
     const [createName, setCreateName] = useState('')
     const [createDesc, setCreateDesc] = useState('')
     const [createPort, setCreatePort] = useState('')
@@ -184,9 +189,11 @@ export function Clones() {
         // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
 
+    // Asked before the clone exists, not after. A clone made without an
+    // anonymization script is a copy of production with a port on it, and the
+    // moment to say so is while it is still a decision.
     const onCreateClone = async () => {
         const trimmedName = createName.trim()
-        const trimmedDesc = createDesc.trim()
         const user = createUser.trim()
         const pw = createPw
         if (!trimmedName) {
@@ -197,6 +204,28 @@ export function Clones() {
             setCreateError('Username and password must be provided together.')
             return
         }
+        try {
+            const r = await fetch(`${base}/clones/anonymize-sql`)
+            if (r.ok) {
+                const d = await r.json()
+                setAnonPath(d.path || '')
+                if (!d.configured) {
+                    setAnonOpen(true)
+                    return
+                }
+            }
+        } catch {
+            /* unreachable check is not a reason to block a clone */
+        }
+        await doCreateClone()
+    }
+
+    const doCreateClone = async () => {
+        const trimmedName = createName.trim()
+        const trimmedDesc = createDesc.trim()
+        const user = createUser.trim()
+        const pw = createPw
+        setAnonOpen(false)
         setMainCloning(true)
         setCreateError(null)
         setMessage(null)
@@ -396,7 +425,85 @@ export function Clones() {
 
             <BootstrapGate onDone={loadClones} />
 
-            <WhatsNew />
+            <Dialog open={anonOpen} onOpenChange={(open) => { if (!mainCloning && !anonSaving) setAnonOpen(open) }}>
+                <DialogContent className="max-w-lg">
+                    <DialogTitle className="flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4 text-warning" />
+                        No anonymization script
+                    </DialogTitle>
+                    <DialogDescription className="leading-relaxed">
+                        Every clone runs this script before anyone can connect to it. There is none, so
+                        this clone would be your production data with a port on it — real names, real
+                        emails, real everything, in whatever it gets used for.
+                    </DialogDescription>
+
+                    <div className="mt-4">
+                        <div className="mb-1.5 flex items-baseline justify-between gap-3">
+                            <span className="text-[13px] font-medium">Add one now</span>
+                            {anonPath && (
+                                <span className="truncate font-mono text-[11px] text-muted-foreground" title={anonPath}>
+                                    {anonPath}
+                                </span>
+                            )}
+                        </div>
+                        <Textarea
+                            value={anonSql}
+                            onChange={(e) => setAnonSql(e.target.value)}
+                            spellCheck={false}
+                            placeholder={"UPDATE public.users SET\n  email = 'user' || id || '@example.invalid',\n  name  = 'User ' || id,\n  phone = NULL;"}
+                            className="min-h-32 font-mono text-xs"
+                        />
+                        <p className="mt-1.5 text-xs text-muted-foreground">
+                            Runs as SQL inside each new clone. Saved for every clone made after this, not
+                            just this one.
+                        </p>
+                        {anonError && <p className="mt-1.5 text-xs text-destructive">{anonError}</p>}
+                    </div>
+
+                    <DialogFooter className="mt-4 flex-col items-stretch gap-2 sm:flex-col">
+                        <Button
+                            variant="primary"
+                            disabled={!anonSql.trim() || anonSaving || mainCloning}
+                            onClick={async () => {
+                                setAnonSaving(true)
+                                setAnonError(null)
+                                try {
+                                    const r = await fetch(`${base}/clones/anonymize-sql`, {
+                                        method: 'PUT',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ sql: anonSql }),
+                                    })
+                                    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+                                    await doCreateClone()
+                                } catch (e: any) {
+                                    setAnonError(String(e?.message || e))
+                                } finally {
+                                    setAnonSaving(false)
+                                }
+                            }}
+                        >
+                            {anonSaving ? 'Saving…' : 'Save script and create clone'}
+                        </Button>
+
+                        {/* Second, and worded as what it does rather than what
+                            it skips: the risk is the point of the dialog. */}
+                        <div className="rounded-md border border-warning/30 bg-warning/[0.07] p-2.5">
+                            <p className="mb-2 text-xs leading-relaxed">
+                                Creating without one means <span className="font-medium text-warning">production data
+                                will be what people test against</span> — anyone with the clone's connection
+                                string can read it, and copies of it spread with every snapshot taken from it.
+                            </p>
+                            <Button
+                                size="sm"
+                                disabled={mainCloning || anonSaving}
+                                onClick={() => doCreateClone()}
+                            >
+                                {mainCloning ? 'Cloning…' : 'Create anyway, without anonymization'}
+                            </Button>
+                        </div>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <Card className="mt-4">
                 {clonesError && <p className="mb-2 text-[13px] text-destructive">{clonesError}</p>}

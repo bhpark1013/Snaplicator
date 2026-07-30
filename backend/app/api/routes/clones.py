@@ -251,6 +251,50 @@ def get_fs_usage():
 		raise HTTPException(status_code=500, detail=f"Failed to calculate filesystem usage: {e}")
 
 
+# ── Anonymization script ─────────────────────────────────────────────
+#
+# A clone with no anonymization script is a copy of production handed to
+# whoever asked for it. That is a legitimate thing to want and a bad thing to
+# do by accident, so the file's absence is reported rather than assumed.
+
+def _anonymize_path() -> FsPath:
+    # FsPath, not Path: in this module Path is FastAPI's path-parameter helper.
+    return FsPath(__file__).resolve().parents[4] / "configs" / "anonymize.sql"
+
+
+class AnonymizeSqlBody(BaseModel):
+    sql: str
+
+
+@router.get("/anonymize-sql")
+def get_anonymize_sql():
+    """Whether a script exists, and what it says."""
+    p = _anonymize_path()
+    try:
+        text = p.read_text(encoding="utf-8") if p.exists() else ""
+        return {
+            "configured": bool(text.strip()),
+            "path": str(p),
+            "sql": text,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read anonymize.sql: {e}")
+
+
+@router.put("/anonymize-sql")
+def put_anonymize_sql(body: AnonymizeSqlBody):
+    """Save the script. Applied to every clone made after this."""
+    if not body.sql.strip():
+        raise HTTPException(status_code=400, detail="Refusing to save an empty script")
+    p = _anonymize_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body.sql, encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save anonymize.sql: {e}")
+    return {"ok": True, "path": str(p), "configured": True}
+
+
 @router.get("/{clone_id}")
 def get_clone_detail_api(clone_id: str = Path(..., description="Clone identifier (subvolume name or container name)")):
 	try:
@@ -303,4 +347,4 @@ def remove_clone(container_name: str = Path(..., description="Docker container n
 	except PermissionError as e:
 		raise HTTPException(status_code=403, detail=str(e))
 	except Exception as e:
-		raise HTTPException(status_code=500, detail=f"Failed to delete clone: {e}") 
+		raise HTTPException(status_code=500, detail=f"Failed to delete clone: {e}")
