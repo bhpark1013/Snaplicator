@@ -846,7 +846,7 @@ export function ReplicationTables() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [overrides, tables, fdwSet, noPublication])
 
-    const apply = async () => {
+    const apply = async (): Promise<boolean> => {
         setActionLoading(true)
         setError(null)
         setMessage(null)
@@ -904,11 +904,22 @@ export function ReplicationTables() {
             loadTables()
             loadSelection()
             loadFdw()
+            return true
         } catch (e: any) {
             setError(String(e?.message || e))
+            return false
         } finally {
             setActionLoading(false)
         }
+    }
+
+    // What "start" has to mean: the copy runs against what is on screen. A
+    // staged exclusion that the copy ignored was the difference between the
+    // page's promise and the replica's contents, and the copy is the point
+    // where that stops being fixable without starting over.
+    const commitThenStart = async (): Promise<boolean> => {
+        if (!pending.length && !pendingAuto.length) return true
+        return apply()
     }
 
     const onRefresh = async () => {
@@ -963,7 +974,14 @@ export function ReplicationTables() {
             <BootstrapGate
                 onDone={loadTables}
                 title={selection?.exists ? 'A publication already exists — start from it?' : undefined}
-                startLabel={selection?.exists ? 'Start the copy with this selection' : undefined}
+                onBeforeStart={commitThenStart}
+                startLabel={
+                    pending.length + pendingAuto.length > 0
+                        ? `Apply ${pending.length + pendingAuto.length} change${pending.length + pendingAuto.length === 1 ? '' : 's'} and start the copy`
+                        : selection?.exists
+                            ? 'Start the copy with this selection'
+                            : undefined
+                }
                 hint={
                     selection?.exists ? (
                         <>

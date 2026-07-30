@@ -93,6 +93,7 @@ export function BootstrapGate({
     hint,
     title,
     startLabel,
+    onBeforeStart,
 }: {
     onDone?: () => void
     hint?: React.ReactNode
@@ -100,6 +101,14 @@ export function BootstrapGate({
     // arriving at an existing publication is a confirmation, not a choice.
     title?: string
     startLabel?: string
+    // Run before the copy, and able to stop it by returning false.
+    //
+    // The page invites you to take tables out and then press start, but taking
+    // one out only stages the change — so a copy started straight afterwards
+    // used the publication as it was, and the tables just excluded came across
+    // anyway. There is no reading of "start" that means "start without what I
+    // just chose", so the choice is committed here rather than guarded against.
+    onBeforeStart?: () => Promise<boolean>
 }) {
     const [status, setStatus] = useState<BootstrapStatus | null>(null)
     const [copy, setCopy] = useState<CopyProgress | null>(null)
@@ -152,6 +161,10 @@ export function BootstrapGate({
         setStarting(true)
         setError(null)
         try {
+            if (onBeforeStart && !(await onBeforeStart())) {
+                setStarting(false)
+                return
+            }
             const r = await fetch(`${base}/replication/bootstrap`, { method: 'POST' })
             if (!r.ok) setError(`${r.status} ${await r.text()}`)
             await load()
