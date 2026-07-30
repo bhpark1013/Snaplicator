@@ -257,19 +257,24 @@ function ModeSwitch({
  * — a two-word toggle up in the header is a label without its subject.
  */
 function FollowRow({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+    // Once per schema, so it has to be quiet: at full sentence weight, four
+    // schemas put four copies of the same sentence down the page and the rule
+    // shouts louder than the tables it applies to. Short at rest, explained
+    // under the cursor.
     return (
         <button
             onClick={(e) => { e.stopPropagation(); onChange(!on) }}
-            className="group/f flex w-full items-center gap-1.5 rounded-md py-1 pl-[26px] pr-2 text-left text-xs text-muted-foreground transition-colors hover:bg-white/[0.03]"
+            title={on
+                ? 'Tables created in this schema later join on their own — click to stop'
+                : 'Tables created in this schema later are left out — click to include them'}
+            className="group/f flex w-full items-center gap-1 rounded-md py-0.5 pl-[26px] pr-2 text-left text-[11px] text-muted-foreground/45 transition-colors hover:bg-white/[0.03] hover:text-muted-foreground"
         >
-            <span className={cn('h-1 w-1 shrink-0 rounded-full', on ? 'bg-info' : 'bg-white/20')} />
-            {on ? (
-                <>Tables added here later are replicated too</>
-            ) : (
-                <>Tables added here later are left out</>
-            )}
-            <span className="text-muted-foreground/0 transition-colors group-hover/f:text-muted-foreground">
-                — {on ? 'stop' : 'follow them'}
+            <span>new tables →</span>
+            <span className={cn(on ? 'text-success/70' : 'text-muted-foreground/60')}>
+                {on ? 'replicated' : 'left out'}
+            </span>
+            <span className="opacity-0 transition-opacity group-hover/f:opacity-100">
+                · click to {on ? 'leave them out' : 'replicate them'}
             </span>
         </button>
     )
@@ -1034,7 +1039,7 @@ export function ReplicationTables() {
                                 where this schema's tables start and stop. */}
                             {open && (
                                 <div className="relative">
-                                    <span className="pointer-events-none absolute bottom-1 left-[15px] top-0 w-px bg-white/[0.09]" />
+                                    <span className="pointer-events-none absolute bottom-1.5 left-[15px] top-0 w-px bg-white/[0.14]" />
                                     {g.items.map((t) => {
                                         const fqn = `${t.schema}.${t.table}`
                                         const m = modeOf(t)
