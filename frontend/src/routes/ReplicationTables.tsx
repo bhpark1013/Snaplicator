@@ -275,7 +275,7 @@ function Disclosure({
                 <span className="text-[13px] font-semibold">{title}</span>
                 <span className="ml-auto truncate pl-3 text-xs text-muted-foreground">{summary}</span>
             </button>
-            {open && <div className="ml-[15px] border-l border-white/[0.07] py-1 pl-4">{children}</div>}
+            {open && <div className="ml-[15px] border-l border-white/[0.11] py-1 pl-4">{children}</div>}
         </div>
     )
 }
@@ -705,7 +705,7 @@ export function ReplicationTables() {
     const fdwTarget = fdwOpts.host ? `${fdwOpts.host}:${fdwOpts.port || 5432}/${fdwOpts.dbname || ''}` : null
 
     return (
-        <div className={cn('mx-auto max-w-5xl animate-page-in px-6 pt-6', (pending.length || pendingAuto.length) ? 'pb-32' : 'pb-20')}>
+        <div className={cn('mx-auto max-w-3xl animate-page-in px-6 pt-6', (pending.length || pendingAuto.length) ? 'pb-32' : 'pb-20')}>
             <div className="mb-4 flex items-center justify-between gap-4 border-b border-border pb-4">
                 <div className="flex items-center gap-3">
                     <Button asChild size="sm">
@@ -930,7 +930,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                                 the height of the children — the one mark that
                                 says where the schema's tables end. */}
                             {open && (
-                                <div className="ml-[15px] border-l border-white/[0.07] pl-1.5">
+                                <div className="ml-[15px] border-l border-white/[0.11] pl-1.5">
                                     {g.items.map((t) => {
                                         const fqn = `${t.schema}.${t.table}`
                                         const m = modeOf(t)
@@ -1011,7 +1011,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                 of the publication, and this is where the draft becomes it. */}
             {(pending.length > 0 || pendingAuto.length > 0) && (
                 <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background/95 backdrop-blur">
-                    <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-2 px-6 py-3">
+                    <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2 px-6 py-3">
                         <span className="text-[13px]">
                             <span className="font-semibold">{pending.length + pendingAuto.length}</span>{' '}
                             <span className="text-muted-foreground">
