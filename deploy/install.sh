@@ -155,18 +155,36 @@ extension_preflight() {
 $src
 EOF
 
-  if [ -n "$missing" ]; then
-    warn "$POSTGRES_IMAGE does not carry:$missing"
-    warn "The primary uses them. Their tables, indexes and operator classes will be"
-    warn "skipped by the schema clone and the copy will still report success —"
-    warn "so the replica would be complete-looking and quietly missing objects."
-    warn "Use an image that includes them (POSTGRES_IMAGE=...), then re-run."
-    if [ "$ALLOW_MISSING_EXTENSIONS" != "1" ]; then
-      die "refusing to build a replica the primary's schema does not fit into.
-  Override with ALLOW_MISSING_EXTENSIONS=1 if the missing ones are not needed."
-    fi
-  else
+  if [ -z "$missing" ]; then
     info "extensions: $POSTGRES_IMAGE carries everything the primary uses"
+    return 0
+  fi
+
+  warn "$POSTGRES_IMAGE does not carry:$missing"
+
+  # Built rather than refused. The missing extensions are almost always one
+  # apt away — the official image installs PostgreSQL from apt.postgresql.org,
+  # so that repository is already configured inside it — and stopping to make
+  # the user assemble an image by hand is asking them to do a mechanical job
+  # that the primary's catalog fully specifies.
+  local builder="$SNAP_HOME/deploy/build-replica-image.sh" built=""
+  if [ "$AUTO_BUILD_IMAGE" != "0" ] && [ -f "$builder" ]; then
+    info "building an image that carries them (AUTO_BUILD_IMAGE=0 to skip)..."
+    if built=$(BASE_IMAGE="$POSTGRES_IMAGE" bash "$builder" "$CONNSTR"); then
+      POSTGRES_IMAGE=$built
+      info "extensions: using $POSTGRES_IMAGE"
+      return 0
+    fi
+    warn "could not build an image automatically"
+  fi
+
+  warn "The primary uses them. Their tables, indexes and operator classes will be"
+  warn "skipped by the schema clone and the copy will still report success —"
+  warn "so the replica would be complete-looking and quietly missing objects."
+  warn "Build one yourself:  deploy/build-replica-image.sh \"\$CONNSTR\""
+  if [ "$ALLOW_MISSING_EXTENSIONS" != "1" ]; then
+    die "refusing to build a replica the primary's schema does not fit into.
+  Override with ALLOW_MISSING_EXTENSIONS=1 if the missing ones are not needed."
   fi
 }
 
@@ -259,6 +277,7 @@ done
 : "${MAIN_DATA_DIR:=main}"
 : "${POSTGRES_IMAGE:=postgres:17}"
 : "${ALLOW_MISSING_EXTENSIONS:=0}"
+: "${AUTO_BUILD_IMAGE:=1}"
 : "${POSTGRES_USER:=postgres}"
 : "${POSTGRES_DB:=postgres}"
 : "${PUBLICATION_NAME:=snaplicator_publication}"
