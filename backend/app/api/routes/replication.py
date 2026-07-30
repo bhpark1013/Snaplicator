@@ -8,6 +8,8 @@ from ...services import bootstrap as bootstrap_svc
 from ...services import selection as selection_svc
 from ...services import fdw_creds
 from ...services.replication import (
+    _run_publisher_sql,
+    _run_subscriber_sql,
     get_replication_lag_seconds,
     get_initial_copy_progress,
     run_replication_check_sql,
@@ -931,3 +933,113 @@ def get_sync_log(limit: int = 100):
     """Recent auto-sync activity (new tables, column/constraint adds, schema
     moves, FDW drift re-imports, errors) recorded by the background loop."""
     return {"events": sync_log.read_events(limit)}
+
+
+# ── Fidelity: what the replica could not reproduce ───────────────────
+#
+# Both endpoints answer the same question from different ends: is this replica
+# actually a copy of the primary, or only of the parts that happened to work?
+# The initial schema apply runs with ON_ERROR_STOP=0 — it has to, or one
+# unusable object would abort the whole clone — so failures have to be
+# recorded somewhere that can be asked, rather than left in a log nobody reads.
+
+
+@router.get("/extensions")
+def get_extension_parity():
+    """The primary's extensions against what this replica can offer.
+
+    An extension is missing for one of two reasons, and they need different
+    fixes: not installed (the file is there, CREATE EXTENSION was never run)
+    or not available (the binary is not in the image, so no SQL can fix it —
+    only a different POSTGRES_IMAGE can).
+    """
+    try:
+        connstr = _build_publisher_connstr()
+        _require_subscriber_settings()
+
+        src = _run_publisher_sql(
+            connstr,
+            "SELECT extname || ',' || extversion FROM pg_extension ORDER BY 1;",
+        )
+        source = []
+        for line in src.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            name, _, version = line.partition(",")
+            source.append({"name": name, "version": version})
+
+        sub = _run_subscriber_sql(
+            settings.container_name,
+            settings.postgres_user,
+            settings.postgres_password,
+            settings.postgres_db,
+            "SELECT name || ',' || coalesce(installed_version, '') || ',' || default_version "
+            "FROM pg_available_extensions ORDER BY 1;",
+        )
+        available: dict[str, dict] = {}
+        for line in sub.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(",")
+            if len(parts) < 3:
+                continue
+            available[parts[0]] = {"installed": parts[1] or None, "default": parts[2]}
+
+        missing_not_installed = []
+        missing_not_available = []
+        for e in source:
+            got = available.get(e["name"])
+            if got is None:
+                missing_not_available.append(e)
+            elif not got["installed"]:
+                missing_not_installed.append({**e, "available_version": got["default"]})
+
+        return {
+            "source": source,
+            "replica_available_count": len(available),
+            "missing_not_installed": missing_not_installed,
+            "missing_not_available": missing_not_available,
+            "ok": not missing_not_installed and not missing_not_available,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compare extensions: {e}")
+
+
+@router.get("/schema-errors")
+def get_schema_errors(limit: int = Query(200, ge=1, le=2000)):
+    """Objects the initial schema clone could not create.
+
+    Empty — including when the table does not exist — means the clone either
+    reported nothing or predates this record. Absence of evidence, so it is
+    reported as such rather than as a clean bill of health.
+    """
+    try:
+        _require_subscriber_settings()
+        exists = _run_subscriber_sql(
+            settings.container_name,
+            settings.postgres_user,
+            settings.postgres_password,
+            settings.postgres_db,
+            "SELECT to_regclass('public._snaplicator_schema_errors') IS NOT NULL;",
+        ).strip()
+        if exists != "t":
+            return {"recorded": False, "count": 0, "errors": []}
+
+        out = _run_subscriber_sql(
+            settings.container_name,
+            settings.postgres_user,
+            settings.postgres_password,
+            settings.postgres_db,
+            "SELECT replace(coalesce(message, ''), chr(10), ' ') FROM public._snaplicator_schema_errors "
+            f"ORDER BY id LIMIT {int(limit)};",
+        )
+        errors = [l.strip() for l in out.splitlines() if l.strip()]
+        return {"recorded": True, "count": len(errors), "errors": errors}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read schema errors: {e}")

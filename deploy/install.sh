@@ -124,6 +124,52 @@ EOF
   yourself and re-run:  CREATE PUBLICATION $PUBLICATION_NAME FOR ALL TABLES;"
 }
 
+# Does the image this replica will run actually carry what the primary uses?
+#
+# Checked because the alternative is silence. The initial schema clone applies
+# the dump with ON_ERROR_STOP=0 — it has to, or one unbuildable object would
+# abort the whole clone — so a missing extension takes its tables, its indexes
+# and its operator classes with it and the run still reports success. A live
+# deployment was found missing pg_trgm and, with it, five trigram indexes; the
+# data was complete and every query touching them planned differently.
+#
+# The image is asked directly rather than started: pg_config knows where the
+# control files live on both Debian and Alpine builds, and listing them costs
+# a container that exits immediately.
+extension_preflight() {
+  command -v psql >/dev/null 2>&1 || return 0
+  local src avail missing=""
+  src=$(PGCONNECT_TIMEOUT=10 psql "$CONNSTR" -Atc \
+    "SELECT extname FROM pg_extension WHERE extname <> 'plpgsql'" 2>/dev/null) || return 0
+  [ -n "$src" ] || return 0
+
+  avail=$(docker run --rm --entrypoint sh "$POSTGRES_IMAGE" -c \
+    'ls "$(pg_config --sharedir)"/extension/*.control 2>/dev/null' 2>/dev/null \
+    | sed 's#.*/##; s#\.control$##') || return 0
+  [ -n "$avail" ] || return 0
+
+  while IFS= read -r ext; do
+    [ -n "$ext" ] || continue
+    printf '%s\n' "$avail" | grep -qxF "$ext" || missing="$missing $ext"
+  done <<EOF
+$src
+EOF
+
+  if [ -n "$missing" ]; then
+    warn "$POSTGRES_IMAGE does not carry:$missing"
+    warn "The primary uses them. Their tables, indexes and operator classes will be"
+    warn "skipped by the schema clone and the copy will still report success —"
+    warn "so the replica would be complete-looking and quietly missing objects."
+    warn "Use an image that includes them (POSTGRES_IMAGE=...), then re-run."
+    if [ "$ALLOW_MISSING_EXTENSIONS" != "1" ]; then
+      die "refusing to build a replica the primary's schema does not fit into.
+  Override with ALLOW_MISSING_EXTENSIONS=1 if the missing ones are not needed."
+    fi
+  else
+    info "extensions: $POSTGRES_IMAGE carries everything the primary uses"
+  fi
+}
+
 # Run a step that has nothing to say while it works, and say something on its
 # behalf. A minutes-long silence is indistinguishable from a hang, and the
 # reader's only recourse is to kill an install that was fine. The seconds
@@ -212,6 +258,7 @@ done
 : "${NETWORK_NAME:=snaplicator}"
 : "${MAIN_DATA_DIR:=main}"
 : "${POSTGRES_IMAGE:=postgres:17}"
+: "${ALLOW_MISSING_EXTENSIONS:=0}"
 : "${POSTGRES_USER:=postgres}"
 : "${POSTGRES_DB:=postgres}"
 : "${PUBLICATION_NAME:=snaplicator_publication}"
@@ -746,6 +793,12 @@ printf '%s\n' "$POOL_OUT"
 POOL_DIR=$(printf '%s\n' "$POOL_OUT" | sed -n 's/^pool ready: \(.*\) (.*/\1/p' | tail -1)
 [ -n "$POOL_DIR" ] || die "could not determine the pool directory from snaplicator-init output"
 ROOT_DATA_DIR=$POOL_DIR
+
+# Run once docker and psql are both present and POSTGRES_IMAGE is settled,
+# and before anything is built out of it.
+if [ "$DEMO" = "0" ]; then
+  extension_preflight
+fi
 
 # ── 5. publication on the publisher (non-demo) ───────────────────────
 # Reported here, decided in the UI. What a publication covers is the whole

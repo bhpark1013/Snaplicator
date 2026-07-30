@@ -48,6 +48,17 @@ export function Config() {
     const [checkError, setCheckError] = useState<string | null>(null)
     const [checkExpanded, setCheckExpanded] = useState(false)
 
+    // What the replica could not reproduce. Two questions with one answer:
+    // whether it is a copy of the primary, or only of the parts that worked.
+    const [ext, setExt] = useState<{
+        source: { name: string; version: string }[]
+        missing_not_installed: { name: string; version: string; available_version?: string }[]
+        missing_not_available: { name: string; version: string }[]
+        ok: boolean
+    } | null>(null)
+    const [schemaErrors, setSchemaErrors] = useState<{ recorded: boolean; count: number; errors: string[] } | null>(null)
+    const [fidelityExpanded, setFidelityExpanded] = useState(false)
+
     const [anon, setAnon] = useState<{ configured: boolean; path: string; sql: string } | null>(null)
     const [anonExpanded, setAnonExpanded] = useState(false)
     const [anonPending, setAnonPending] = useState<{ name: string; sql: string; lines: number } | null>(null)
@@ -131,6 +142,17 @@ export function Config() {
                 setCheckError(text)
             })
             .finally(() => setCheckLoading(false))
+    }
+
+    const loadFidelity = () => {
+        fetch(`${base}/replication/extensions`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d) setExt(d) })
+            .catch(() => {})
+        fetch(`${base}/replication/schema-errors`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d) setSchemaErrors(d) })
+            .catch(() => {})
     }
 
     const loadAnon = () => {
@@ -233,6 +255,7 @@ export function Config() {
         loadCheckSql()
         runCheck()
         loadAnon()
+        loadFidelity()
         // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
 
@@ -275,6 +298,8 @@ export function Config() {
     }[checkStatus]
 
     const unconfigured = checkStatus === 'unconfigured'
+
+    const missingExt = (ext?.missing_not_installed.length || 0) + (ext?.missing_not_available.length || 0)
 
     const anonLineCount = anon?.sql ? anon.sql.trimEnd().split('\n').length : 0
 
@@ -472,6 +497,106 @@ export function Config() {
                                 </div>
                             </div>
                         )}
+                    </div>
+                )}
+            </Card>
+
+            {/* ── Collapsible detail: Replica fidelity ──
+                The schema apply runs with ON_ERROR_STOP=0, so what it could
+                not build is not a failure anyone is shown — it is a line in a
+                log. A replica missing five indexes reads exactly like a
+                complete one until someone measures a query. Both halves of
+                that question live here. */}
+            <Card className="mt-3">
+                <button
+                    onClick={() => setFidelityExpanded((v) => !v)}
+                    className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                    {fidelityExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                    <span className="text-[13px] font-semibold tracking-tight">Replica fidelity</span>
+                    <span className="text-xs text-muted-foreground">
+                        {ext === null && schemaErrors === null
+                            ? ''
+                            : missingExt > 0 || (schemaErrors?.count || 0) > 0
+                                ? `— ${[
+                                    missingExt > 0 && `${missingExt} extension${missingExt === 1 ? '' : 's'} missing`,
+                                    (schemaErrors?.count || 0) > 0 && `${schemaErrors!.count} object${schemaErrors!.count === 1 ? '' : 's'} not created`,
+                                ].filter(Boolean).join(' · ')}`
+                                : '— extensions match, nothing failed to build'}
+                    </span>
+                    {(missingExt > 0 || (schemaErrors?.count || 0) > 0) && (
+                        <Badge variant="warning" className="ml-auto">Incomplete</Badge>
+                    )}
+                </button>
+
+                {fidelityExpanded && (
+                    <div className="mt-3 space-y-4 pl-6">
+                        <div>
+                            <div className="mb-1.5 text-[13px] font-semibold">Extensions</div>
+                            {ext === null ? (
+                                <p className="text-xs text-muted-foreground">Loading…</p>
+                            ) : ext.ok ? (
+                                <p className="text-xs text-success">
+                                    All {ext.source.length} extension{ext.source.length === 1 ? '' : 's'} the primary
+                                    uses are installed here.
+                                </p>
+                            ) : (
+                                <div className="space-y-2">
+                                    {/* Two causes, two fixes. Not installed is
+                                        one SQL statement; not available cannot
+                                        be fixed by SQL at all. */}
+                                    {ext.missing_not_available.length > 0 && (
+                                        <div className="rounded-md border border-destructive/30 bg-destructive/[0.07] p-2.5">
+                                            <div className="mb-1 text-xs font-medium text-destructive">
+                                                Not in this image — no SQL can fix it
+                                            </div>
+                                            <div className="font-mono text-xs">
+                                                {ext.missing_not_available.map((e) => `${e.name} ${e.version}`).join(', ')}
+                                            </div>
+                                            <p className="mt-1.5 text-xs text-muted-foreground">
+                                                Rebuild the replica on a POSTGRES_IMAGE that carries them. Anything
+                                                typed by or indexed with these was skipped when the schema was cloned.
+                                            </p>
+                                        </div>
+                                    )}
+                                    {ext.missing_not_installed.length > 0 && (
+                                        <div className="rounded-md border border-warning/30 bg-warning/[0.07] p-2.5">
+                                            <div className="mb-1 text-xs font-medium text-warning">
+                                                Present in the image, never created
+                                            </div>
+                                            <div className="font-mono text-xs">
+                                                {ext.missing_not_installed.map((e) => `${e.name} ${e.version}`).join(', ')}
+                                            </div>
+                                            <pre className="mt-1.5 overflow-x-auto rounded bg-secondary p-2 font-mono text-[11px]">
+                                                {ext.missing_not_installed.map((e) => `CREATE EXTENSION ${e.name};`).join('\n')}
+                                            </pre>
+                                            <p className="mt-1.5 text-xs text-muted-foreground">
+                                                Indexes and objects that needed them were skipped and must be
+                                                recreated afterwards.
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        <div>
+                            <div className="mb-1.5 text-[13px] font-semibold">Objects the schema clone could not create</div>
+                            {schemaErrors === null ? (
+                                <p className="text-xs text-muted-foreground">Loading…</p>
+                            ) : !schemaErrors.recorded ? (
+                                <p className="text-xs text-muted-foreground">
+                                    Not recorded — this replica was built before failures were kept. Absence of
+                                    evidence, not evidence of a complete clone.
+                                </p>
+                            ) : schemaErrors.count === 0 ? (
+                                <p className="text-xs text-success">Nothing failed.</p>
+                            ) : (
+                                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-secondary p-3 font-mono text-[11px] leading-relaxed text-zinc-300">
+                                    {schemaErrors.errors.join('\n')}
+                                </pre>
+                            )}
+                        </div>
                     </div>
                 )}
             </Card>
