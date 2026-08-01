@@ -136,6 +136,38 @@ EOF
 # The image is asked directly rather than started: pg_config knows where the
 # control files live on both Debian and Alpine builds, and listing them costs
 # a container that exits immediately.
+# The base image follows the primary's major version, not a pinned default.
+#
+# A replica exists to stand in for the primary — same major, same behaviour,
+# same plans. A default baked into this script is right only for whoever set
+# it, and wrong for everyone whose primary moved on. The primary already
+# knows the answer, so it is asked rather than guessed. An operator who names
+# an image keeps it; they are told if it will not line up.
+match_image_to_primary() {
+  command -v psql >/dev/null 2>&1 || return 0
+  local major img_major
+  major=$(PGCONNECT_TIMEOUT=10 psql "$CONNSTR" -Atc "SHOW server_version" 2>/dev/null \
+    | sed -n 's/^\([0-9][0-9]*\).*/\1/p')
+  [ -n "$major" ] || return 0
+
+  if [ "${POSTGRES_IMAGE_SET:-}" != "1" ]; then
+    [ "$POSTGRES_IMAGE" = "postgres:$major" ] && return 0
+    info "primary is PostgreSQL $major — using postgres:$major (default was $POSTGRES_IMAGE)"
+    POSTGRES_IMAGE="postgres:$major"
+    return 0
+  fi
+
+  # Asked of the image rather than read off its tag: a tag says whatever its
+  # author wanted, and a custom one (org/pg:15-alpine3.20-hll2.18) parses badly.
+  img_major=$(docker run --rm --entrypoint sh "$POSTGRES_IMAGE" -c 'pg_config --version' 2>/dev/null \
+    | sed -n 's/^PostgreSQL \([0-9][0-9]*\).*/\1/p')
+  [ -n "$img_major" ] || return 0
+  [ "$img_major" = "$major" ] && return 0
+  warn "POSTGRES_IMAGE=$POSTGRES_IMAGE is PostgreSQL $img_major, but the primary is $major."
+  warn "Logical replication permits it, but the replica will not behave like the"
+  warn "primary it stands in for. Unset POSTGRES_IMAGE to follow the primary."
+}
+
 extension_preflight() {
   command -v psql >/dev/null 2>&1 || return 0
   local src avail missing=""
@@ -275,7 +307,8 @@ done
 : "${CONTAINER_NAME:=snaplicator_replica}"
 : "${NETWORK_NAME:=snaplicator}"
 : "${MAIN_DATA_DIR:=main}"
-: "${POSTGRES_IMAGE:=postgres:17}"
+POSTGRES_IMAGE_SET=${POSTGRES_IMAGE:+1}   # told to us, rather than defaulted
+: "${POSTGRES_IMAGE:=postgres:17}"        # only a fallback; see match_image_to_primary
 : "${ALLOW_MISSING_EXTENSIONS:=0}"
 : "${AUTO_BUILD_IMAGE:=1}"
 : "${POSTGRES_USER:=postgres}"
@@ -813,9 +846,11 @@ POOL_DIR=$(printf '%s\n' "$POOL_OUT" | sed -n 's/^pool ready: \(.*\) (.*/\1/p' |
 [ -n "$POOL_DIR" ] || die "could not determine the pool directory from snaplicator-init output"
 ROOT_DATA_DIR=$POOL_DIR
 
-# Run once docker and psql are both present and POSTGRES_IMAGE is settled,
-# and before anything is built out of it.
+# Run once docker and psql are both present, and before anything is built out
+# of the image. Order matters: the major is settled first, then the extensions
+# are checked against the image that choice landed on.
 if [ "$DEMO" = "0" ]; then
+  match_image_to_primary
   extension_preflight
 fi
 
