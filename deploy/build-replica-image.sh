@@ -41,7 +41,22 @@ MAJOR=$(PGCONNECT_TIMEOUT=15 psql "$CONNSTR" -Atc "SHOW server_version" | sed 's
 [ -n "$MAJOR" ] || die "could not determine the primary's major version"
 
 BASE_IMAGE=${BASE_IMAGE:-postgres:$MAJOR}
-info "primary is PostgreSQL $MAJOR; base image $BASE_IMAGE"
+
+# A package is named for the major of the installation it lands in, not the
+# primary's. Those are the same only when the base image was defaulted above;
+# a caller that pins one (install.sh passes POSTGRES_IMAGE) can hand us any
+# major, and naming the packages after the primary then puts the .so under a
+# path the running server never reads.
+BASE_MAJOR=$(docker run --rm --entrypoint sh "$BASE_IMAGE" -c 'pg_config --version' 2>/dev/null \
+  | sed -n 's/^PostgreSQL \([0-9]*\).*/\1/p')
+[ -n "$BASE_MAJOR" ] || die "could not read the PostgreSQL major version of $BASE_IMAGE"
+
+info "primary is PostgreSQL $MAJOR; base image $BASE_IMAGE (PostgreSQL $BASE_MAJOR)"
+if [ "$BASE_MAJOR" != "$MAJOR" ]; then
+  warn "the replica would run PostgreSQL $BASE_MAJOR against a PostgreSQL $MAJOR primary."
+  warn "Logical replication permits it, but a replica meant to stand in for the"
+  warn "primary should match it. Pass BASE_IMAGE=postgres:$MAJOR to line them up."
+fi
 if [ -z "$SRC" ]; then
   info "the primary uses no extensions beyond plpgsql — $BASE_IMAGE is enough"
   printf '%s\n' "$BASE_IMAGE"
@@ -100,7 +115,7 @@ for ext in $EXTS; do
   if [ -n "$found" ]; then echo "OK $ext $found"; else echo "NOPKG $ext"; fi
 done
 '
-RES=$(docker run --rm --entrypoint sh -e EXTS="$NEED" -e PGMAJOR="$MAJOR" \
+RES=$(docker run --rm --entrypoint sh -e EXTS="$NEED" -e PGMAJOR="$BASE_MAJOR" \
   "$BASE_IMAGE" -c "$RESOLVER") || die "could not resolve packages inside $BASE_IMAGE"
 
 PKGS=""
@@ -125,7 +140,7 @@ PKGS=$(printf '%s %s' "$PKGS" "${EXTRA_PKGS:-}" | xargs || true)
 [ -n "$PKGS" ] || die "nothing to install after resolution"
 
 # ── build ────────────────────────────────────────────────────────────
-TAG=${IMAGE_NAME:-snaplicator-postgres:$MAJOR-$(printf '%s' "$PKGS" | shasum | cut -c1-8)}
+TAG=${IMAGE_NAME:-snaplicator-postgres:$BASE_MAJOR-$(printf '%s' "$PKGS" | shasum | cut -c1-8)}
 BUILD_DIR=$(mktemp -d)
 trap 'rm -rf "$BUILD_DIR"' EXIT
 cat > "$BUILD_DIR/Dockerfile" <<EOF
