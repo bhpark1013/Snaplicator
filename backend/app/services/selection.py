@@ -234,7 +234,10 @@ def apply_selection(
     excluded = sorted(available_set - wanted)
     policy.save(sorted(wanted_auto), excluded)
     try:
-        install_capture_triggers(publisher_connstr, publication_name)
+        install_capture_triggers(
+            publisher_connstr, publication_name,
+            follow_schemas=trigger_schemas, excluded=excluded,
+        )
     except Exception:
         # The publication is already what was asked for; capture is the part
         # that keeps it that way tomorrow, and the loop reinstates it.

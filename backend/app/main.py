@@ -14,6 +14,7 @@ from .api.routes.notifications import router as notifications_router
 from .services import fdw as fdw_svc
 from .services import fdw_creds
 from .services import sync_log
+from .services import policy as policy_svc
 from .services.replication import (
     auto_sync_new_tables,
     install_capture_triggers,
@@ -91,7 +92,12 @@ async def ddl_sync_loop():
                     trigger_ok = await asyncio.to_thread(verify_capture_installed, connstr)
                     if not trigger_ok:
                         logger.warning("DDL capture triggers missing on publisher, reinstalling...")
-                        await asyncio.to_thread(install_capture_triggers, connstr, pub_name)
+                        chosen = policy_svc.load()
+                        await asyncio.to_thread(
+                            install_capture_triggers, connstr, pub_name,
+                            chosen["auto_schemas"] if chosen["chosen"] else None,
+                            chosen["excluded"] if chosen["chosen"] else None,
+                        )
                         logger.info("DDL capture triggers reinstalled successfully")
                         sync_log.record("capture_reinstalled", {"publication": pub_name})
                 except Exception as e:
@@ -276,7 +282,15 @@ async def lifespan(app: FastAPI):
         connstr = _build_publisher_connstr()
         pub_name = settings.publication_name
         if connstr and pub_name:
-            await asyncio.to_thread(install_capture_triggers, connstr, pub_name)
+            # Reinstate what was asked for, not a default: a restart that
+            # re-derived the scope would resume following schemas someone
+            # deliberately stopped following.
+            chosen = policy_svc.load()
+            await asyncio.to_thread(
+                install_capture_triggers, connstr, pub_name,
+                chosen["auto_schemas"] if chosen["chosen"] else None,
+                chosen["excluded"] if chosen["chosen"] else None,
+            )
             logger.info(f"DDL capture triggers installed on publisher for publication '{pub_name}'")
     except Exception as e:
         logger.warning(f"Could not install capture triggers at startup (will retry in polling loop): {e}")

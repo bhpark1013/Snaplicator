@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import subprocess
-from typing import Dict, List
+from typing import Dict, Iterable, List, Optional
 from pathlib import Path
 
 
@@ -609,8 +609,29 @@ def auto_sync_new_tables(
 CAPTURE_LOG_TABLE = "_snaplicator_ddl_log"
 
 
-def install_capture_triggers(publisher_connstr: str, publication_name: str) -> Dict:
+def _sql_text_array(values: Optional[Iterable[str]]) -> str:
+    """A text[] literal for embedding in generated PL/pgSQL."""
+    items = ", ".join("'" + str(v).replace("'", "''") + "'" for v in (values or []))
+    return f"ARRAY[{items}]::text[]"
+
+
+def install_capture_triggers(
+    publisher_connstr: str,
+    publication_name: str,
+    follow_schemas: Optional[List[str]] = None,
+    excluded: Optional[List[str]] = None,
+) -> Dict:
     """Install wide DDL capture on the publisher.
+
+    `follow_schemas` scopes the auto-add half. Left None it is derived from the
+    publication's own membership, which is what it has always done and what the
+    tests pin. Passed explicitly it is obeyed instead — including when empty,
+    which is how "stop following new tables" is expressed now that there is no
+    separate trigger to uninstall for it. Capture keeps running either way:
+    the two halves share a trigger but not a switch.
+
+    `excluded` names tables that must not be added back. A table someone took
+    out is not a table to re-add the next time it is recreated.
 
     Creates the _snaplicator_ddl_log outbox table plus two event triggers:
       _snaplicator_capture_ddl   ON ddl_command_end  (CREATE/ALTER, wide)
@@ -653,6 +674,23 @@ CREATE TABLE IF NOT EXISTS public.{CAPTURE_LOG_TABLE} (
 );
 """
     _run_publisher_sql(publisher_connstr, log_table_sql)
+
+    # Membership when nobody said otherwise; the stated wish when they did.
+    # An empty follow_schemas is a real answer — "follow nothing" — and has to
+    # survive as an array that matches no schema rather than fall back to the
+    # derived scope, or turning following off would silently turn it on.
+    if follow_schemas is None:
+        scope_clause = (
+            "c.schema_name IN (SELECT pt.schemaname FROM pg_publication_tables pt "
+            f"WHERE pt.pubname = '{publication_name}')"
+        )
+    else:
+        scope_clause = f"c.schema_name = ANY({_sql_text_array(follow_schemas)})"
+
+    exclude_clause = (
+        f"NOT (c.object_identity = ANY({_sql_text_array(excluded)}))"
+        if excluded else "true"
+    )
 
     capture_fn_sql = f"""
 CREATE OR REPLACE FUNCTION _snaplicator_capture_ddl()
@@ -725,10 +763,8 @@ BEGIN
                                      'SELECT INTO')
                AND c.object_type = 'table'
                AND c.object_identity !~ '_snaplicator_'
-               AND c.schema_name IN (
-                   SELECT pt.schemaname
-                     FROM pg_publication_tables pt
-                    WHERE pt.pubname = '{publication_name}')
+               AND {scope_clause}
+               AND {exclude_clause}
         LOOP
             BEGIN
                 EXECUTE format(
@@ -828,6 +864,38 @@ def verify_capture_installed(publisher_connstr: str) -> bool:
     )
     out = _run_publisher_sql(publisher_connstr, sql)
     return out.strip() == "2"
+
+
+def uninstall_capture_triggers(publisher_connstr: str, drop_log: bool = False) -> Dict:
+    """Take the capture triggers back off the publisher.
+
+    The counterpart to install, and the thing a primary is owed: these are
+    event triggers on somebody's production server, and leaving no way to
+    remove them means an install can only ever be added to. Removal covers the
+    legacy _snaplicator_auto_pub_add too, so a publisher that has seen both
+    versions comes away clean.
+
+    The log table is data — rows that may not have been applied yet — so it
+    stays unless asked for, and the functions go with the triggers because
+    nothing else calls them.
+    """
+    _run_publisher_sql(publisher_connstr, """
+DO $do$
+BEGIN
+    DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;
+    DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
+    DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
+END;
+$do$;
+DROP FUNCTION IF EXISTS _snaplicator_auto_add_to_pub();
+DROP FUNCTION IF EXISTS _snaplicator_capture_ddl();
+DROP FUNCTION IF EXISTS _snaplicator_capture_drop();
+""")
+    if drop_log:
+        _run_publisher_sql(
+            publisher_connstr, f"DROP TABLE IF EXISTS public.{CAPTURE_LOG_TABLE};"
+        )
+    return {"installed": False, "log_dropped": bool(drop_log)}
 
 
 # ── DDL Apply (subscriber side, Phase 2) ───────────────────────────
