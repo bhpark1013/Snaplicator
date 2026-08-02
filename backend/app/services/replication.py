@@ -628,15 +628,22 @@ def install_capture_triggers(
     publication_name: str,
     follow_schemas: Optional[List[str]] = None,
     excluded: Optional[List[str]] = None,
+    unfollow_schemas: Optional[List[str]] = None,
 ) -> Dict:
     """Install wide DDL capture on the publisher.
 
     `follow_schemas` scopes the auto-add half. Left None it is derived from the
     publication's own membership, which is what it has always done and what the
     tests pin. Passed explicitly it is obeyed instead — including when empty,
-    which is how "stop following new tables" is expressed now that there is no
-    separate trigger to uninstall for it. Capture keeps running either way:
-    the two halves share a trigger but not a switch.
+    which is how "follow nothing at all" is expressed for a publication this
+    install may not rewrite. Capture keeps running either way: the two halves
+    share a trigger but not a switch.
+
+    `unfollow_schemas` takes schemas back out of whichever scope the above
+    produced. Following is the default for a replicated schema, so a person
+    turning it off for one schema is recorded as the exception it is rather
+    than by replacing the scope with a list — a list would also have to be
+    right about every schema that does not exist yet.
 
     `excluded` names tables that must not be added back. A table someone took
     out is not a table to re-add the next time it is recreated.
@@ -683,10 +690,11 @@ CREATE TABLE IF NOT EXISTS public.{CAPTURE_LOG_TABLE} (
 """
     _run_publisher_sql(publisher_connstr, log_table_sql)
 
-    # Membership when nobody said otherwise; the stated wish when they did.
-    # An empty follow_schemas is a real answer — "follow nothing" — and has to
-    # survive as an array that matches no schema rather than fall back to the
-    # derived scope, or turning following off would silently turn it on.
+    # Membership is the scope, and it is what makes following the default: a
+    # schema the publication already covers keeps taking its new tables
+    # without anyone having listed it anywhere. An empty follow_schemas is a
+    # real answer — "follow nothing" — and has to survive as an array that
+    # matches no schema rather than fall back to the derived scope.
     if follow_schemas is None:
         scope_clause = (
             "c.schema_name IN (SELECT pt.schemaname FROM pg_publication_tables pt "
@@ -694,6 +702,13 @@ CREATE TABLE IF NOT EXISTS public.{CAPTURE_LOG_TABLE} (
         )
     else:
         scope_clause = f"c.schema_name = ANY({_sql_text_array(follow_schemas)})"
+
+    # The exceptions, applied to whichever scope that was.
+    if unfollow_schemas:
+        scope_clause = (
+            f"({scope_clause}) AND NOT "
+            f"(c.schema_name = ANY({_sql_text_array(unfollow_schemas)}))"
+        )
 
     exclude_clause = (
         f"NOT (c.object_identity = ANY({_sql_text_array(excluded)}))"

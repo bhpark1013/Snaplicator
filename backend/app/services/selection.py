@@ -93,7 +93,17 @@ def current_selection(publisher_connstr: str, publication_name: str) -> Dict:
     ).strip()
     tables = all_tables(publisher_connstr)
     if not exists:
-        return {"exists": False, "all_tables": False, "auto_schemas": [], "tables": [], "available": tables}
+        prior = policy.load()
+        off = (
+            {t.split(".")[0] for t in tables} - set(prior["auto_schemas"])
+            if prior.get("legacy") else set(prior["off_schemas"])
+        )
+        return {
+            "exists": False, "all_tables": False,
+            "auto_schemas": sorted(prior["auto_schemas"]),
+            "off_schemas": sorted(off),
+            "tables": [], "available": tables,
+        }
 
     published = _run_publisher_sql(
         publisher_connstr,
@@ -125,16 +135,31 @@ def current_selection(publisher_connstr: str, publication_name: str) -> Dict:
                 auto.add(fqn.split(".")[0])
 
     # A schema followed by the trigger has ordinary table-level membership, so
-    # the catalog cannot tell it apart from one nobody asked to follow. What
-    # was asked for is the thing to report.
+    # the catalog cannot tell it apart from one nobody asked to follow. The
+    # trigger follows every schema the publication covers, so that is what to
+    # report — anything else leaves the screen showing an unticked box over a
+    # schema that is in fact taking new tables, and then saving that screen
+    # back turns off what it never said was on.
+    #
+    # `auto` above is the schemas that follow through the publication's own
+    # form; those cannot be opted out of and so are not reduced here.
     chosen = policy.load()
-    if chosen["chosen"]:
-        auto |= set(chosen["auto_schemas"])
+    off = set(chosen["off_schemas"])
+    if chosen.get("legacy"):
+        # A file from before following was the default, where the stored list
+        # was the whole scope. Restated as the exceptions it implies, so that
+        # everything downstream — this screen included — has one rule to read
+        # and the upgrade changes nothing about what is replicated.
+        off = {t.split(".")[0] for t in tables} - set(chosen["auto_schemas"])
+    else:
+        auto |= {t.split(".")[0] for t in published_set} - off
+    auto |= set(chosen["auto_schemas"])
 
     return {
         "exists": True,
         "all_tables": all_tables_flag,
         "auto_schemas": sorted(auto),
+        "off_schemas": sorted(off),
         "tables": published_set,
         "available": tables,
     }
@@ -235,14 +260,20 @@ def apply_selection(
     # table follows new ones through schema-level membership, and one that
     # does not follows them through capture — the same two mechanisms as
     # before, minus a third trigger that had to be kept in step with both.
+    #
+    # Recorded as the exceptions to that, not as the list of schemas it
+    # applies to: membership already names them, and a list written today is
+    # silent about the schema someone creates tomorrow — which would then
+    # quietly not follow, though nobody ever said so.
     wanted_auto = set(auto_schemas)
-    trigger_schemas = sorted(wanted_auto - set(whole_schemas))
+    all_schemas = {t.split(".")[0] for t in available}
+    off_schemas = sorted(all_schemas - wanted_auto)
     excluded = sorted(available_set - wanted)
-    policy.save(sorted(wanted_auto), excluded)
+    policy.save(sorted(wanted_auto), excluded, off_schemas)
     try:
         install_capture_triggers(
             publisher_connstr, publication_name,
-            follow_schemas=trigger_schemas, excluded=excluded,
+            excluded=excluded, unfollow_schemas=off_schemas,
         )
     except Exception:
         # The publication is already what was asked for; capture is the part
@@ -268,7 +299,8 @@ def apply_selection(
     return {
         "form": "FOR ALL TABLES" if form == "all" else (body or "empty"),
         "auto_schemas": whole_schemas,
-        "trigger_schemas": trigger_schemas,
+        "trigger_schemas": sorted(wanted_auto - set(whole_schemas)),
+        "off_schemas": off_schemas,
         "tables": explicit,
         "count": len(wanted),
         "unknown": unknown,

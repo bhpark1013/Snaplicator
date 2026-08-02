@@ -92,16 +92,18 @@ def test_capture_scope_refuses_to_follow_a_publication_we_do_not_own(monkeypatch
 
     monkeypatch.setattr(
         policy_svc, "load",
-        lambda: {"chosen": True, "auto_schemas": ["public"], "excluded": []},
+        lambda: {"chosen": True, "auto_schemas": ["public"],
+                 "off_schemas": ["etl"], "excluded": []},
     )
 
     monkeypatch.setattr(publication_svc, "may_rewrite", lambda name: True)
-    assert policy_svc.capture_scope("mine") == (["public"], [])
+    assert policy_svc.capture_scope("mine") == (None, [], ["etl"])
 
     monkeypatch.setattr(publication_svc, "may_rewrite", lambda name: False)
-    follow, excluded = policy_svc.capture_scope("theirs")
+    follow, excluded, unfollow = policy_svc.capture_scope("theirs")
     assert follow == [], "a publication we may not rewrite follows nothing"
     assert excluded == [], "exclusions still apply"
+    assert unfollow == ["etl"], "and so do the schemas switched off"
 
 
 def test_capture_scope_without_a_policy_still_refuses(monkeypatch):
@@ -111,10 +113,63 @@ def test_capture_scope_without_a_policy_still_refuses(monkeypatch):
 
     monkeypatch.setattr(
         policy_svc, "load",
-        lambda: {"chosen": False, "auto_schemas": [], "excluded": []},
+        lambda: {"chosen": False, "auto_schemas": [], "off_schemas": [], "excluded": []},
     )
     monkeypatch.setattr(publication_svc, "may_rewrite", lambda name: True)
-    assert policy_svc.capture_scope("mine") == (None, None)
+    assert policy_svc.capture_scope("mine") == (None, None, None)
 
     monkeypatch.setattr(publication_svc, "may_rewrite", lambda name: False)
-    assert policy_svc.capture_scope("theirs") == ([], None)
+    assert policy_svc.capture_scope("theirs") == ([], None, None)
+
+
+def test_a_chosen_policy_still_derives_the_scope(monkeypatch):
+    """The point of the exceptions model.
+
+    A saved selection used to pin the scope to the schemas ticked at the time,
+    so a schema created afterwards followed nothing — though nobody had said
+    so. The scope stays derived from membership; only the departures are
+    stored, and a schema nobody has spoken about is not one of them.
+    """
+    from app.services import policy as policy_svc
+    from app.services import publication as publication_svc
+
+    monkeypatch.setattr(publication_svc, "may_rewrite", lambda name: True)
+    monkeypatch.setattr(
+        policy_svc, "load",
+        lambda: {"chosen": True, "auto_schemas": ["public"],
+                 "off_schemas": [], "excluded": ["public.junk"]},
+    )
+    follow, excluded, unfollow = policy_svc.capture_scope("mine")
+    assert follow is None, "derived, so a schema added later is covered too"
+    assert excluded == ["public.junk"]
+    assert unfollow == []
+
+
+def test_a_policy_file_from_before_the_default_keeps_its_old_meaning(tmp_path, monkeypatch):
+    """Upgrading must not start replicating something nobody asked for.
+
+    The old file's list *was* the scope. Read under the new meaning its
+    absent `off_schemas` says "nothing is switched off", which would put every
+    covered schema back to following — including the ones deliberately left
+    out of that list.
+    """
+    from app.services import policy as policy_svc
+    from app.services import publication as publication_svc
+
+    monkeypatch.setattr(publication_svc, "may_rewrite", lambda name: True)
+    monkeypatch.setattr(policy_svc, "_path", lambda: tmp_path / "selection_policy.json")
+
+    (tmp_path / "selection_policy.json").write_text(
+        '{"auto_schemas": ["public"], "excluded": []}'  # no off_schemas key
+    )
+    assert policy_svc.load()["legacy"] is True
+    follow, _excluded, unfollow = policy_svc.capture_scope("mine")
+    assert follow == ["public"], "the stored list is still the scope"
+    assert unfollow is None
+
+    # The next save writes the key, and the new meaning takes over from there.
+    policy_svc.save(["public"], [], off_schemas=["etl"])
+    assert policy_svc.load()["legacy"] is False
+    follow, _excluded, unfollow = policy_svc.capture_scope("mine")
+    assert follow is None
+    assert unfollow == ["etl"]

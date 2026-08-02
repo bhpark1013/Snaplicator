@@ -819,6 +819,9 @@ export function ReplicationTables() {
     // modes because it is a separate question: what happens to tables that do
     // not exist yet cannot be read off the ones that do.
     const [autoSchemas, setAutoSchemas] = useState<Set<string>>(new Set())
+    // The schemas someone switched off. Following is the default, so this —
+    // not its complement — is what gets recorded and what has to be read back.
+    const [offSchemas, setOffSchemas] = useState<Set<string>>(new Set())
     const [autoOverrides, setAutoOverrides] = useState<Map<string, boolean>>(new Map())
     // Whether a publication is already on the primary, and how much of it it
     // covers. Before the first copy this is the difference between choosing
@@ -878,6 +881,7 @@ export function ReplicationTables() {
             .then((d) => {
                 if (!d) return
                 setAutoSchemas(new Set<string>(d.auto_schemas || []))
+                setOffSchemas(new Set<string>(d.off_schemas || []))
                 setAutoOverrides(new Map())
                 setSelection({
                     exists: !!d.exists,
@@ -949,11 +953,26 @@ export function ReplicationTables() {
             return next
         })
 
-    const autoOf = (schema: string) => autoOverrides.get(schema) ?? autoSchemas.has(schema)
+    // A schema being replicated keeps taking its new tables — that is what the
+    // capture trigger does, and it needs nobody to have said so. Only the
+    // schemas someone switched off are recorded, so the answer for every other
+    // schema is read off what is being replicated right now. That includes the
+    // schema created after the last save, and the very first selection, where
+    // there is nothing recorded to read at all.
+    const replicatedSchemas = useMemo(() => {
+        const out = new Set<string>()
+        for (const t of tables) if (modeOf(t) === 'replicated') out.add(t.schema)
+        return out
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tables, overrides, fdwSet, noPublication])
+
+    const autoBase = (schema: string) =>
+        autoSchemas.has(schema) || (!offSchemas.has(schema) && replicatedSchemas.has(schema))
+    const autoOf = (schema: string) => autoOverrides.get(schema) ?? autoBase(schema)
     const setAuto = (schema: string, on: boolean) =>
         setAutoOverrides((prev) => {
             const next = new Map(prev)
-            if (autoSchemas.has(schema) === on) next.delete(schema)
+            if (autoBase(schema) === on) next.delete(schema)
             else next.set(schema, on)
             return next
         })
@@ -1029,10 +1048,11 @@ export function ReplicationTables() {
     const pendingAuto = useMemo(() => {
         const out: { schema: string; to: boolean }[] = []
         for (const [schema, to] of autoOverrides) {
-            if (autoSchemas.has(schema) !== to) out.push({ schema, to })
+            if (autoBase(schema) !== to) out.push({ schema, to })
         }
         return out.sort((a, b) => a.schema.localeCompare(b.schema))
-    }, [autoOverrides, autoSchemas])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [autoOverrides, autoSchemas, offSchemas, replicatedSchemas])
 
     const pending = useMemo(() => {
         const out: { fqn: string; from: TableMode; to: TableMode }[] = []

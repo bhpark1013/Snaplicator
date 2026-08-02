@@ -28,32 +28,62 @@ def _path() -> Path:
 
 
 def load() -> Dict:
-    """{'auto_schemas': [...], 'excluded': [...]}. Absent means never chosen."""
+    """The recorded wish. Absent means never chosen."""
     try:
         data = json.loads(_path().read_text())
         if isinstance(data, dict):
             return {
                 "auto_schemas": list(data.get("auto_schemas") or []),
+                "off_schemas": list(data.get("off_schemas") or []),
                 "excluded": list(data.get("excluded") or []),
                 "chosen": True,
+                # Written before following became the default, when the stored
+                # list *was* the scope. Reading it under the new meaning would
+                # turn following back on for every schema left out of it — an
+                # upgrade that starts publishing tables somebody excluded. The
+                # old meaning is kept until the next save says otherwise.
+                "legacy": "off_schemas" not in data,
             }
     except Exception:
         pass
-    return {"auto_schemas": [], "excluded": [], "chosen": False}
+    return {
+        "auto_schemas": [], "off_schemas": [], "excluded": [],
+        "chosen": False, "legacy": False,
+    }
 
 
-def save(auto_schemas: List[str], excluded: List[str]) -> None:
+def save(
+    auto_schemas: List[str],
+    excluded: List[str],
+    off_schemas: Optional[List[str]] = None,
+) -> None:
+    """Record the wish as its exceptions.
+
+    `off_schemas` is the load-bearing half. Following is what a replicated
+    schema does unless someone says otherwise, and a default cannot be stored
+    as a list of the schemas it applies to: a schema created tomorrow is in no
+    such list, so every list is out of date the moment a schema appears. Only
+    the departures from the default are finite and knowable, so those are what
+    is written down. `auto_schemas` is kept because the screen still shows the
+    answer per schema, and reading it back is cheaper than recomputing it.
+    """
     _path().write_text(json.dumps({
         "auto_schemas": sorted(set(auto_schemas)),
+        "off_schemas": sorted(set(off_schemas or [])),
         "excluded": sorted(set(excluded)),
     }))
 
 
-def capture_scope(publication_name: str) -> Tuple[Optional[List[str]], Optional[List[str]]]:
-    """(follow_schemas, excluded) for the capture trigger's auto-add half.
+def capture_scope(
+    publication_name: str,
+) -> Tuple[Optional[List[str]], Optional[List[str]], Optional[List[str]]]:
+    """(follow_schemas, excluded, unfollow_schemas) for the auto-add half.
 
-    None means "derive it from what the publication already covers", which is
-    what happens before anyone has chosen anything.
+    `follow_schemas` stays None whether or not anyone has chosen, because the
+    scope is always derived from what the publication already covers. That is
+    the default: a schema you replicate keeps taking its new tables. What a
+    person can change is which schemas step out of it, and that is
+    `unfollow_schemas`.
 
     A publication this install may not rewrite follows nothing, whatever the
     policy says. Auto-add is an ALTER PUBLICATION — the same rewrite the
@@ -64,8 +94,12 @@ def capture_scope(publication_name: str) -> Tuple[Optional[List[str]], Optional[
     from . import publication as publication_svc
 
     chosen = load()
-    follow = chosen["auto_schemas"] if chosen["chosen"] else None
+    follow: Optional[List[str]] = None
     excluded = chosen["excluded"] if chosen["chosen"] else None
+    unfollow = chosen["off_schemas"] if chosen["chosen"] else None
+    if chosen.get("legacy"):
+        # The stored list is the scope, as it was when it was written.
+        follow, unfollow = chosen["auto_schemas"], None
     if not publication_svc.may_rewrite(publication_name):
         follow = []
-    return follow, excluded
+    return follow, excluded, unfollow
