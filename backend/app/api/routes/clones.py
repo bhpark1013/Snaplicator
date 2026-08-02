@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Path, Body
 from pydantic import BaseModel
 from pathlib import Path as FsPath
 from ...core.config import settings
+from ...services import clone_progress
 from ...services.docker_pg import delete_clone
 from ...services.btrfs import (
 	list_clone_subvolumes_with_containers,
@@ -54,6 +55,19 @@ def get_clones():
 		return clones
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Failed to list clones: {e}")
+
+@router.get("/create-progress")
+def get_create_progress():
+	"""Where the clone being built has got to.
+
+	Read while the POST that is building it is still open — that request
+	cannot report its own progress, because its one reply arrives at the end.
+	Returns the most recent attempt, finished or not. `active` is what tells
+	the two apart, and comparing that beats comparing `started_at` against the
+	caller's own clock: the two clocks are not the same one.
+	"""
+	return clone_progress.current() or {"active": False, "stages": []}
+
 
 @router.post("")
 def create_clone_from_main(body: CreateCloneBody | None = None):

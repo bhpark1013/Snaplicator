@@ -10,6 +10,7 @@ from typing import Optional, Dict, List, Tuple
 import time
 import json
 
+from . import clone_progress
 from .btrfs import write_snaplicator_metadata, read_snaplicator_metadata, get_clone_detail
 
 
@@ -304,11 +305,18 @@ def _launch_clone_container(
     anonymize_ran = False
     anonymize_output: Optional[str] = None
 
+    clone_progress.stage("container")
     tr0 = time.monotonic()
     subprocess.run(cmd, check=True)
     tr1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] docker_run_ms={int((tr1-tr0)*1000)} container={container_name} port={host_port}")
 
+    # The longest stretch with nothing to show for it: the snapshot was taken
+    # from a running postgres, so the clone starts by replaying WAL. Named
+    # separately from the docker run above because the two fail differently —
+    # a container that never starts is a docker problem, one that starts and
+    # never answers is a recovery still going.
+    clone_progress.stage("ready")
     tw0 = time.monotonic()
     for _ in range(60):
         ready = subprocess.run(
@@ -331,6 +339,7 @@ def _launch_clone_container(
     tw1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] container_ready_wait_ms={int((tw1-tw0)*1000)} container={container_name}")
 
+    clone_progress.stage("subscriptions")
     subs_proc = subprocess.run(
         [
             "docker", "exec", container_name,
@@ -354,6 +363,7 @@ def _launch_clone_container(
                 check=False,
             )
 
+    clone_progress.stage("sequences")
     try:
         _sync_owned_sequences(container_name, opts.postgres_user, opts.postgres_db)
     except Exception:
@@ -363,6 +373,7 @@ def _launch_clone_container(
     repo_root = str(Path(__file__).resolve().parents[3])
     anon_file = Path(repo_root) / "configs/anonymize.sql"
     if run_anonymize and anon_file.exists():
+        clone_progress.stage("anonymize")
         _timing_log(f"[CLONE_TIMING] anonymize_start file={anon_file}")
         ta0 = time.monotonic()
         copy_ok = False
@@ -507,6 +518,31 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
     clone_name = f"{opts.main_data_dir}-clone-{ts}"
     clone_path = root / clone_name
 
+    clone_progress.begin("create", opts.display_name or clone_name)
+    try:
+        result = _clone_from_main_and_run(
+            opts, root, src_main, ts, clone_name, clone_path,
+            host_port_override, db_user, db_password,
+        )
+    except Exception as e:
+        clone_progress.finish(error=str(e).strip() or e.__class__.__name__)
+        raise
+    clone_progress.finish()
+    return result
+
+
+def _clone_from_main_and_run(
+    opts: CloneOptions,
+    root: Path,
+    src_main: Path,
+    ts: str,
+    clone_name: str,
+    clone_path: Path,
+    host_port_override: Optional[int],
+    db_user: Optional[str],
+    db_password: Optional[str],
+) -> Dict:
+    clone_progress.stage("checkpoint")
     try:
         src_container = _find_container_mounting_path(src_main)
         if src_container:
@@ -516,11 +552,16 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
     except Exception as e:
         _timing_log(f"[CLONE_TIMING] pre_checkpoint_error path={src_main} err={str(e).strip()}")
 
+    clone_progress.stage("snapshot")
     t0 = time.monotonic()
     _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(src_main), str(clone_path)])
     t1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={src_main} target={clone_path}")
 
+    # Its own stage rather than part of the snapshot: the snapshot is O(1) and
+    # this walks every file in the tree, so on a large replica it is the one
+    # that takes the minutes people are waiting through.
+    clone_progress.stage("permissions")
     uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
     _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
     _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
@@ -557,6 +598,7 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
     )
 
     if db_user and db_password:
+        clone_progress.stage("user")
         _create_db_user(container_name, opts, db_user, db_password)
 
     return {

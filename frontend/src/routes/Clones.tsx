@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, Check, Copy, Star, Upload } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Loader2, Star, Upload, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -17,6 +17,61 @@ import { cn, copyText } from '@/lib/utils'
 import { RetentionSelect } from '@/components/RetentionSelect'
 import { LineageGraph, computeInsertParams, type Slot, type SnapshotItem } from '@/components/LineageGraph'
 import { BootstrapGate } from '@/components/BootstrapGate'
+
+type CloneStageStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed'
+
+interface CloneStage {
+    key: string
+    label: string
+    status: CloneStageStatus
+    ms: number | null
+}
+
+interface CloneProgress {
+    active: boolean
+    stage: string | null
+    stage_started_at: number | null
+    error: string | null
+    stages: CloneStage[]
+}
+
+/** The itinerary of a clone build, while it is still being built.
+ *
+ * Every stage is listed from the start, including the ones not reached yet:
+ * the wait is long enough that "what is left" is as much of the answer as
+ * "where are we", and a list that grew a row at a time would keep the end out
+ * of sight. A stage that turned out not to be needed is struck through rather
+ * than removed, so the rows do not move under the reader. */
+function CloneStages({ progress }: { progress: CloneProgress }) {
+    const secs = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`)
+    return (
+        <div className="grid gap-1 rounded-md border border-border bg-secondary/40 px-3 py-2.5">
+            {progress.stages.map((s) => (
+                <div key={s.key} className="flex items-center gap-2 text-[12px]">
+                    <span className="flex size-3.5 flex-none items-center justify-center">
+                        {s.status === 'done' && <Check className="size-3 text-success" />}
+                        {s.status === 'running' && <Loader2 className="size-3 animate-spin text-info" />}
+                        {s.status === 'failed' && <X className="size-3 text-destructive" />}
+                    </span>
+                    <span
+                        className={cn(
+                            s.status === 'running' && 'font-medium text-foreground',
+                            s.status === 'done' && 'text-muted-foreground',
+                            s.status === 'pending' && 'text-muted-foreground/50',
+                            s.status === 'skipped' && 'text-muted-foreground/40 line-through',
+                            s.status === 'failed' && 'text-destructive',
+                        )}
+                    >
+                        {s.label}
+                    </span>
+                    {s.ms != null && (
+                        <span className="ml-auto tabular-nums text-[11px] text-muted-foreground/60">{secs(s.ms)}</span>
+                    )}
+                </div>
+            ))}
+        </div>
+    )
+}
 
 interface CloneItem {
     name: string
@@ -94,6 +149,7 @@ export function Clones() {
     const [createPw, setCreatePw] = useState('')
     const [createError, setCreateError] = useState<string | null>(null)
     const [mainCloning, setMainCloning] = useState(false)
+    const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null)
     const defaultUser = 'snaplicator'
     const [refreshingClone, setRefreshingClone] = useState<string | null>(null)
     const [refreshFor, setRefreshFor] = useState<CloneItem | null>(null)
@@ -258,6 +314,30 @@ export function Clones() {
         setMessage(null)
         setError(null)
         const tid = toast.loading(`Creating clone “${trimmedName}”…`)
+        // The POST below does not return until the clone is built, so where it
+        // has got to has to be asked for separately. Only a record still
+        // marked active is read: the previous build's leftovers describe a
+        // clone that already exists, and this runs for the length of one POST
+        // that nothing else overlaps.
+        setCloneProgress(null)
+        const poll = window.setInterval(async () => {
+            try {
+                const pr = await fetch(`${base}/clones/create-progress`)
+                if (!pr.ok) return
+                const p: CloneProgress = await pr.json()
+                if (!p?.active) return
+                setCloneProgress(p)
+                const at = p.stages.findIndex((s) => s.status === 'running')
+                if (at >= 0) {
+                    toast.update(
+                        tid, 'loading',
+                        `${trimmedName}: ${p.stages[at].label} (${at + 1}/${p.stages.length})`,
+                    )
+                }
+            } catch {
+                /* the progress read is decoration; its failure is not the clone's */
+            }
+        }, 1000)
         try {
             const portNum = createPort.trim() ? parseInt(createPort.trim(), 10) : undefined
             const bodyData: Record<string, unknown> = { name: trimmedName, description: trimmedDesc, port: portNum }
@@ -284,6 +364,8 @@ export function Clones() {
             toast.update(tid, 'error', `Clone failed: ${String(e?.message || e)}`)
             setCreateError(String(e?.message || e))
         } finally {
+            window.clearInterval(poll)
+            setCloneProgress(null)
             setMainCloning(false)
         }
     }
@@ -654,6 +736,7 @@ export function Clones() {
                             <code className="rounded bg-secondary px-1 py-0.5 font-mono text-[11px]">{defaultUser}</code>{' '}
                             and its default password. If provided, the account is created in this clone.
                         </DialogDescription>
+                        {mainCloning && cloneProgress && <CloneStages progress={cloneProgress} />}
                         {createError && <p className="whitespace-pre-wrap text-[13px] text-destructive">{createError}</p>}
                     </div>
                     <DialogFooter>
