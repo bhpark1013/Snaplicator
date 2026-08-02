@@ -275,6 +275,10 @@ def list_replication_tables(
         "FROM information_schema.tables t "
         "LEFT JOIN pg_stat_user_tables s ON s.schemaname = t.table_schema AND s.relname = t.table_name "
         "WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema') AND t.table_type = 'BASE TABLE' "
+        # Snaplicator's own outbox rides its own publication; showing it as a
+        # choice here only lets someone stop DDL replicating while every
+        # screen still says it is on.
+        f"AND t.table_name <> '{CAPTURE_LOG_TABLE}' "
         "ORDER BY t.table_name;"
     )
     all_out = _run_publisher_sql(publisher_connstr, all_tables_sql)
