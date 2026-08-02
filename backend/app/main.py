@@ -15,6 +15,7 @@ from .services import fdw as fdw_svc
 from .services import fdw_creds
 from .services import sync_log
 from .services import policy as policy_svc
+from .services import publication as publication_svc
 from .services.replication import (
     auto_sync_new_tables,
     install_capture_triggers,
@@ -78,7 +79,7 @@ async def ddl_sync_loop():
         cycle_t0 = time.monotonic()
         try:
             connstr = _build_publisher_connstr()
-            pub_name = settings.publication_name
+            pub_name = publication_svc.active(settings.publication_name)
             sub_name = settings.subscription_name
             container = settings.container_name
             user = settings.postgres_user
@@ -280,7 +281,7 @@ async def lifespan(app: FastAPI):
     # folded into the capture trigger, scoped to schemas the publication covers.
     try:
         connstr = _build_publisher_connstr()
-        pub_name = settings.publication_name
+        pub_name = publication_svc.active(settings.publication_name)
         if connstr and pub_name:
             # Reinstate what was asked for, not a default: a restart that
             # re-derived the scope would resume following schemas someone

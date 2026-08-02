@@ -32,6 +32,13 @@ _load_dotenv() {
     if [[ "$value" == '"'*'"' || "$value" == "'"*"'" ]]; then
       value="${value:1:${#value}-2}"
     fi
+    # An already-exported value wins. The file is the deployment's defaults;
+    # the environment is what the caller decided for this run — and the
+    # manager has decisions the file cannot carry, PUBLICATION_NAME above
+    # all: the .env names the publication the installer proposed before it
+    # had looked at the primary, and the one actually chosen since is only
+    # known to the process starting this.
+    if [ -n "${!key+set}" ]; then continue; fi
     # literal assign without expansion, then export
     printf -v "$key" '%s' "$value"
     export "$key"
@@ -401,6 +408,11 @@ else
   DOCKER_PORT_ARGS+=( -p "${HOST_PORT}:5432" )
 fi
 DOCKER_ENV_VARS=()
+# --env-file above hands the init scripts the .env verbatim, so the
+# publication they subscribe to would be the name the installer proposed
+# rather than the one chosen since. -e wins over --env-file, which is what
+# makes this the fix and not a second source of truth.
+DOCKER_ENV_VARS+=( -e PUBLICATION_NAME="$PUBLICATION_NAME" )
 if [ -n "${PRIMARY_CONNSTR:-}" ]; then
   DOCKER_ENV_VARS+=( -e PRIMARY_CONNSTR="$PRIMARY_CONNSTR" )
 fi

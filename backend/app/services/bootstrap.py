@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.config import settings
+from . import publication as publication_svc
 from .replication import _run_subscriber_sql
 
 APP_DIR = Path("/app")
@@ -177,9 +178,19 @@ def start(force: bool = False) -> dict:
         # The exit code is written by the wrapper rather than collected here
         # for the same reason nothing else is kept in memory — whoever asks
         # next may be a different process than the one that started it.
+        # The script reads PUBLICATION_NAME from the .env, which is the name
+        # the installer proposed before it had ever looked at the primary. If
+        # a publication was chosen since, that choice is the one the
+        # subscription has to name — CREATE SUBSCRIPTION does not fail on a
+        # publication that is not there, it succeeds and replicates nothing.
+        env = dict(os.environ)
+        pub = publication_svc.active(settings.publication_name)
+        if pub:
+            env["PUBLICATION_NAME"] = pub
         proc = subprocess.Popen(
             ["bash", "-c", f'bash "{SCRIPT}"; echo $? > "{_exit_path()}"'],
             cwd=str(APP_DIR),
+            env=env,
             stdout=fh,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
