@@ -24,6 +24,7 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from . import policy, publication
 from .replication import (
+    CAPTURE_LOG_TABLE,
     _run_publisher_sql,
     _run_subscriber_sql,
     install_capture_triggers,
@@ -48,7 +49,12 @@ def all_tables(publisher_connstr: str) -> List[str]:
         publisher_connstr,
         "SELECT table_schema || '.' || table_name FROM information_schema.tables "
         "WHERE table_type = 'BASE TABLE' "
-        "AND table_schema NOT IN ('pg_catalog', 'information_schema');",
+        "AND table_schema NOT IN ('pg_catalog', 'information_schema') "
+        # Snaplicator's own outbox. It rides its own publication, so offering
+        # it here would let someone put it in the data publication as well —
+        # and take it out again, which is the one way to stop DDL replicating
+        # while every screen still says it is on.
+        f"AND table_name <> '{CAPTURE_LOG_TABLE}';",
     )
     return sorted(l.strip() for l in out.splitlines() if l.strip())
 

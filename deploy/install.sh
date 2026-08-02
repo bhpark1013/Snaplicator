@@ -316,6 +316,17 @@ POSTGRES_IMAGE_SET=${POSTGRES_IMAGE:+1}   # told to us, rather than defaulted
 : "${PUBLICATION_NAME:=snaplicator_publication}"
 : "${SUBSCRIPTION_NAME:=snaplicator_subscription}"
 : "${DDL_SYNC_INTERVAL:=30}"
+# The backend defaults this off, so that merely deploying a newer Snaplicator
+# over an existing install never changes how replication behaves. An install
+# has no existing behaviour to protect, and off is not a safe default here:
+# capture keeps running, the apply side does not, and the first ALTER TABLE
+# on a replicated table sends a column the replica has no room for — which
+# stops the apply worker and with it every INSERT/UPDATE/DELETE on that
+# table. A value already in the .env is a decision and is left alone.
+if [ -z "${DDL_APPLY_ENABLED:-}" ] && [ -f "$SNAP_HOME/deploy/.env" ]; then
+  DDL_APPLY_ENABLED=$(sed -n 's/^DDL_APPLY_ENABLED=//p' "$SNAP_HOME/deploy/.env" | tail -1)
+fi
+: "${DDL_APPLY_ENABLED:=1}"
 : "${DEMO_PUB_NAME:=snaplicator-demo-pub}"
 : "${DEMO_PUB_PORT:=15432}"
 : "${DEMO_POOL_GIB:=10}"
@@ -903,6 +914,7 @@ PGSSLMODE=${PGSSLMODE:-prefer}
 PUBLICATION_NAME=$PUBLICATION_NAME
 SUBSCRIPTION_NAME=$SUBSCRIPTION_NAME
 DDL_SYNC_INTERVAL=$DDL_SYNC_INTERVAL
+DDL_APPLY_ENABLED=$DDL_APPLY_ENABLED
 EOF
 if [ -f "$ENV_FILE" ] && cmp -s "$ENV_FILE" "$ENV_FILE.new"; then
   rm -f "$ENV_FILE.new"

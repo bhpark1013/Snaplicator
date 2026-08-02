@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 
 def _path() -> Path:
@@ -47,3 +47,25 @@ def save(auto_schemas: List[str], excluded: List[str]) -> None:
         "auto_schemas": sorted(set(auto_schemas)),
         "excluded": sorted(set(excluded)),
     }))
+
+
+def capture_scope(publication_name: str) -> Tuple[Optional[List[str]], Optional[List[str]]]:
+    """(follow_schemas, excluded) for the capture trigger's auto-add half.
+
+    None means "derive it from what the publication already covers", which is
+    what happens before anyone has chosen anything.
+
+    A publication this install may not rewrite follows nothing, whatever the
+    policy says. Auto-add is an ALTER PUBLICATION — the same rewrite the
+    selection screen refuses on a publication that is not ours, arriving by a
+    different door, and the one that made "this install will never rewrite
+    it" untrue in practice.
+    """
+    from . import publication as publication_svc
+
+    chosen = load()
+    follow = chosen["auto_schemas"] if chosen["chosen"] else None
+    excluded = chosen["excluded"] if chosen["chosen"] else None
+    if not publication_svc.may_rewrite(publication_name):
+        follow = []
+    return follow, excluded

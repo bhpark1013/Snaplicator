@@ -607,6 +607,10 @@ def auto_sync_new_tables(
 
 
 CAPTURE_LOG_TABLE = "_snaplicator_ddl_log"
+# The log table's own publication. Named for what it carries rather than for
+# the replica that reads it: one publisher serves one log table, and a second
+# install pointed at the same primary should find this and reuse it.
+CAPTURE_LOG_PUBLICATION = "_snaplicator_ddl"
 
 
 def _sql_text_array(values: Optional[Iterable[str]]) -> str:
@@ -1112,36 +1116,45 @@ def verify_ddl_apply_installed(
     return out.strip() == "1"
 
 
-def add_log_table_to_publication(
-    publisher_connstr: str, publication_name: str
-) -> Dict:
-    """Put the DDL log table into the publication so its rows ride the
-    normal replication stream. Idempotent; FOR ALL TABLES publications
-    already include it (and reject ALTER PUBLICATION ADD TABLE)."""
-    allt = _run_publisher_sql(
+def ensure_ddl_publication(publisher_connstr: str) -> Dict:
+    """Put the DDL log table into a publication of our own making.
+
+    It used to go into whichever publication this replica reads, which is
+    fine when that publication is ours and a broken promise when it is not:
+    the chooser's "use one as it stands" says this install will never rewrite
+    it, and ALTER PUBLICATION ADD TABLE is a rewrite — one that any other
+    subscriber picks up on its next REFRESH, quietly acquiring our log table.
+
+    A publication of our own removes the choice between keeping that promise
+    and replicating DDL at all. A subscription can name several, so the log
+    rides this one and the data rides theirs, untouched.
+    """
+    exists = _run_publisher_sql(
         publisher_connstr,
-        f"SELECT puballtables FROM pg_publication WHERE pubname = '{publication_name}';",
+        f"SELECT 1 FROM pg_publication WHERE pubname = '{CAPTURE_LOG_PUBLICATION}';",
     ).strip()
-    if allt == "":
-        return {"added": False, "reason": "publication_not_found"}
-    if allt == "t":
-        return {"added": False, "reason": "for_all_tables"}
+    if not exists:
+        _run_publisher_sql(
+            publisher_connstr,
+            f'CREATE PUBLICATION "{CAPTURE_LOG_PUBLICATION}" '
+            f"FOR TABLE public.{CAPTURE_LOG_TABLE};",
+        )
+        return {"publication": CAPTURE_LOG_PUBLICATION, "created": True}
 
     member = _run_publisher_sql(
         publisher_connstr,
         "SELECT count(*) FROM pg_publication_tables "
-        f"WHERE pubname = '{publication_name}' "
+        f"WHERE pubname = '{CAPTURE_LOG_PUBLICATION}' "
         f"AND tablename = '{CAPTURE_LOG_TABLE}';",
     ).strip()
-    if member == "1":
-        return {"added": False, "reason": "already_member"}
-
-    _run_publisher_sql(
-        publisher_connstr,
-        f"ALTER PUBLICATION {publication_name} "
-        f"ADD TABLE public.{CAPTURE_LOG_TABLE};",
-    )
-    return {"added": True}
+    if member == "0":
+        _run_publisher_sql(
+            publisher_connstr,
+            f'ALTER PUBLICATION "{CAPTURE_LOG_PUBLICATION}" '
+            f"ADD TABLE public.{CAPTURE_LOG_TABLE};",
+        )
+        return {"publication": CAPTURE_LOG_PUBLICATION, "added": True}
+    return {"publication": CAPTURE_LOG_PUBLICATION, "created": False}
 
 
 def check_subscription_health(
@@ -1300,29 +1313,43 @@ def enable_ddl_apply(
 ) -> Dict:
     """Connect the DDL stream, idempotently. Order matters: the watermark is
     seeded from the publisher's current max(id) BEFORE the log table joins
-    the publication, so history arriving via the initial COPY is never
-    executed. REFRESH runs only when the subscriber is not yet pulling the
-    log table, so steady-state calls are read-only no-ops."""
+    its publication, so history arriving via the initial COPY is never
+    executed. The subscription is only rewritten when it is not yet reading
+    the log publication, so steady-state calls are read-only no-ops.
+
+    `publication_name` is the data publication. It is not modified here — the
+    log has one of its own — and is passed only so the subscription keeps
+    naming it alongside.
+    """
     wm = get_publisher_max_ddl_log_id(publisher_connstr)
     install_ddl_apply(
         subscriber_container, subscriber_user, subscriber_password,
         subscriber_db, initial_watermark=wm,
     )
-    added = add_log_table_to_publication(publisher_connstr, publication_name)
-    subscribed = _run_subscriber_sql(
+    added = ensure_ddl_publication(publisher_connstr)
+
+    # subpublications comes back as a Postgres array literal: {a,b}
+    current = _run_subscriber_sql(
         subscriber_container, subscriber_user, subscriber_password,
         subscriber_db,
-        "SELECT count(*) FROM pg_subscription_rel sr "
-        "JOIN pg_class c ON c.oid = sr.srrelid "
-        f"WHERE c.relname = '{CAPTURE_LOG_TABLE}';",
+        "SELECT array_to_string(subpublications, ',') FROM pg_subscription "
+        f"WHERE subname = '{subscription_name}';",
     ).strip()
-    if subscribed == "0":
-        _run_subscriber_sql(
-            subscriber_container, subscriber_user, subscriber_password,
-            subscriber_db,
-            f"ALTER SUBSCRIPTION {subscription_name} REFRESH PUBLICATION;",
-        )
-    return {"watermark": wm, "refreshed": subscribed == "0", **added}
+    names = [p for p in (n.strip() for n in current.split(",")) if p]
+    if CAPTURE_LOG_PUBLICATION in names:
+        return {"watermark": wm, "refreshed": False, **added}
+
+    # SET PUBLICATION refreshes by default, and only tables that just joined
+    # are copied — the data publication's tables are already in
+    # pg_subscription_rel and are left where they are.
+    names.append(CAPTURE_LOG_PUBLICATION)
+    joined = ", ".join(f'"{n}"' for n in names)
+    _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password,
+        subscriber_db,
+        f"ALTER SUBSCRIPTION {subscription_name} SET PUBLICATION {joined};",
+    )
+    return {"watermark": wm, "refreshed": True, **added}
 
 
 def run_deferred_ddl(

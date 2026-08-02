@@ -234,7 +234,8 @@ def pg_pair():
 	subscription starts so pre-existing log rows are never replayed.
 	"""
 	from app.services.replication import (
-		add_log_table_to_publication,
+		CAPTURE_LOG_PUBLICATION,
+		ensure_ddl_publication,
 		install_capture_triggers,
 		install_ddl_apply,
 	)
@@ -269,14 +270,15 @@ def pg_pair():
 
 	max_id = int(psql_conn(pub, f"SELECT coalesce(max(id), 0) FROM {LOG_TABLE};"))
 	install_ddl_apply(E2E_SUB, PG_USER, PG_PASSWORD, PG_DB, initial_watermark=max_id)
-	add_log_table_to_publication(pub, PUBLICATION)
+	ensure_ddl_publication(pub)
 
+	# Two publications, as in production: the data one, plus the log's own.
 	psql_conn(
 		sub,
 		f"CREATE SUBSCRIPTION {E2E_SUBSCRIPTION} "
 		f"CONNECTION 'host={E2E_PUB} port=5432 dbname={PG_DB} "
 		f"user={PG_USER} password={PG_PASSWORD}' "
-		f"PUBLICATION {PUBLICATION};",
+		f'PUBLICATION {PUBLICATION}, "{CAPTURE_LOG_PUBLICATION}";',
 	)
 	# wait until initial sync of both tables (seed + ddl log) is done
 	wait_until(

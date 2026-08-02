@@ -32,6 +32,7 @@ exact position between the surrounding DML — no LSN gates, no polling.
 from __future__ import annotations
 
 from app.services.replication import (
+	CAPTURE_LOG_PUBLICATION,
 	enable_ddl_apply,
 	get_ddl_apply_status,
 	run_deferred_ddl,
@@ -58,12 +59,20 @@ def _status():
 class TestInfra:
 	def test_apply_installed_and_log_published(self, pg_pair):
 		assert verify_ddl_apply_installed(E2E_SUB, PG_USER, PG_PASSWORD, PG_DB) is True
+		# The log rides its own publication, so that reading a publication
+		# this install does not own never means writing to it.
+		out = psql_conn(
+			pg_pair["pub"],
+			f"SELECT count(*) FROM pg_publication_tables "
+			f"WHERE pubname = '{CAPTURE_LOG_PUBLICATION}' AND tablename = '{LOG_TABLE}';",
+		)
+		assert out == "1"
 		out = psql_conn(
 			pg_pair["pub"],
 			f"SELECT count(*) FROM pg_publication_tables "
 			f"WHERE pubname = '{PUBLICATION}' AND tablename = '{LOG_TABLE}';",
 		)
-		assert out == "1"
+		assert out == "0", "the data publication must not carry the log table"
 
 	def test_pre_watermark_ddl_not_replayed(self, pg_pair):
 		"""Rows captured before the watermark arrive via initial COPY (they
@@ -89,8 +98,8 @@ class TestInfra:
 			pg_pair["pub"], PUBLICATION,
 			E2E_SUB, PG_USER, PG_PASSWORD, PG_DB, E2E_SUBSCRIPTION,
 		)
-		assert res["added"] is False
-		assert res["refreshed"] is False
+		assert res["created"] is False, "the log publication is already there"
+		assert res["refreshed"] is False, "the subscription already names it"
 
 
 class TestInStreamApply:
