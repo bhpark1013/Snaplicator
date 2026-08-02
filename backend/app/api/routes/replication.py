@@ -7,6 +7,7 @@ from ...services import sync_log
 from ...services import bootstrap as bootstrap_svc
 from ...services import selection as selection_svc
 from ...services import fdw_creds
+from ...services import publication as publication_svc
 from ...services.replication import (
     _run_publisher_sql,
     _run_subscriber_sql,
@@ -26,6 +27,16 @@ import os
 import re
 
 router = APIRouter()
+
+
+def _active_publication() -> Optional[str]:
+    """The publication in force — what was chosen here, else what the install proposed.
+
+    PUBLICATION_NAME is written by a script that never looked at the primary,
+    so on a server that already has publications it is a guess. The recorded
+    choice is the answer; this falls back to the guess only until one is made.
+    """
+    return publication_svc.active(settings.publication_name)
 
 
 def _build_publisher_connstr() -> str:
@@ -227,7 +238,7 @@ def get_tables():
     try:
         connstr = _build_publisher_connstr()
         _require_subscriber_settings()
-        pub_name = settings.publication_name
+        pub_name = _active_publication()
         if not pub_name:
             raise HTTPException(status_code=400, detail="Missing PUBLICATION_NAME setting")
         return list_replication_tables(
@@ -264,7 +275,7 @@ def get_info():
             "db": settings.postgres_db,
             "password": settings.postgres_password,
         },
-        "publication_name": settings.publication_name,
+        "publication_name": _active_publication(),
         "subscription_name": settings.subscription_name,
     }
 
@@ -279,7 +290,7 @@ def post_tables(body: TablesRequest):
     """Add tables to the publication."""
     try:
         connstr = _build_publisher_connstr()
-        pub_name = settings.publication_name
+        pub_name = _active_publication()
         if not pub_name:
             raise HTTPException(status_code=400, detail="Missing PUBLICATION_NAME setting")
         if not body.tables:
@@ -327,7 +338,7 @@ def delete_tables(body: TablesRequest):
     """Remove tables from the publication."""
     try:
         connstr = _build_publisher_connstr()
-        pub_name = settings.publication_name
+        pub_name = _active_publication()
         if not pub_name:
             raise HTTPException(status_code=400, detail="Missing PUBLICATION_NAME setting")
         if not body.tables:
@@ -385,11 +396,63 @@ class SelectionBody(BaseModel):
     )
 
 
+class PublicationChoice(BaseModel):
+    name: str
+    # create — a new one, empty, ours to narrow
+    # reuse  — an existing one, read as it stands, never rewritten
+    # adopt  — an existing one, taken over: this install may now rewrite it
+    mode: str = Field(pattern="^(create|reuse|adopt)$")
+
+
+@router.get("/publications")
+def list_publications():
+    """What the primary already carries, and which one this replica speaks for."""
+    try:
+        chosen = publication_svc.load()
+        return {
+            "proposed": settings.publication_name,
+            "active": _active_publication(),
+            "chosen": chosen["chosen"],
+            "ours": chosen["ours"],
+            "publications": publication_svc.list_existing(_build_publisher_connstr()),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list publications: {e}")
+
+
+@router.put("/publication")
+def choose_publication(body: PublicationChoice):
+    """Say which publication this replica speaks for, and whether it may rewrite it.
+
+    Reuse and adopt differ only in that permission, and the difference is the
+    whole reason this endpoint exists: narrowing a publication drops it, and a
+    publication that predates this install may be feeding a replica that has
+    nothing to do with us.
+    """
+    connstr = _build_publisher_connstr()
+    try:
+        if body.mode == "create":
+            return publication_svc.create(connstr, body.name)
+        existing = {p["name"] for p in publication_svc.list_existing(connstr)}
+        if body.name not in existing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"the primary has no publication named {body.name}",
+            )
+        return publication_svc.save(body.name, ours=(body.mode == "adopt"))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to choose publication: {e}")
+
+
 @router.get("/selection")
 def get_selection():
     """The publication as a set of tables, plus which schemas follow future ones."""
     try:
-        return selection_svc.current_selection(_build_publisher_connstr(), settings.publication_name or "")
+        return selection_svc.current_selection(_build_publisher_connstr(), _active_publication() or "")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read selection: {e}")
 
@@ -403,7 +466,7 @@ def put_selection(body: SelectionBody):
     first exclusion always replaces the publication.
     """
     try:
-        pub = settings.publication_name
+        pub = _active_publication()
         if not pub:
             raise HTTPException(status_code=400, detail="Missing PUBLICATION_NAME setting")
         sub = None
@@ -420,6 +483,10 @@ def put_selection(body: SelectionBody):
         )
     except HTTPException:
         raise
+    except PermissionError as e:
+        # Not a failure to apply — a refusal to rewrite someone else's
+        # publication. 409 so the UI can offer the choice instead of an error.
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to apply selection: {e}")
 
@@ -448,7 +515,7 @@ def post_bootstrap(force: bool = False):
         # publication. Whatever the user settled on has already been applied
         # by then; this only covers the case where they changed nothing.
         selection_svc.ensure_publication(
-            _build_publisher_connstr(), settings.publication_name or ""
+            _build_publisher_connstr(), _active_publication() or ""
         )
         return bootstrap_svc.start(force=force)
     except RuntimeError as e:
@@ -476,7 +543,7 @@ def get_trigger_status():
     try:
         connstr = _build_publisher_connstr()
         installed = verify_trigger_installed(connstr)
-        return {"installed": installed, "publication": settings.publication_name}
+        return {"installed": installed, "publication": _active_publication()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to check trigger status: {e}")
 
@@ -486,7 +553,7 @@ def post_trigger_install():
     """Install or update the auto-add event trigger on the publisher."""
     try:
         connstr = _build_publisher_connstr()
-        pub_name = settings.publication_name
+        pub_name = _active_publication()
         if not pub_name:
             raise HTTPException(status_code=400, detail="Missing PUBLICATION_NAME setting")
         result = install_auto_add_trigger(connstr, pub_name)
@@ -796,7 +863,7 @@ def post_fdw_tables(body: FdwTablesRequest):
             new,
             apply_args=_build_fdw_apply_args(),
             publisher_connstr=_build_publisher_connstr(),
-            publication_name=settings.publication_name,
+            publication_name=_active_publication(),
         )
         if result.get("errors"):
             raise HTTPException(status_code=400, detail={"errors": result["errors"]})
@@ -853,7 +920,7 @@ def post_fdw_schemas(body: FdwSchemasRequest):
             body.schemas,
             apply_args=_build_fdw_apply_args(),
             publisher_connstr=_build_publisher_connstr(),
-            publication_name=settings.publication_name,
+            publication_name=_active_publication(),
         )
         if result.get("errors"):
             raise HTTPException(status_code=400, detail={"errors": result["errors"]})
@@ -905,8 +972,8 @@ def post_fdw_regenerate():
         if val_errs:
             raise HTTPException(status_code=400, detail={"errors": val_errs})
         pub_errs = fdw_svc.validate_against_publication(
-            cfg, _build_publisher_connstr(), settings.publication_name or "",
-        ) if settings.publication_name else []
+            cfg, _build_publisher_connstr(), _active_publication() or "",
+        ) if _active_publication() else []
         if pub_errs:
             raise HTTPException(status_code=400, detail={"errors": pub_errs})
 

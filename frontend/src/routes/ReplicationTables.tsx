@@ -587,6 +587,196 @@ function PublicationCoverage({ tables }: { tables: TableInfo[] }) {
     )
 }
 
+type PubRow = { name: string; all_tables: boolean; table_count: number; ours: boolean; active: boolean }
+
+/** Which publication this replica speaks for — asked once, before anything is narrowed.
+ *
+ * The primary may already carry publications that have nothing to do with this
+ * install. Narrowing one means dropping and recreating it, so adopting the
+ * wrong one does not misconfigure this replica; it cuts off whoever was using
+ * that publication. Hence three answers rather than a yes/no: read one as it
+ * stands, take one over, or start a new one. */
+function PublicationChooser({
+    base,
+    rows,
+    proposed,
+    onChosen,
+}: {
+    base: string
+    rows: PubRow[]
+    proposed: string | null
+    onChosen: () => void
+}) {
+    const [mode, setMode] = useState<'reuse' | 'adopt' | 'create'>(rows.length ? 'reuse' : 'create')
+    const [picked, setPicked] = useState<string>(rows[0]?.name || '')
+    const [newName, setNewName] = useState<string>(proposed && !rows.some((r) => r.name === proposed) ? proposed : '')
+    const [busy, setBusy] = useState(false)
+    const [err, setErr] = useState<string | null>(null)
+
+    const submit = async () => {
+        setBusy(true)
+        setErr(null)
+        try {
+            const name = mode === 'create' ? newName.trim() : picked
+            const r = await fetch(`${base}/replication/publication`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, mode }),
+            })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            onChosen()
+        } catch (e: any) {
+            setErr(String(e?.message || e))
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    const Choice = ({
+        value,
+        title,
+        desc,
+        tone,
+        children,
+    }: {
+        value: 'reuse' | 'adopt' | 'create'
+        title: string
+        desc: string
+        tone?: 'warn'
+        children?: React.ReactNode
+    }) => (
+        <label
+            className={cn(
+                'block cursor-pointer rounded-lg border px-3.5 py-3 transition-colors',
+                mode === value ? 'border-primary/60 bg-primary/[0.04]' : 'border-border hover:border-border/80',
+            )}
+        >
+            <span className="flex items-start gap-2.5">
+                <input
+                    type="radio"
+                    className="mt-1"
+                    checked={mode === value}
+                    onChange={() => setMode(value)}
+                />
+                <span className="min-w-0 flex-1">
+                    <span className="block text-[13.5px] font-medium">
+                        {title}
+                        {tone === 'warn' && (
+                            <Badge variant="warning" className="ml-2 text-[10.5px]">
+                                affects other subscribers
+                            </Badge>
+                        )}
+                    </span>
+                    <span className="mt-0.5 block text-[12.5px] leading-relaxed text-muted-foreground">{desc}</span>
+                    {mode === value && children}
+                </span>
+            </span>
+        </label>
+    )
+
+    return (
+        <div className="rounded-xl border border-border bg-card p-5">
+            <h2 className="text-[15px] font-semibold">Which publication should this replica use?</h2>
+            <p className="mt-1 max-w-[68ch] text-[13px] text-muted-foreground">
+                The primary already carries {rows.length} publication{rows.length === 1 ? '' : 's'}. Narrowing one
+                replaces it, so this install will not touch any of them until you say which is yours.
+            </p>
+
+            {rows.length > 0 && (
+                <div className="mt-4 overflow-x-auto">
+                    <table className="w-full text-[12.5px]">
+                        <thead className="text-muted-foreground">
+                            <tr className="border-b border-border/60">
+                                <th className="px-1 py-1.5 text-left font-normal">publication</th>
+                                <th className="px-1 py-1.5 text-right font-normal tabular-nums">tables</th>
+                            </tr>
+                        </thead>
+                        <tbody className="font-mono">
+                            {rows.map((r) => (
+                                <tr key={r.name} className="border-b border-border/30 last:border-0">
+                                    <td className="px-1 py-1.5">{r.name}</td>
+                                    <td className="px-1 py-1.5 text-right tabular-nums">
+                                        {r.all_tables ? 'all' : r.table_count}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+
+            <div className="mt-4 grid gap-2">
+                {rows.length > 0 && (
+                    <>
+                        <Choice
+                            value="reuse"
+                            title="Use one as it stands"
+                            desc="Replicate exactly what it already covers. This install will never rewrite it."
+                        >
+                            <select
+                                className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12.5px]"
+                                value={picked}
+                                onChange={(e) => setPicked(e.target.value)}
+                            >
+                                {rows.map((r) => (
+                                    <option key={r.name} value={r.name}>
+                                        {r.name} — {r.all_tables ? 'all tables' : `${r.table_count} tables`}
+                                    </option>
+                                ))}
+                            </select>
+                        </Choice>
+                        <Choice
+                            value="adopt"
+                            title="Take one over"
+                            tone="warn"
+                            desc="Lets this install change what it covers. If another replica subscribes to it, that replica's coverage changes too."
+                        >
+                            <select
+                                className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12.5px]"
+                                value={picked}
+                                onChange={(e) => setPicked(e.target.value)}
+                            >
+                                {rows.map((r) => (
+                                    <option key={r.name} value={r.name}>
+                                        {r.name} — {r.all_tables ? 'all tables' : `${r.table_count} tables`}
+                                    </option>
+                                ))}
+                            </select>
+                        </Choice>
+                    </>
+                )}
+                <Choice
+                    value="create"
+                    title="Create a new one"
+                    desc="Starts empty and covers only what you pick on the next screen. Leaves every existing publication untouched."
+                >
+                    <Input
+                        className="mt-2 h-8 font-mono text-[12.5px]"
+                        placeholder="snaplicator_publication"
+                        value={newName}
+                        onChange={(e) => setNewName(e.target.value)}
+                    />
+                </Choice>
+            </div>
+
+            {err && <p className="mt-3 text-[12.5px] text-destructive">{err}</p>}
+
+            <div className="mt-4 flex items-center gap-2">
+                <Button
+                    size="sm"
+                    onClick={submit}
+                    disabled={busy || (mode === 'create' ? !newName.trim() : !picked)}
+                >
+                    {busy ? 'Saving…' : 'Continue'}
+                </Button>
+                <span className="text-[12px] text-muted-foreground">
+                    Changeable later in Config.
+                </span>
+            </div>
+        </div>
+    )
+}
+
 function Secret({ value }: { value: string }) {
     const [shown, setShown] = useState(false)
     if (!value) return <span className="text-muted-foreground">—</span>
@@ -635,6 +825,8 @@ export function ReplicationTables() {
     // and confirming, and the two deserve different words.
     const [selection, setSelection] = useState<{ exists: boolean; all_tables: boolean; count: number; available: number } | null>(null)
 
+    const [pubs, setPubs] = useState<{ chosen: boolean; proposed: string | null; publications: PubRow[] } | null>(null)
+
     const [actionLoading, setActionLoading] = useState(false)
     const [confirmOpen, setConfirmOpen] = useState(false)
     const [refreshLoading, setRefreshLoading] = useState(false)
@@ -670,6 +862,13 @@ export function ReplicationTables() {
         fetch(`${base}/replication/info`)
             .then((r) => (r.ok ? r.json() : null))
             .then((data) => { if (data) setInfo(data) })
+            .catch(() => {})
+    }
+
+    const loadPublications = () => {
+        fetch(`${base}/replication/publications`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d) setPubs(d) })
             .catch(() => {})
     }
 
@@ -715,6 +914,7 @@ export function ReplicationTables() {
         loadInfo()
         loadFdw()
         loadSelection()
+        loadPublications()
         loadSyncLog()
         const id = setInterval(loadSyncLog, 15000)
         return () => clearInterval(id)
@@ -967,6 +1167,24 @@ export function ReplicationTables() {
                     </Button>
                 </div>
             </div>
+
+            {/* Asked before anything else on this page, and only when there is
+                something to get wrong: publications already on the primary
+                that this install did not create. Answering it is what gives
+                the rest of the page permission to narrow anything. */}
+            {pubs && !pubs.chosen && pubs.publications.length > 0 && (
+                <PublicationChooser
+                    base={base}
+                    rows={pubs.publications}
+                    proposed={pubs.proposed}
+                    onChosen={() => {
+                        loadPublications()
+                        loadSelection()
+                        loadTables()
+                        loadInfo()
+                    }}
+                />
+            )}
 
             {/* Before the first copy this page is the whole install: the
                 choice is made here, and the button that acts on it belongs

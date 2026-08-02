@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from . import policy
+from . import policy, publication
 from .replication import (
     _run_publisher_sql,
     _run_subscriber_sql,
@@ -74,6 +74,9 @@ def ensure_publication(publisher_connstr: str, publication_name: str) -> Dict:
         publisher_connstr,
         f"CREATE PUBLICATION {_quote_ident(publication_name)} FOR ALL TABLES;",
     )
+    # Recorded as ours because nothing carried this name a moment ago. The
+    # record is what later lets apply_selection narrow it without asking again.
+    publication.save(publication_name, ours=True)
     return {"created": True}
 
 
@@ -187,6 +190,24 @@ def apply_selection(
             body = ""
         else:
             body = ", ".join(parts) if len(parts) > 1 else parts[0]
+
+    # A publication that already exists and was not created here belongs to
+    # someone else until a person says otherwise. Narrowing it is a DROP, so
+    # the cost of guessing wrong is not a misconfigured replica — it is another
+    # team's replica losing its publication mid-stream.
+    if not publication.may_rewrite(publication_name):
+        existing = _run_publisher_sql(
+            publisher_connstr,
+            f"SELECT 1 FROM pg_publication WHERE pubname = {_quote_literal(publication_name)};",
+        ).strip()
+        if existing:
+            raise PermissionError(
+                f"the publication {publication_name} already exists on the primary and "
+                "was not created here. Choose it explicitly to take it over, or create "
+                "a new one to narrow instead."
+            )
+        # Ours from here: nothing had this name before this call.
+        publication.save(publication_name, ours=True)
 
     pub = _quote_ident(publication_name)
     # DROP then CREATE, in one statement to the server, because there is no
