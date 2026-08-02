@@ -43,10 +43,50 @@ Snaplicator uses two complementary paths to keep the replica current, with the F
 
 | Path | Source of truth | What it covers | Auto-sync |
 |------|-----------------|----------------|-----------|
-| Native logical replication | `CREATE PUBLICATION` on the primary | All tables in the publication (DML + selected DDL) | new tables (event trigger on publisher), added columns, CHECK constraints, schema moves |
+| Native logical replication | `CREATE PUBLICATION` on the primary | All tables in the publication (DML + selected DDL) | in-stream DDL replication (see below); diff reconcilers (added columns, CHECK constraints, schema moves) remain as a backstop |
 | `postgres_fdw` foreign tables | `configs/fdw.yaml` | Tables that can't go through the publication (e.g. no PRIMARY KEY, or read-only-by-FDW by design) | remote column drift (added / removed / type-changed) re-imports automatically |
 
 Reflected changes — and any loop errors — are appended to `~/.snaplicator/sync_events.jsonl` (also exposed at `GET /replication/sync-log` and surfaced in the "Auto-Sync Activity" panel of the UI).
+
+### DDL replication
+
+Native logical replication does **not** replicate DDL ([documented restriction](https://www.postgresql.org/docs/current/logical-replication-restrictions.html)): when the publisher's schema changes, incoming rows stop fitting the subscriber's schema and the apply worker crash-loops until someone fixes it by hand. Snaplicator closes this gap with a capture-and-replay pipeline that rides the replication stream itself:
+
+```
+publisher                                  subscriber
+─────────                                  ──────────
+event triggers (ddl_command_end, sql_drop)
+  → INSERT into _snaplicator_ddl_log       _snaplicator_ddl_log (replicated copy)
+    (same transaction as the DDL,            → ENABLE ALWAYS trigger fires on the
+     log table is IN the publication)          arriving row and EXECUTEs ddl_text
+                                               at its exact position in the stream
+```
+
+Because the log row commits in the same transaction as the DDL, it arrives **in commit order between the surrounding DML** — the subscriber applies `ALTER TABLE` at exactly the point the publisher did. No LSN bookkeeping, no polling, no ordering heuristics.
+
+Safety properties (all covered by tests in `backend/tests/`):
+
+- **Capture guards** — `_snaplicator_*` objects are never captured (recursion), DCL and publication/subscription DDL are filtered (publisher-only concepts), one log row per `(txid, query)` (dedupe).
+- **Watermark** — the subscriber skips log rows with `id <=` the install-time watermark, so initial `COPY`, clone artifacts, and re-subscriptions never re-execute history.
+- **Failures are loud, never fatal, never retried** — a DDL that cannot apply (e.g. subscriber-local drift) is recorded in `_snaplicator_ddl_failures` (with `search_path` for manual replay) and the stream keeps flowing; the apply trigger never re-raises, because a re-raise would crash-loop the apply worker. Resolution is a human decision.
+- **`CONCURRENTLY` is deferred** — `CREATE INDEX CONCURRENTLY` cannot run inside the apply transaction, so it is queued in `_snaplicator_ddl_deferred` for one-shot out-of-band execution.
+
+Known limitations (shared with every replay-based approach, including the [withdrawn core patch](https://commitfest.postgresql.org/patch/3595/)):
+
+- **Volatile statements diverge** — DDL whose effect depends on volatile functions replays with per-node results: `ADD COLUMN ... DEFAULT now()/gen_random_uuid()/nextval()` backfills existing rows with different values on each node, and `CREATE TABLE AS SELECT` materializes different contents. Accepted for a test-data replica; rows later UPDATEd on the publisher self-heal (logical replication re-sends whole-row images). The correction for a table that matters is a **manual table resync**: remove it from the publication, `TRUNCATE` it on the subscriber, re-add it, then `ALTER SUBSCRIPTION ... REFRESH PUBLICATION` — tablesync re-copies the publisher's data wholesale. Automated detection (volatile-pattern scan of the DDL log → checksum confirmation → resync recommendation in the sync log) is tracked in [#17](https://github.com/bhpark1013/Snaplicator/issues/17).
+- DDL hidden inside function calls replays the outer statement (`SELECT migrate()` requires the function to exist and behave on the subscriber); plain/Alembic-style migrations and `DO` blocks replay correctly.
+- `command_tag` for `CREATE EXTENSION` records the first inner command of the extension script (`ddl_text` is intact and replays correctly).
+
+Context: PostgreSQL core has tried to ship this (commitfest [#3595](https://commitfest.postgresql.org/patch/3595/), 2022–2024, withdrawn; a narrower "take2" is in progress), and [pgl_ddl_deploy](https://github.com/enova/pgl_ddl_deploy) implements the same event-trigger + queue pattern as an extension. Managed services (Aurora/RDS) don't allow that extension, which is why Snaplicator implements the pattern in plain SQL managed by the backend.
+
+**Status**: fully wired. Capture triggers install at startup and self-heal in the 30s loop (replacing the legacy auto-add trigger). The subscriber-side switch is `DDL_APPLY_ENABLED=true` in `configs/.env` — flipping it connects the stream idempotently (apply infra + watermark seed + log table into the publication + `REFRESH`); it defaults to off, so a deploy alone starts *capture only* and never changes replication behaviour. Deferred `CONCURRENTLY` statements are executed once, out of band, by the loop; new apply failures surface in the sync log (and Slack, if configured). To try it interactively, spin up the smoke environment:
+
+```bash
+cd backend
+.venv/bin/python scripts/ddl_smoke.py setup      # publisher :55440 / subscriber :55441
+.venv/bin/python scripts/ddl_smoke.py status
+.venv/bin/python scripts/ddl_smoke.py teardown
+```
 
 ---
 
@@ -68,7 +108,7 @@ Create the publication on the primary instance:
 CREATE PUBLICATION snaplicator_pub FOR TABLES IN SCHEMA public;
 ```
 
-The backend installs an event trigger on the publisher at startup that auto-adds new `public.*` tables to this publication (see `GET /replication/trigger-status`). New tables therefore start replicating without manual `ALTER PUBLICATION`.
+The backend installs DDL capture event triggers on the publisher at startup (see `GET /replication/trigger-status`). Besides feeding the DDL log, they auto-add new tables to the publication — scoped to schemas the publication already covers — so new tables start replicating without manual `ALTER PUBLICATION`.
 
 ### 3. (Optional) Configure `postgres_fdw` targets
 For tables that should be exposed as foreign tables instead of logically replicated, edit `configs/fdw.yaml`:
@@ -161,7 +201,7 @@ To clone directly from the main replica, open the frontend and use "Clone from M
 - Replica initialization log: `replica-init.log`
 - Clone container failures: `docker logs <container>`
 - Auto-sync history / errors: `cat ~/.snaplicator/sync_events.jsonl` or `GET /replication/sync-log`
-- Auto-add event trigger missing on publisher: hit `POST /replication/trigger-install` (also reinstalled automatically by the 30s loop if it goes missing)
+- DDL capture triggers missing on publisher: hit `POST /replication/trigger-install` (also reinstalled automatically by the 30s loop if they go missing)
 - FDW table looks stale: confirm the table is listed in `configs/fdw.yaml`; the drift detector only reconciles configured targets. Schema-level entries pick up new tables on the next re-import.
 - Running out of btrfs space: delete old subvolumes under `MAIN_DATA_DIR` with `sudo btrfs subvolume delete ...`
 - macOS reminder: keep actual data on the Linux VM's btrfs mount; Docker Desktop alone cannot host btrfs snapshots.

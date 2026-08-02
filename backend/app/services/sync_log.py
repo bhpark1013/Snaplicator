@@ -30,8 +30,14 @@ def _path() -> Path:
     return Path.home() / ".snaplicator" / "sync_events.jsonl"
 
 
-def record(kind: str, detail: dict) -> None:
-    """Append one event. Best-effort: observability must never break the loop."""
+def record(kind: str, detail: dict, dedupe: bool = True) -> None:
+    """Append one event. Best-effort: observability must never break the loop.
+
+    dedupe=True drops an event whose detail is byte-identical to the last
+    recorded event of the same kind — right for churny reconciler results,
+    wrong for alerts: an identical outage next week must still page. Alert
+    paths that do their own once-per-transition gating pass dedupe=False.
+    """
     try:
         ev = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -58,7 +64,7 @@ def record(kind: str, detail: dict) -> None:
                     except Exception:
                         continue
                 _LAST_INIT["done"] = True
-            if _LAST_BY_KIND.get(kind) == sig:
+            if dedupe and _LAST_BY_KIND.get(kind) == sig:
                 return
             _LAST_BY_KIND[kind] = sig
             existing.append(line)
@@ -67,6 +73,9 @@ def record(kind: str, detail: dict) -> None:
             tmp = p.with_suffix(p.suffix + ".tmp")
             tmp.write_text("\n".join(existing) + "\n", encoding="utf-8")
             os.replace(tmp, p)
+        # Outside the lock: network I/O must not serialize log writers.
+        from . import notify
+        notify.notify_event(kind, detail)
     except Exception:
         pass
 

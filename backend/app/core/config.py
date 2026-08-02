@@ -38,6 +38,11 @@ class Settings(BaseSettings):
 	publication_name: Optional[str] = None
 	subscription_name: Optional[str] = None
 	ddl_sync_interval: Optional[int] = 30  # seconds, 0 to disable
+	# In-stream DDL apply switch (subscriber side). Capture always runs; this
+	# flag connects the stream (apply infra + watermark seed + log table into
+	# the publication + REFRESH). Off by default so a deploy alone never
+	# changes replication behaviour.
+	ddl_apply_enabled: bool = False
 	replication_schemas: Optional[str] = None  # comma-separated schemas to monitor, e.g. "public,deprecated,etl"
 
 	# FDW (postgres_fdw) — credentials and (optionally) a different connection target

@@ -26,8 +26,7 @@ from . import policy, publication
 from .replication import (
     _run_publisher_sql,
     _run_subscriber_sql,
-    install_auto_add_trigger,
-    uninstall_auto_add_trigger,
+    install_capture_triggers,
 )
 
 
@@ -221,24 +220,24 @@ def apply_selection(
     sql += ";"
     _run_publisher_sql(publisher_connstr, sql)
 
-    # Schemas that were asked to follow new tables but could not be given
-    # schema-level membership — because something in them is excluded — are
-    # exactly the ones an event trigger has to cover. Where the publication
-    # itself follows the schema, the trigger would only get in the way.
+    # The wish is still recorded, because the publication cannot express it
+    # and the UI has to show what was asked for rather than infer it.
+    #
+    # What carries it out is no longer a trigger of this module's own: DDL
+    # capture folded auto-add in, and derives its scope from the publication's
+    # own membership instead of a stored list. So a schema that keeps every
+    # table follows new ones through schema-level membership, and one that
+    # does not follows them through capture — the same two mechanisms as
+    # before, minus a third trigger that had to be kept in step with both.
     wanted_auto = set(auto_schemas)
     trigger_schemas = sorted(wanted_auto - set(whole_schemas))
     excluded = sorted(available_set - wanted)
     policy.save(sorted(wanted_auto), excluded)
     try:
-        if form == "all" or not trigger_schemas:
-            uninstall_auto_add_trigger(publisher_connstr)
-        else:
-            install_auto_add_trigger(
-                publisher_connstr, publication_name, trigger_schemas, excluded
-            )
+        install_capture_triggers(publisher_connstr, publication_name)
     except Exception:
-        # The publication is already what was asked for; the trigger is the
-        # part that keeps it that way tomorrow, and the loop reinstates it.
+        # The publication is already what was asked for; capture is the part
+        # that keeps it that way tomorrow, and the loop reinstates it.
         pass
 
     refreshed = False
