@@ -31,7 +31,7 @@ from typing import Optional
 
 from ..core.config import settings
 from . import publication as publication_svc
-from .replication import _run_subscriber_sql
+from .replication import _run_subscriber_sql, get_publisher_max_ddl_log_id
 
 APP_DIR = Path("/app")
 SCRIPT = Path("scripts/run-replica-postgres.sh")
@@ -55,6 +55,28 @@ def _pid_path() -> Path:
 
 def _exit_path() -> Path:
     return _state_dir() / "bootstrap.exit"
+
+
+def _clone_watermark_path() -> Path:
+    """Where the log stands when the replica's schema is taken from it.
+
+    The DDL stream is connected later, by the sync loop, and whatever seeds
+    the watermark decides which captured DDL counts as history. Seeding it at
+    connect time draws that line in the wrong place: the replica's schema is
+    the primary's as of the dump, so a DDL between the dump and the connect
+    is absent from the schema AND below the watermark — unreachable by
+    either route, and the first write to that table then stops the apply
+    worker on a column the replica has no room for.
+
+    So the line is drawn here, where the dump happens, and carried on disk to
+    whoever connects the stream.
+    """
+    return _state_dir() / "ddl_clone_watermark"
+
+
+def clone_watermark() -> Optional[int]:
+    """The log id the replica's schema was taken at, if a bootstrap set one."""
+    return _read_int(_clone_watermark_path())
 
 
 def _started_path() -> Path:
@@ -154,7 +176,7 @@ def status(tail: int = 40) -> dict:
     }
 
 
-def start(force: bool = False) -> dict:
+def start(force: bool = False, publisher_connstr: Optional[str] = None) -> dict:
     """Launch the bootstrap. Raises RuntimeError when it would be a no-op."""
     if _running_pid():
         raise RuntimeError("a bootstrap is already running")
@@ -164,6 +186,17 @@ def start(force: bool = False) -> dict:
     script = APP_DIR / SCRIPT
     if not script.exists():
         raise RuntimeError(f"bootstrap script not found at {script}")
+
+    # Read before the script runs, because the first thing it does is clone
+    # the schema. A best-effort read: a primary with no log table yet has no
+    # history to skip, and 0 is the right answer for that.
+    if publisher_connstr:
+        try:
+            _clone_watermark_path().write_text(
+                str(get_publisher_max_ddl_log_id(publisher_connstr))
+            )
+        except Exception:
+            _clone_watermark_path().write_text("0")
 
     log = _log_path()
     _exit_path().unlink(missing_ok=True)

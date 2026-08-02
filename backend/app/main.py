@@ -14,10 +14,12 @@ from .api.routes.notifications import router as notifications_router
 from .services import fdw as fdw_svc
 from .services import fdw_creds
 from .services import sync_log
+from .services import bootstrap as bootstrap_svc
 from .services import policy as policy_svc
 from .services import publication as publication_svc
 from .services.replication import (
     auto_sync_new_tables,
+    compare_published_schemas,
     install_capture_triggers,
     verify_capture_installed,
     enable_ddl_apply,
@@ -42,6 +44,10 @@ _ddl_apply_seen = {"failures": None}
 # alert on the ok→broken transition (one event per outage, not one per cycle);
 # counters alert on any increase. Empty until the first successful check.
 _sub_health_seen: dict = {}
+
+# Last reported schema difference, so a standing drift is said once rather
+# than every 30 seconds.
+_schema_drift_seen: dict = {}
 
 
 def _build_publisher_connstr() -> str | None:
@@ -178,8 +184,9 @@ async def ddl_sync_loop():
                         res = await asyncio.to_thread(
                             enable_ddl_apply,
                             connstr, pub_name, container, user, password, db, sub_name,
+                            bootstrap_svc.clone_watermark(),
                         )
-                        if res.get("added") or res.get("refreshed"):
+                        if res.get("created") or res.get("added") or res.get("refreshed"):
                             logger.info(f"DDL apply enabled: {res}")
                             sync_log.record("ddl_apply_enabled", res)
 
@@ -211,6 +218,44 @@ async def ddl_sync_loop():
                                 sync_log.record("ddl_deferred", dres)
                     except Exception as e:
                         logger.warning(f"DDL apply sync failed: {e}")
+
+                # ── Schema drift watch ──
+                # DDL replication holds the two schemas together from the
+                # moment it is connected. Nothing held them together before
+                # that, and the evidence of what was missed is below the
+                # watermark — so the only way to know is to look.
+                try:
+                    drift = await asyncio.to_thread(
+                        compare_published_schemas,
+                        connstr, pub_name, container, user, password, db,
+                    )
+                    fingerprint = (
+                        tuple(drift["missing_tables"]),
+                        tuple(drift["missing_columns"]),
+                    )
+                    if fingerprint != _schema_drift_seen.get("fingerprint"):
+                        _schema_drift_seen["fingerprint"] = fingerprint
+                        if drift["breaks_replication"]:
+                            sync_log.record("schema_drift", {
+                                # key must contain "error" to reach Slack
+                                "error": (
+                                    f"the replica is missing "
+                                    f"{len(drift['missing_tables'])} table(s) and "
+                                    f"{len(drift['missing_columns'])} column(s) the "
+                                    "primary publishes — writes to those tables will "
+                                    "stop the apply worker"
+                                ),
+                                "missing_tables": drift["missing_tables"][:10],
+                                "missing_columns": drift["missing_columns"][:10],
+                            })
+                            logger.warning(f"Schema drift: {fingerprint}")
+                        elif _schema_drift_seen.get("reported"):
+                            sync_log.record("schema_drift_cleared", {
+                                "tables_compared": drift["tables_compared"],
+                            })
+                        _schema_drift_seen["reported"] = drift["breaks_replication"]
+                except Exception as e:
+                    logger.warning(f"Schema drift check failed: {e}")
 
             # ── FDW remote column-drift auto-sync ──
             # Independent of the publication gate above: FDW can be in use

@@ -21,6 +21,7 @@ from ...services.replication import (
     sync_table_schemas_to_subscriber,
     install_capture_triggers,
     verify_capture_installed,
+    compare_published_schemas,
 )
 from pathlib import Path
 import os
@@ -517,7 +518,9 @@ def post_bootstrap(force: bool = False):
         selection_svc.ensure_publication(
             _build_publisher_connstr(), _active_publication() or ""
         )
-        return bootstrap_svc.start(force=force)
+        return bootstrap_svc.start(
+            force=force, publisher_connstr=_build_publisher_connstr()
+        )
     except RuntimeError as e:
         # Already running, or already subscribed: the caller asked for
         # something that has happened, which is a conflict rather than a fault.
@@ -535,6 +538,27 @@ def delete_bootstrap():
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to cancel bootstrap: {e}")
+
+
+@router.get("/schema-drift")
+def get_schema_drift():
+    """Where the replica's shape no longer matches what the primary publishes.
+
+    Read-only, and deliberately so: by the time a difference is detectable
+    the DDL that would close it is gone, and inventing one is how a
+    diagnostic becomes an outage.
+    """
+    try:
+        return compare_published_schemas(
+            _build_publisher_connstr(),
+            _active_publication() or "",
+            settings.container_name,
+            settings.postgres_user,
+            settings.postgres_password,
+            settings.postgres_db,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compare schemas: {e}")
 
 
 @router.get("/trigger-status")

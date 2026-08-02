@@ -1314,18 +1314,26 @@ def enable_ddl_apply(
     subscriber_password: str | None,
     subscriber_db: str,
     subscription_name: str,
+    watermark: Optional[int] = None,
 ) -> Dict:
-    """Connect the DDL stream, idempotently. Order matters: the watermark is
-    seeded from the publisher's current max(id) BEFORE the log table joins
-    its publication, so history arriving via the initial COPY is never
-    executed. The subscription is only rewritten when it is not yet reading
+    """Connect the DDL stream, idempotently.
+
+    `watermark` is the log id the replica's schema was taken at. The
+    bootstrap knows it, because it is the one that took the schema; passing
+    it is what makes the DDL between that moment and this one replay instead
+    of counting as history. Without it the line falls here, which skips
+    exactly the DDL the replica is missing.
+
+    Falling back to the publisher's current max(id) is right only when there
+    is no replica schema to be out of step with — a first install, before any
+    bootstrap has run. The subscription is only rewritten when it is not yet reading
     the log publication, so steady-state calls are read-only no-ops.
 
     `publication_name` is the data publication. It is not modified here — the
     log has one of its own — and is passed only so the subscription keeps
     naming it alongside.
     """
-    wm = get_publisher_max_ddl_log_id(publisher_connstr)
+    wm = watermark if watermark is not None else get_publisher_max_ddl_log_id(publisher_connstr)
     install_ddl_apply(
         subscriber_container, subscriber_user, subscriber_password,
         subscriber_db, initial_watermark=wm,
@@ -1354,6 +1362,81 @@ def enable_ddl_apply(
         f"ALTER SUBSCRIPTION {subscription_name} SET PUBLICATION {joined};",
     )
     return {"watermark": wm, "refreshed": True, **added}
+
+
+def compare_published_schemas(
+    publisher_connstr: str,
+    publication_name: str,
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> Dict:
+    """Where the replica's shape no longer matches the primary's.
+
+    DDL replication keeps the two in step from the moment it is connected;
+    nothing keeps them in step for the stretch before that. A replica whose
+    DDL apply was off, or that was bootstrapped while a migration ran, comes
+    out the far side missing a column with no record of it anywhere — and
+    the log rows that would have said so are below the watermark, which is
+    what makes it silent rather than merely broken.
+
+    A column the primary has and the replica does not is the one that stops
+    replication: the publisher sends it and the apply worker has nowhere to
+    put it. The others are reported because a drifted replica is worth
+    knowing about even when it still runs.
+
+    Read-only. Nothing here repairs anything: the DDL that would fix a
+    difference is unknown by the time it is detectable, and guessing it is
+    how a diagnostic turns into an outage.
+    """
+    published = _run_publisher_sql(
+        publisher_connstr,
+        "SELECT c.table_schema || '.' || c.table_name || '.' || c.column_name "
+        "FROM information_schema.columns c "
+        "JOIN pg_publication_tables t ON t.schemaname = c.table_schema "
+        "                            AND t.tablename = c.table_name "
+        f"WHERE t.pubname = '{publication_name}' "
+        f"AND c.table_name <> '{CAPTURE_LOG_TABLE}';",
+    )
+    primary = {l.strip() for l in published.splitlines() if l.strip()}
+
+    local = _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+        "SELECT table_schema || '.' || table_name || '.' || column_name "
+        "FROM information_schema.columns "
+        "WHERE table_schema NOT IN ('pg_catalog', 'information_schema');",
+    )
+    replica = {l.strip() for l in local.splitlines() if l.strip()}
+
+    def table_of(col: str) -> str:
+        return col.rsplit(".", 1)[0]
+
+    primary_tables = {table_of(c) for c in primary}
+    replica_tables = {table_of(c) for c in replica}
+
+    missing_tables = sorted(primary_tables - replica_tables)
+    # Columns are only comparable where both sides have the table; listing
+    # every column of a missing table as a missing column would bury the
+    # difference that matters under one line per column.
+    comparable = primary_tables & replica_tables
+    missing_columns = sorted(
+        c for c in primary - replica if table_of(c) in comparable
+    )
+    extra_columns = sorted(
+        c for c in replica - primary if table_of(c) in comparable
+    )
+
+    return {
+        "publication": publication_name,
+        "tables_compared": len(comparable),
+        "missing_tables": missing_tables,
+        "missing_columns": missing_columns,
+        "extra_columns": extra_columns,
+        # Only the first two stop replication. Extra columns on the replica
+        # are ignored by the apply worker.
+        "breaks_replication": bool(missing_tables or missing_columns),
+    }
 
 
 def run_deferred_ddl(
