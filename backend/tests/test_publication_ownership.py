@@ -173,3 +173,26 @@ def test_a_policy_file_from_before_the_default_keeps_its_old_meaning(tmp_path, m
     follow, _excluded, unfollow = policy_svc.capture_scope("mine")
     assert follow is None
     assert unfollow == ["etl"]
+
+
+def test_the_chooser_is_not_offered_our_own_ddl_publication(conn):
+    """The screen asks which publication belongs to someone else.
+
+    Snaplicator's DDL-log publication belongs to Snaplicator, and it covers
+    exactly one table — the log. Listing it invites the reader to arbitrate
+    between us and us, and picking it would point the replica at the outbox
+    instead of at any data.
+    """
+    from app.services import publication as publication_svc
+
+    ensure_ddl_publication(conn)
+    assert CAPTURE_LOG_PUBLICATION in publications(), "it is on the primary"
+
+    offered = {p["name"] for p in publication_svc.list_existing(conn)}
+    assert CAPTURE_LOG_PUBLICATION not in offered
+    assert PUBLICATION in offered, "and the real ones are still offered"
+
+    # Still reachable for anything that has to reason about every publication
+    # on the server rather than about what to put in front of a person.
+    everything = {p["name"] for p in publication_svc.list_existing(conn, include_internal=True)}
+    assert CAPTURE_LOG_PUBLICATION in everything

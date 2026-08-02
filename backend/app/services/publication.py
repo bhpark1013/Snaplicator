@@ -81,8 +81,16 @@ def may_rewrite(name: str) -> bool:
     return bool(chosen["ours"])
 
 
-def list_existing(publisher_connstr: str) -> List[Dict]:
-    """Publications on the primary, with how much each covers."""
+def list_existing(publisher_connstr: str, include_internal: bool = False) -> List[Dict]:
+    """Publications on the primary, with how much each covers.
+
+    Snaplicator's own DDL-log publication is left out. This list exists to ask
+    which publication belongs to someone else; offering the one this install
+    created for its own plumbing asks the reader to arbitrate between us and
+    us, and picking it would point the replica at a single log table.
+    """
+    from .replication import CAPTURE_LOG_PUBLICATION
+
     out = _run_publisher_sql(
         publisher_connstr,
         "SELECT p.pubname, p.puballtables, "
@@ -99,6 +107,8 @@ def list_existing(publisher_connstr: str) -> List[Dict]:
         if len(parts) < 3:
             continue
         name = parts[0]
+        if name == CAPTURE_LOG_PUBLICATION and not include_internal:
+            continue
         rows.append({
             "name": name,
             "all_tables": parts[1] == "t",

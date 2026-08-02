@@ -589,6 +589,63 @@ function PublicationCoverage({ tables }: { tables: TableInfo[] }) {
 
 type PubRow = { name: string; all_tables: boolean; table_count: number; ours: boolean; active: boolean }
 
+type PubMode = 'reuse' | 'adopt' | 'create'
+
+/** One of the three answers, with whatever it needs asked underneath it.
+ *
+ * Declared here rather than inside the chooser because a component defined in
+ * another component's body is a new type on every render, and React replaces
+ * a subtree whose type changed rather than updating it. The text field below
+ * would be torn down and rebuilt on each keystroke, losing focus after one
+ * character — a name field that cannot be typed into.
+ *
+ * The label covers the radio and its text and stops there. A click anywhere
+ * in a label is forwarded to its control, so a field inside one would hand
+ * its clicks to the radio instead of taking the caret. */
+function ChoiceCard({
+    value,
+    mode,
+    setMode,
+    title,
+    desc,
+    tone,
+    children,
+}: {
+    value: PubMode
+    mode: PubMode
+    setMode: (m: PubMode) => void
+    title: string
+    desc: string
+    tone?: 'warn'
+    children?: React.ReactNode
+}) {
+    const selected = mode === value
+    return (
+        <div
+            className={cn(
+                'rounded-lg border px-3.5 py-3 transition-colors',
+                selected ? 'border-primary/60 bg-primary/[0.04]' : 'border-border hover:border-border/80',
+            )}
+        >
+            <label className="flex cursor-pointer items-start gap-2.5">
+                <input type="radio" className="mt-1" checked={selected} onChange={() => setMode(value)} />
+                <span className="min-w-0 flex-1">
+                    <span className="block text-[13.5px] font-medium">
+                        {title}
+                        {tone === 'warn' && (
+                            <Badge variant="warning" className="ml-2 text-[10.5px]">
+                                affects other subscribers
+                            </Badge>
+                        )}
+                    </span>
+                    <span className="mt-0.5 block text-[12.5px] leading-relaxed text-muted-foreground">{desc}</span>
+                </span>
+            </label>
+            {selected && children && <div className="pl-[26px]">{children}</div>}
+        </div>
+    )
+}
+
 /** Which publication this replica speaks for — asked once, before anything is narrowed.
  *
  * The primary may already carry publications that have nothing to do with this
@@ -607,7 +664,7 @@ function PublicationChooser({
     proposed: string | null
     onChosen: () => void
 }) {
-    const [mode, setMode] = useState<'reuse' | 'adopt' | 'create'>(rows.length ? 'reuse' : 'create')
+    const [mode, setMode] = useState<PubMode>(rows.length ? 'reuse' : 'create')
     const [picked, setPicked] = useState<string>(rows[0]?.name || '')
     const [newName, setNewName] = useState<string>(proposed && !rows.some((r) => r.name === proposed) ? proposed : '')
     const [busy, setBusy] = useState(false)
@@ -631,48 +688,6 @@ function PublicationChooser({
             setBusy(false)
         }
     }
-
-    const Choice = ({
-        value,
-        title,
-        desc,
-        tone,
-        children,
-    }: {
-        value: 'reuse' | 'adopt' | 'create'
-        title: string
-        desc: string
-        tone?: 'warn'
-        children?: React.ReactNode
-    }) => (
-        <label
-            className={cn(
-                'block cursor-pointer rounded-lg border px-3.5 py-3 transition-colors',
-                mode === value ? 'border-primary/60 bg-primary/[0.04]' : 'border-border hover:border-border/80',
-            )}
-        >
-            <span className="flex items-start gap-2.5">
-                <input
-                    type="radio"
-                    className="mt-1"
-                    checked={mode === value}
-                    onChange={() => setMode(value)}
-                />
-                <span className="min-w-0 flex-1">
-                    <span className="block text-[13.5px] font-medium">
-                        {title}
-                        {tone === 'warn' && (
-                            <Badge variant="warning" className="ml-2 text-[10.5px]">
-                                affects other subscribers
-                            </Badge>
-                        )}
-                    </span>
-                    <span className="mt-0.5 block text-[12.5px] leading-relaxed text-muted-foreground">{desc}</span>
-                    {mode === value && children}
-                </span>
-            </span>
-        </label>
-    )
 
     return (
         <div className="rounded-xl border border-border bg-card p-5">
@@ -708,8 +723,10 @@ function PublicationChooser({
             <div className="mt-4 grid gap-2">
                 {rows.length > 0 && (
                     <>
-                        <Choice
+                        <ChoiceCard
                             value="reuse"
+                            mode={mode}
+                            setMode={setMode}
                             title="Use one as it stands"
                             desc="Replicate exactly what it already covers. This install will never rewrite it."
                         >
@@ -724,9 +741,11 @@ function PublicationChooser({
                                     </option>
                                 ))}
                             </select>
-                        </Choice>
-                        <Choice
+                        </ChoiceCard>
+                        <ChoiceCard
                             value="adopt"
+                            mode={mode}
+                            setMode={setMode}
                             title="Take one over"
                             tone="warn"
                             desc="Lets this install change what it covers. If another replica subscribes to it, that replica's coverage changes too."
@@ -742,11 +761,13 @@ function PublicationChooser({
                                     </option>
                                 ))}
                             </select>
-                        </Choice>
+                        </ChoiceCard>
                     </>
                 )}
-                <Choice
+                <ChoiceCard
                     value="create"
+                    mode={mode}
+                    setMode={setMode}
                     title="Create a new one"
                     desc="Starts empty and covers only what you pick on the next screen. Leaves every existing publication untouched."
                 >
@@ -756,7 +777,7 @@ function PublicationChooser({
                         value={newName}
                         onChange={(e) => setNewName(e.target.value)}
                     />
-                </Choice>
+                </ChoiceCard>
             </div>
 
             {err && <p className="mt-3 text-[12.5px] text-destructive">{err}</p>}
@@ -829,6 +850,8 @@ export function ReplicationTables() {
     const [selection, setSelection] = useState<{ exists: boolean; all_tables: boolean; count: number; available: number } | null>(null)
 
     const [pubs, setPubs] = useState<{ chosen: boolean; proposed: string | null; publications: PubRow[] } | null>(null)
+    // null until known, so the question never flashes on a settled install.
+    const [bootstrapped, setBootstrapped] = useState<boolean | null>(null)
 
     const [actionLoading, setActionLoading] = useState(false)
     const [confirmOpen, setConfirmOpen] = useState(false)
@@ -913,12 +936,24 @@ export function ReplicationTables() {
             .catch(() => {})
     }
 
+    // Whether the first copy has run. The publication question belongs to the
+    // install and to nothing after it: once tables have been copied, changing
+    // which publication the replica speaks for is not a setting to offer in
+    // passing — it is a re-bootstrap.
+    const loadBootstrap = () => {
+        fetch(`${base}/replication/bootstrap`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d) setBootstrapped(d.state === 'done') })
+            .catch(() => {})
+    }
+
     useEffect(() => {
         loadTables()
         loadInfo()
         loadFdw()
         loadSelection()
         loadPublications()
+        loadBootstrap()
         loadSyncLog()
         const id = setInterval(loadSyncLog, 15000)
         return () => clearInterval(id)
@@ -1191,8 +1226,12 @@ export function ReplicationTables() {
             {/* Asked before anything else on this page, and only when there is
                 something to get wrong: publications already on the primary
                 that this install did not create. Answering it is what gives
-                the rest of the page permission to narrow anything. */}
-            {pubs && !pubs.chosen && pubs.publications.length > 0 && (
+                the rest of the page permission to narrow anything.
+
+                And only before the first copy. After it the replica is already
+                reading from a publication, so the question is no longer which
+                one to adopt — it is whether to throw away what was copied. */}
+            {pubs && !pubs.chosen && pubs.publications.length > 0 && bootstrapped === false && (
                 <PublicationChooser
                     base={base}
                     rows={pubs.publications}
@@ -1210,7 +1249,7 @@ export function ReplicationTables() {
                 choice is made here, and the button that acts on it belongs
                 next to the choice rather than a page away. */}
             <BootstrapGate
-                onDone={loadTables}
+                onDone={() => { loadTables(); loadBootstrap() }}
                 title={selection?.exists ? 'A publication already exists — start from it?' : undefined}
                 onBeforeStart={commitThenStart}
                 startLabel={
