@@ -308,14 +308,11 @@ export function BootstrapGate({
                         <Database className="h-4 w-4" />
                         {title ?? 'Replication has not started yet'}
                     </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                        {hint ?? (
-                            <>
-                                Nothing has been copied from the primary. The first copy is what fixes
-                                what gets replicated, so it waits for you to say go.
-                            </>
-                        )}
-                    </p>
+                    {/* Only when there is something to say. The state is in the
+                        line above and the action is in the button below; a
+                        paragraph between them explaining both is what the
+                        reader has to get past to reach the button. */}
+                    {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
                 </>
             )}
 

@@ -366,11 +366,11 @@ function FdwCredentialsForm({ base, onSaved }: { base: string; onSaved: () => vo
     return (
         <div>
             <div className="grid grid-cols-2 gap-2">
-                <label className="flex flex-col gap-1.5">
+                <label className="flex min-w-0 flex-col gap-1.5">
                     <span className="text-xs text-muted-foreground">Role</span>
                     <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="snap_fdw" autoFocus />
                 </label>
-                <label className="flex flex-col gap-1.5">
+                <label className="flex min-w-0 flex-col gap-1.5">
                     <span className="text-xs text-muted-foreground">Password</span>
                     <Input
                         type="password"
@@ -382,17 +382,21 @@ function FdwCredentialsForm({ base, onSaved }: { base: string; onSaved: () => vo
                 </label>
             </div>
 
+            {/* min-w-0 on every cell: a grid item's minimum is its content's,
+                and an <input> carries an intrinsic width from its size
+                attribute — so without this a 1fr column refuses to shrink
+                below it and the last field hangs off the edge of the dialog. */}
             {advanced && (
                 <div className="mt-2 grid grid-cols-[1fr_72px_1fr] gap-2">
-                    <label className="flex flex-col gap-1.5">
+                    <label className="flex min-w-0 flex-col gap-1.5">
                         <span className="text-xs text-muted-foreground">Host</span>
                         <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="as replication" />
                     </label>
-                    <label className="flex flex-col gap-1.5">
+                    <label className="flex min-w-0 flex-col gap-1.5">
                         <span className="text-xs text-muted-foreground">Port</span>
                         <Input value={port} onChange={(e) => setPort(e.target.value)} placeholder="5432" />
                     </label>
-                    <label className="flex flex-col gap-1.5">
+                    <label className="flex min-w-0 flex-col gap-1.5">
                         <span className="text-xs text-muted-foreground">Database</span>
                         <Input value={dbname} onChange={(e) => setDbname(e.target.value)} placeholder="as replication" />
                     </label>
@@ -450,9 +454,8 @@ function LiveDialog({
                     Live reads
                 </DialogTitle>
                 <DialogDescription className="leading-relaxed">
-                    A live table is read straight from the primary when queried — always current, never
-                    copied, and only as fast as the link. Replication is the opposite trade. A table is
-                    one or the other, never both.
+                    Read from the primary on every query — always current, never copied, as fast as the
+                    link. A table is live or replicated, never both.
                 </DialogDescription>
 
                 {fdwReady ? (
@@ -491,10 +494,9 @@ function LiveDialog({
                         )}
 
                         <p className="mt-4 text-[13px] leading-relaxed text-muted-foreground">
-                            <span className="font-medium text-foreground">Live needs its own read-only account.</span>{' '}
-                            Replication's cannot stand in for it: the login is stored in the replica's catalog
-                            as a user mapping, and every clone is a copy of that catalog — so whoever you hand
-                            a clone to can query through it. Replication connects as a superuser.
+                            <span className="font-medium text-foreground">Needs its own read-only account.</span>{' '}
+                            The login lives in the replica's catalog, and every clone copies it — so anyone
+                            you hand a clone to can query as that account.
                         </p>
 
                         <div className="mt-4">
@@ -516,8 +518,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO snap_fdw;`}</pre>
                         </div>
 
                         <p className="mt-3 border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground">
-                            Checked against the primary before it is kept, and stored where this manager keeps
-                            its state — not in the file on the host, which is read-only to it.
+                            Verified against the primary before it is saved.
                         </p>
                     </>
                 )}
@@ -693,8 +694,7 @@ function PublicationChooser({
         <div className="rounded-xl border border-border bg-card p-5">
             <h2 className="text-[15px] font-semibold">Which publication should this replica use?</h2>
             <p className="mt-1 max-w-[68ch] text-[13px] text-muted-foreground">
-                The primary already carries {rows.length} publication{rows.length === 1 ? '' : 's'}. Narrowing one
-                replaces it, so this install will not touch any of them until you say which is yours.
+                Narrowing a publication replaces it, so nothing is touched until you say which is yours.
             </p>
 
             {rows.length > 0 && (
@@ -728,7 +728,7 @@ function PublicationChooser({
                             mode={mode}
                             setMode={setMode}
                             title="Use one as it stands"
-                            desc="Replicate exactly what it already covers. This install will never rewrite it."
+                            desc="Replicate what it covers. Never rewritten by this install."
                         >
                             <select
                                 className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12.5px]"
@@ -748,7 +748,7 @@ function PublicationChooser({
                             setMode={setMode}
                             title="Take one over"
                             tone="warn"
-                            desc="Lets this install change what it covers. If another replica subscribes to it, that replica's coverage changes too."
+                            desc="This install may change what it covers — including for any other replica using it."
                         >
                             <select
                                 className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12.5px]"
@@ -769,7 +769,7 @@ function PublicationChooser({
                     mode={mode}
                     setMode={setMode}
                     title="Create a new one"
-                    desc="Starts empty and covers only what you pick on the next screen. Leaves every existing publication untouched."
+                    desc="Starts empty, filled from what you pick next. Existing publications untouched."
                 >
                     <Input
                         className="mt-2 h-8 font-mono text-[12.5px]"
@@ -1217,9 +1217,6 @@ export function ReplicationTables() {
                     <Button onClick={onRefresh} disabled={refreshLoading} size="sm">
                         {refreshLoading ? 'Refreshing…' : 'Refresh subscription'}
                     </Button>
-                    <Button onClick={loadTables} disabled={loading} size="sm">
-                        {loading ? 'Loading…' : 'Reload'}
-                    </Button>
                 </div>
             </div>
 
@@ -1263,24 +1260,16 @@ export function ReplicationTables() {
                     selection?.exists ? (
                         <>
                             <span className="font-mono text-foreground">{info?.publication_name || 'A publication'}</span>{' '}
-                            is already on the primary, covering{' '}
+                            covers{' '}
                             <span className="text-foreground">
                                 {selection.all_tables
                                     ? `every table (${selection.available})`
                                     : `${selection.count} of ${selection.available} tables`}
                             </span>
-                            . The list below is that publication, not a fresh proposal — nothing has been
-                            copied yet. Start the copy as it stands, or change the selection first.
+                            .
                             <PublicationCoverage tables={tables} />
                         </>
-                    ) : (
-                        <>
-                            Nothing has been copied, and the primary has no publication yet — so nothing is
-                            settled. Everything below is included to begin with; take out what you do not
-                            want, then start. The publication is written from this selection when the copy
-                            starts, and what it says then is what gets replicated.
-                        </>
-                    )
+                    ) : null
                 }
             />
 
@@ -1554,12 +1543,9 @@ export function ReplicationTables() {
                         {pending.length + pendingAuto.length === 1 ? '' : 's'}
                     </DialogTitle>
                     <DialogDescription>
-                        The publication is rewritten to match — PostgreSQL cannot take a table out of one
-                        that covers everything, so the first exclusion replaces it. Schemas with nothing
-                        excluded keep picking up new tables on their own; the others stop doing that.
                         {tables.some((t) => t.in_subscriber)
-                            ? ' The subscription is refreshed afterwards: tables added start copying, tables removed keep the rows they already have.'
-                            : ' Nothing has been copied yet, so this only decides what the first copy will include.'}
+                            ? 'Added tables start copying. Removed tables keep the rows they already have.'
+                            : 'This decides what the first copy includes.'}
                     </DialogDescription>
                     <div className="my-2 max-h-52 overflow-y-auto rounded-md border border-border bg-secondary p-2 font-mono text-[13px]">
                         {pendingAuto.map((p) => (
