@@ -24,7 +24,7 @@ _ACTION_LABEL = {
 
 
 def render(plan: Dict[str, Any], payload_source: str,
-           required_source: str = "room for snapshots and clones, payload × 2") -> str:
+           required_source: str = "room for snapshots and clones, payload × 1.5") -> str:
     lines = []
     lines.append("snaplicator init plan (read-only — nothing was changed)")
     lines.append(

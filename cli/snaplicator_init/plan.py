@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 GiB = 1024 ** 3
 FLOOR_BYTES = 10 * GiB
-PAYLOAD_MULTIPLIER = 2
+PAYLOAD_MULTIPLIER = 1.5
 # Enough for the copy itself plus the slack a live postgres wants. Below this
 # the pool cannot hold the data at all; above it, whether there is room to
 # work is a judgement rather than a fact.
@@ -33,13 +33,14 @@ EXCLUDED_TARGET_PREFIXES = ("/boot", "/snap")
 
 
 def required_bytes(payload_bytes: int) -> int:
-    """Room to work in: payload × 2, floor 10 GiB.
+    """Room to work in: payload × 1.5, floor 10 GiB.
 
     Empirical grounding (prod, 2026-07): a 78 GiB payload grew to ~280 GiB
-    of pool usage over months of snapshot/clone retention (~3.6×). ×2 is
-    enough to install and run comfortably; long-tail growth is handled by
-    online resize plus the runtime usage alert, not by over-allocating on
-    day one.
+    of pool usage over months of snapshot/clone retention (~3.6×). No
+    multiplier small enough to be worth checking against covers that, so this
+    one is not trying to: it marks the point past which a pool has obvious
+    working room, and everything beyond is handled by online resize and the
+    runtime usage alert, not by asking for more on day one.
 
     This is what a comfortable install looks like, not what one needs to
     proceed — see minimum_bytes. Provisioning a pool reserves nothing: on the
@@ -48,7 +49,7 @@ def required_bytes(payload_bytes: int) -> int:
     might fill in six months stops an install that would work today, and the
     thing being predicted is already watched at runtime.
     """
-    return max(PAYLOAD_MULTIPLIER * int(payload_bytes), FLOOR_BYTES)
+    return max(int(PAYLOAD_MULTIPLIER * int(payload_bytes)), FLOOR_BYTES)
 
 
 def minimum_bytes(payload_bytes: int) -> int:

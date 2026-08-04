@@ -29,7 +29,7 @@ from .replication import _run_publisher_sql
 # Kept in step with cli/snaplicator_init/plan.py, which asks the same
 # question before there is anything to ask it about.
 MINIMUM_MULTIPLIER = 1.1
-ROOMY_MULTIPLIER = 2
+ROOMY_MULTIPLIER = 1.5
 
 
 def pool_dir() -> str:
@@ -87,7 +87,7 @@ def check(publisher_connstr: str, publication_name: str) -> Dict:
         payload = 0
 
     minimum = int(MINIMUM_MULTIPLIER * payload)
-    roomy = ROOMY_MULTIPLIER * payload
+    roomy = int(ROOMY_MULTIPLIER * payload)
 
     fits: Optional[bool] = None
     comfortable: Optional[bool] = None

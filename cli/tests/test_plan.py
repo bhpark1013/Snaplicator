@@ -75,7 +75,7 @@ EMPTY_LSBLK = {"blockdevices": []}
 # ── requirement formula ───────────────────────────────────────────────
 
 def test_required_is_twice_payload():
-    assert required_bytes(100 * GiB) == 200 * GiB
+    assert required_bytes(100 * GiB) == 150 * GiB
 
 
 def test_required_floor_10gib():
@@ -330,19 +330,29 @@ def test_minimum_is_the_data_itself():
     assert minimum_bytes(0) == 10 * GiB
 
 
-def test_room_for_the_data_but_not_for_growth_still_installs():
-    """The case that used to refuse: 344 GiB of payload, 594 GiB free.
+def test_the_case_that_used_to_refuse():
+    """344 GiB of payload, 594 GiB free — the run this rule was changed for.
 
-    The data fits with room to spare and provisioning reserves nothing — the
-    pool is a subvolume sharing the filesystem's free space, with no quota.
-    Refusing here stops an install that works today over a forecast about
-    months from now, which is watched at runtime anyway.
+    Provisioning reserves nothing: the pool is a subvolume sharing the
+    filesystem's free space, with no quota. Refusing here stopped an install
+    that works today over a forecast about months from now, which is watched
+    at runtime anyway.
     """
     fm = findmnt_of(fs_entry("/", "/dev/sda1", "btrfs", avail=594 * GiB))
     plan = make_plan(fm, EMPTY_LSBLK, payload_bytes=344 * GiB)
 
     assert plan["status"] == "ok"
     assert plan["chosen"]["target"] == "/"
+    assert plan["chosen"]["comfortable"] is True, "594 clears 344 × 1.5"
+    assert plan["warnings"] == []
+
+
+def test_room_for_the_data_but_not_for_growth_still_installs():
+    """Between the two marks: the copy lands, the room after it is thin."""
+    fm = findmnt_of(fs_entry("/", "/dev/sda1", "btrfs", avail=400 * GiB))
+    plan = make_plan(fm, EMPTY_LSBLK, payload_bytes=344 * GiB)
+
+    assert plan["status"] == "ok"
     assert plan["chosen"]["comfortable"] is False
     assert len(plan["warnings"]) == 1, "said, not enforced"
     assert "room for snapshots and clones" in plan["warnings"][0]

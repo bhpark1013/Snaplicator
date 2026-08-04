@@ -34,8 +34,14 @@ def result(payload, free):
 
 class TestRefusal:
     def test_the_case_the_installer_used_to_refuse(self):
-        """344 GiB of tables, 594 GiB free: room for the data, not for ×2."""
+        """344 GiB of tables, 594 GiB free — the run this was changed for."""
         r = result(344 * GiB, 594 * GiB)
+        assert r["fits"] is True
+        assert r["comfortable"] is True, "594 clears 344 × 1.5"
+        assert capacity.refusal(r) is None
+
+    def test_between_the_two_marks_is_a_remark_not_a_refusal(self):
+        r = result(344 * GiB, 400 * GiB)
         assert r["fits"] is True
         assert r["comfortable"] is False
         assert capacity.refusal(r) is None, "tight is not a reason to refuse"
