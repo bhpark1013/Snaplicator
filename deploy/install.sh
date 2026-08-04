@@ -357,19 +357,125 @@ consider_existing_install() {
 
   echo >&2
   echo "  1. open it (default)" >&2
-  echo "  2. point it at a different database — discards the replica's copy" >&2
+  echo "  2. start over against a different database — discards this copy" >&2
   reply=""
   read -r -p "[snaplicator] 1 or 2: " reply < /dev/tty || reply=""
-  case "$reply" in
-    2) info "pointing it somewhere else." >&2 ;;
+  apply_existing_choice "$reply"
+}
+
+# What the answer to that menu means. Separate from the asking so it can be
+# exercised without a terminal to ask on — the tests have none.
+apply_existing_choice() {
+  case "$1" in
+    # Choosing 2 IS the consent for the discard. Asking again later, after
+    # the URI has been typed, would be asking the same question twice; and
+    # answering 2 and then refusing — which is what this did — makes the
+    # menu a lie.
+    2) REPOINT=1
+       info "starting over: the replica, its clones and its snapshots will be removed." >&2 ;;
+    # Anything else, including a bare Enter, is the default. An unrecognised
+    # answer must not read as consent to delete a copy.
     *) REUSE_EXISTING=1 ;;
   esac
+}
+
+# A replica holds a copy of one database. Pointing the configuration at a
+# different one leaves the manager talking to a primary the data on disk never
+# came from — and the bootstrap that would resolve that is skipped precisely
+# because the replica is already there.
+#
+# ok | discard | refuse, given what is installed and what was asked for.
+repoint_decision() { # prev-record, host, port, db, repoint-flag
+  prev=$1
+  [ -n "$prev" ] || { echo ok; return 0; }
+  # A removed replica leaves nothing to contradict: there is no copy to be
+  # wrong about, so the new URI is simply the answer.
+  [ "${prev##*|}" != "absent" ] || { echo ok; return 0; }
+  [ "${prev%|*|*}" != "$2|$3|$4" ] || { echo ok; return 0; }
+  [ "$5" = "1" ] && { echo discard; return 0; }
+  echo refuse
+}
+
+# Take the install apart, so the new one is built rather than half-inherited.
+#
+# Order matters at the top: the subscription is dropped while the replica is
+# still running, because DROP SUBSCRIPTION drops the replication slot on the
+# primary with it. A slot nobody reads pins WAL on the primary forever — on a
+# managed database that is its disk filling up, long after this machine has
+# forgotten the install existed.
+discard_existing_install() {
+  envf="$SNAP_HOME/deploy/.env"
+  [ -f "$envf" ] || return 0
+  ec=$(sed -n 's/^CONTAINER_NAME=//p' "$envf" | tail -1)
+  esub=$(sed -n 's/^SUBSCRIPTION_NAME=//p' "$envf" | tail -1)
+  euser=$(sed -n 's/^POSTGRES_USER=//p' "$envf" | tail -1)
+  edb=$(sed -n 's/^POSTGRES_DB=//p' "$envf" | tail -1)
+  epool=$(sed -n 's/^ROOT_DATA_DIR=//p' "$envf" | tail -1)
+  compose="$SNAP_HOME/deploy/docker-compose.yml"
+
+  # The manager first, and only stopped: it reconciles what it finds, so a
+  # live one would repair the install being taken apart. Its state volume
+  # goes at the end, once nothing is left to write to it.
+  info "stopping the manager..."
+  docker compose -f "$compose" -p snaplicator stop >/dev/null 2>&1 || true
+
+  if [ -n "$ec" ] && [ -n "$esub" ] \
+     && [ "$(docker inspect -f '{{.State.Running}}' "$ec" 2>/dev/null)" = "true" ]; then
+    info "releasing the replication slot on the old primary..."
+    # Bounded: the drop talks to the old primary, which may be gone or
+    # firewalled off, and an unbounded wait here strands the whole install.
+    if ! timeout 60 docker exec -i "$ec" \
+         psql -U "${euser:-postgres}" -d "${edb:-postgres}" -v ON_ERROR_STOP=1 \
+         -c "DROP SUBSCRIPTION IF EXISTS $esub" >/dev/null 2>&1; then
+      warn "could not drop $esub. If the old primary is still reachable, drop its"
+      warn "leftover slot there:  SELECT pg_drop_replication_slot('$esub');"
+    fi
+  fi
+
+  # The manager names every clone container "<replica>-<timestamp>", so the
+  # replica's own name is the prefix that finds all of them.
+  if [ -n "$ec" ]; then
+    victims=$(docker ps -aq --filter "name=^${ec}" 2>/dev/null)
+    if [ -n "$victims" ]; then
+      info "removing the replica and its clones..."
+      # shellcheck disable=SC2086
+      docker rm -f $victims >/dev/null 2>&1 || true
+    fi
+  fi
+
+  # The pool itself stays — it is a place, and the next install wants the
+  # same one. Everything in it goes: main, its clones, its snapshots, and
+  # the .snaplicator sidecar, whose DDL watermark is a position in the old
+  # primary's log and means nothing in the new one.
+  if [ -n "$epool" ] && [ -d "$epool" ]; then
+    info "emptying $epool..."
+    for sv in "$epool"/* "$epool"/.[!.]*; do
+      [ -e "$sv" ] || continue
+      if btrfs subvolume show "$sv" >/dev/null 2>&1; then
+        # Read-only snapshots refuse deletion until they are writable again.
+        btrfs property set -ts "$sv" ro false >/dev/null 2>&1 || true
+        btrfs subvolume delete "$sv" >/dev/null 2>&1 \
+          || warn "could not delete the subvolume $sv — remove it by hand and re-run"
+      else
+        rm -rf "$sv" || warn "could not remove $sv — remove it by hand and re-run"
+      fi
+    done
+  fi
+
+  # Named volumes outlive `docker compose down`, and this one holds the
+  # publication choice. Left behind, the new install silently adopts the old
+  # install's answers to questions it was never asked.
+  docker compose -f "$compose" -p snaplicator down -v >/dev/null 2>&1 || true
+  docker volume rm snaplicator_snaplicator-state >/dev/null 2>&1 || true
+
+  info "discarded. building the new install..."
 }
 
 # ── argument parsing: [--demo] [CONNSTR] [VAR=VALUE ...] ─────────────
 DEMO=0
 CONNSTR="${CONNSTR:-}"
 REUSE_EXISTING="${REUSE_EXISTING:-0}"
+REPOINT="${REPOINT:-0}"
 for a in "$@"; do
   case "$a" in
     --demo) DEMO=1 ;;
@@ -566,7 +672,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "$TTY_SAVED" ]; then
       trap 'stty "$TTY_SAVED" < /dev/tty 2>/dev/null || true' EXIT INT TERM
     fi
-    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" bash -c "$FAR_CMD" < /dev/tty || RC=$?
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" REPOINT="$REPOINT" bash -c "$FAR_CMD" < /dev/tty || RC=$?
     if [ -n "$TTY_SAVED" ]; then
       stty "$TTY_SAVED" < /dev/tty 2>/dev/null || true
       trap - EXIT INT TERM
@@ -574,7 +680,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
   else
     # No terminal here means orb allocates none there either, so the far side
     # sees no /dev/tty and takes its own recommendation.
-    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" bash -c "$FAR_CMD" < /dev/null || RC=$?
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" REPOINT="$REPOINT" bash -c "$FAR_CMD" < /dev/null || RC=$?
   fi
   if [ "$RC" != "0" ]; then
     echo >&2
@@ -780,28 +886,31 @@ PY
 EOF
   [ -n "$PRIMARY_HOST" ] || die "could not parse host from: $CONNSTR"
 
-  # A replica holds a copy of one database. Pointing the configuration at a
-  # different one leaves the manager talking to a primary the data on disk
-  # never came from — and the bootstrap that would resolve it is skipped
-  # precisely because the replica is already there. Refuse instead.
   PREV=$(existing_install || true)
   if [ -n "$PREV" ]; then
-    PREV_STATE=${PREV##*|}
     PREV_WHERE=${PREV%|*|*}
     PREV_H=${PREV_WHERE%%|*}
     PREV_REST=${PREV_WHERE#*|}
-    if [ "$PREV_STATE" != "absent" ] \
-       && [ "$PREV_WHERE" != "$PRIMARY_HOST|$PRIMARY_PORT|$PRIMARY_DB" ] \
-       && [ "${REPOINT:-0}" != "1" ]; then
+    if [ "$(repoint_decision "$PREV" "$PRIMARY_HOST" "$PRIMARY_PORT" "$PRIMARY_DB" "${REPOINT:-0}")" != "ok" ]; then
       echo >&2
       info "this install's replica was copied from $PREV_H:${PREV_REST%|*}/${PREV_REST#*|}" >&2
       info "and you have asked for $PRIMARY_HOST:$PRIMARY_PORT/$PRIMARY_DB." >&2
       info "A replica cannot be re-aimed: the copy on disk stays what it is." >&2
-      echo >&2
-      echo "  to start over against the new database, remove the replica first:" >&2
-      echo "    docker rm -f $CONTAINER_NAME" >&2
-      echo "  then re-run this installer. Or pass REPOINT=1 to proceed anyway." >&2
-      die "refusing to point an existing replica at a different database"
+      if [ "${REPOINT:-0}" = "1" ]; then
+        # Consent was given — at the menu, or by whoever set REPOINT=1 on the
+        # command line. Either way it is the same consent, so do the work
+        # instead of naming a command for someone else to run.
+        echo >&2
+        discard_existing_install
+      else
+        # No consent to discard, and no way to honour the URI without one:
+        # what would come up otherwise is the old copy, described by an .env
+        # naming a database it never came from.
+        echo >&2
+        echo "  re-run this installer and choose 2 to start over against it," >&2
+        echo "  or pass REPOINT=1 to say so up front." >&2
+        die "refusing to point an existing replica at a different database"
+      fi
     fi
   fi
   # Here the connection is the machine's own, so a failure to reach the
