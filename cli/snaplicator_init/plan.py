@@ -17,6 +17,10 @@ from typing import Any, Dict, List, Optional
 GiB = 1024 ** 3
 FLOOR_BYTES = 10 * GiB
 PAYLOAD_MULTIPLIER = 2
+# Enough for the copy itself plus the slack a live postgres wants. Below this
+# the pool cannot hold the data at all; above it, whether there is room to
+# work is a judgement rather than a fact.
+MINIMUM_MULTIPLIER = 1.1
 
 # Filesystems whose free space can host a loopback file (priority 2) or,
 # for btrfs, a subvolume (priority 1). Everything else — pseudo filesystems
@@ -29,15 +33,36 @@ EXCLUDED_TARGET_PREFIXES = ("/boot", "/snap")
 
 
 def required_bytes(payload_bytes: int) -> int:
-    """Pool size requirement: payload × 2, floor 10 GiB.
+    """Room to work in: payload × 2, floor 10 GiB.
 
     Empirical grounding (prod, 2026-07): a 78 GiB payload grew to ~280 GiB
     of pool usage over months of snapshot/clone retention (~3.6×). ×2 is
     enough to install and run comfortably; long-tail growth is handled by
     online resize plus the runtime usage alert, not by over-allocating on
     day one.
+
+    This is what a comfortable install looks like, not what one needs to
+    proceed — see minimum_bytes. Provisioning a pool reserves nothing: on the
+    ordinary path it creates a btrfs subvolume, which shares the filesystem's
+    free space and holds no quota. Refusing to create it because the disk
+    might fill in six months stops an install that would work today, and the
+    thing being predicted is already watched at runtime.
     """
     return max(PAYLOAD_MULTIPLIER * int(payload_bytes), FLOOR_BYTES)
+
+
+def minimum_bytes(payload_bytes: int) -> int:
+    """Room for the data itself: payload × 1.1, floor 10 GiB.
+
+    Below this the copy cannot land, which is a fact about the disk and the
+    only thing worth refusing over.
+    """
+    return max(int(MINIMUM_MULTIPLIER * int(payload_bytes)), FLOOR_BYTES)
+
+
+def _gib(n: int) -> str:
+    """Readable in a warning that is also read straight out of the JSON."""
+    return f"{n / GiB:.1f} GiB"
 
 
 def _walk_findmnt(node: Dict[str, Any], out: List[Dict[str, Any]]) -> None:
@@ -199,15 +224,25 @@ def make_plan(
     """
     required = (int(required_override) if required_override
                 else required_bytes(payload_bytes))
+    # An explicit --pool-bytes is a size someone asked for, so it is both the
+    # floor and the comfortable mark; there is nothing left to be lenient about.
+    minimum = (int(required_override) if required_override
+               else minimum_bytes(payload_bytes))
     candidates = mount_candidates(findmnt_raw) + bare_disk_candidates(lsblk_raw)
     for c in candidates:
-        c["fits"] = c["avail_bytes"] >= required
+        # `fits` decides eligibility and so is measured against the floor:
+        # whether the data can land at all. Room to work in is reported
+        # separately, because it is a forecast and forecasts do not get to
+        # refuse.
+        c["fits"] = c["avail_bytes"] >= minimum
+        c["comfortable"] = c["avail_bytes"] >= required
     candidates.sort(key=_rank_key)
 
     chosen: Optional[Dict[str, Any]] = None
     auto_selected = False
     needs_confirmation = False
     remediation: List[str] = []
+    warnings: List[str] = []
 
     exact_btrfs = None
     if data_dir:
@@ -231,8 +266,8 @@ def make_plan(
         elif not pinned["fits"] and not force:
             remediation.append(
                 f"--data-dir {data_dir} is on {pinned['target']} with only "
-                f"{pinned['avail_bytes']} bytes free (< {required} required); "
-                "pass --force to override the space check"
+                f"{pinned['avail_bytes']} bytes free (< {minimum} needed for the "
+                "data itself); pass --force to override the space check"
             )
         else:
             chosen = pinned
@@ -244,13 +279,24 @@ def make_plan(
             auto_selected = len(eligible) == 1
             needs_confirmation = len(eligible) > 1
 
+    # Chosen but tight. Said rather than enforced: the pool holds no quota, so
+    # this is a forecast about months from now, and the same number is watched
+    # continuously once there is something to watch.
+    if chosen is not None and not chosen.get("comfortable", True):
+        warnings.append(
+            f"{chosen['target']} has {_gib(chosen['avail_bytes'])} free — enough for "
+            f"the data ({_gib(payload_bytes)}) but under the {_gib(required)} that "
+            "leaves room for snapshots and clones. Replicate less, or watch the "
+            "usage alert and grow the pool."
+        )
+
     if chosen is None and not remediation:
         best = max(candidates, key=lambda c: c["avail_bytes"], default=None)
         if best is not None:
-            shortfall = required - best["avail_bytes"]
+            shortfall = minimum - best["avail_bytes"]
             remediation.append(
-                f"need {required} bytes, largest candidate {best['target']} "
-                f"has {best['avail_bytes']} free (short by {shortfall})"
+                f"need {minimum} bytes for the data itself, largest candidate "
+                f"{best['target']} has {best['avail_bytes']} free (short by {shortfall})"
             )
         for d in (c for c in candidates if c["priority"] == 3 and c["fits"]):
             remediation.append(
@@ -269,6 +315,8 @@ def make_plan(
         "version": 1,
         "payload_bytes": int(payload_bytes),
         "required_bytes": required,
+        "minimum_bytes": minimum,
+        "warnings": warnings,
         "data_dir": data_dir,
         "candidates": candidates,
         "chosen": chosen,

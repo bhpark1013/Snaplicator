@@ -24,14 +24,19 @@ _ACTION_LABEL = {
 
 
 def render(plan: Dict[str, Any], payload_source: str,
-           required_source: str = "payload × 2, floor 10 GiB") -> str:
+           required_source: str = "room for snapshots and clones, payload × 2") -> str:
     lines = []
     lines.append("snaplicator init plan (read-only — nothing was changed)")
     lines.append(
         f"  payload:  {human_bytes(plan['payload_bytes'])}  ({payload_source})"
     )
+    if plan.get("minimum_bytes"):
+        lines.append(
+            f"  needed:   {human_bytes(plan['minimum_bytes'])}  "
+            "(the data itself — below this nothing can be installed)"
+        )
     lines.append(
-        f"  required: {human_bytes(plan['required_bytes'])}  ({required_source})"
+        f"  roomy:    {human_bytes(plan['required_bytes'])}  ({required_source})"
     )
     lines.append("")
     lines.append("candidates (ranked):")
@@ -60,6 +65,8 @@ def render(plan: Dict[str, Any], payload_source: str,
                 "  several candidates fit — this is the recommendation; pin one"
                 " with --data-dir PATH"
             )
+        for w in plan.get("warnings") or []:
+            lines.append(f"  ! {w}")
     else:
         lines.append("no home for the pool on this machine:")
         for r in plan["remediation"]:

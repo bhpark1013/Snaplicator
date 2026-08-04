@@ -590,6 +590,9 @@ function PublicationCoverage({ tables }: { tables: TableInfo[] }) {
 
 type PubRow = { name: string; all_tables: boolean; table_count: number; ours: boolean; active: boolean }
 
+const gib = (n: number | null) =>
+    n == null ? '—' : `${(n / 1024 ** 3).toFixed(1)} GiB`
+
 type PubMode = 'reuse' | 'adopt' | 'create'
 
 /** One of the three answers, with whatever it needs asked underneath it.
@@ -852,6 +855,13 @@ export function ReplicationTables() {
     const [pubs, setPubs] = useState<{ chosen: boolean; proposed: string | null; publications: PubRow[] } | null>(null)
     // null until known, so the question never flashes on a settled install.
     const [bootstrapped, setBootstrapped] = useState<boolean | null>(null)
+    // Whether what is selected will fit in the pool. Two answers: `fits` is a
+    // fact about the disk today and blocks the copy; `comfortable` is a
+    // forecast about the snapshots and clones after it, and only gets said.
+    const [capacity, setCapacity] = useState<{
+        payload_bytes: number; free_bytes: number | null
+        fits: boolean | null; comfortable: boolean | null
+    } | null>(null)
 
     const [actionLoading, setActionLoading] = useState(false)
     const [confirmOpen, setConfirmOpen] = useState(false)
@@ -947,8 +957,16 @@ export function ReplicationTables() {
             .catch(() => {})
     }
 
+    const loadCapacity = () => {
+        fetch(`${base}/replication/capacity`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => setCapacity(d))
+            .catch(() => {})
+    }
+
     useEffect(() => {
         loadTables()
+        loadCapacity()
         loadInfo()
         loadFdw()
         loadSelection()
@@ -1257,7 +1275,17 @@ export function ReplicationTables() {
                             : undefined
                 }
                 hint={
-                    selection?.exists ? (
+                    capacity && capacity.fits === false ? (
+                        <span className="text-destructive">
+                            The selection is {gib(capacity.payload_bytes)} and the pool has{' '}
+                            {gib(capacity.free_bytes)} free — the copy cannot finish.
+                        </span>
+                    ) : capacity && capacity.comfortable === false ? (
+                        <>
+                            {gib(capacity.payload_bytes)} selected, {gib(capacity.free_bytes)} free —
+                            enough to copy, tight for snapshots and clones.
+                        </>
+                    ) : selection?.exists ? (
                         <>
                             <span className="font-mono text-foreground">{info?.publication_name || 'A publication'}</span>{' '}
                             covers{' '}

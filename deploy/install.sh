@@ -690,6 +690,11 @@ fi
 if [ "$DEMO" = "1" ]; then
   PLAN_ARGS+=(--pool-bytes $((DEMO_POOL_GIB * 1024 * 1024 * 1024)))
 else
+  # Measured over the whole database unless told otherwise. Someone who
+  # already knows they want part of it should not have to have room for all
+  # of it: TABLES=public.orders,public.users or SCHEMAS=public,shop.
+  [ -n "${TABLES:-}" ]  && PLAN_ARGS+=(--tables "$TABLES")
+  [ -n "${SCHEMAS:-}" ] && PLAN_ARGS+=(--schemas "$SCHEMAS")
   PLAN_ARGS+=("$CONNSTR")
 fi
 set +e
@@ -698,6 +703,15 @@ PLAN_RC=$?
 set -e
 # 0 = a home exists, 1 = no-fit (a bare disk may still save the day)
 [ "$PLAN_RC" -le 1 ] || { cat "$PLAN_JSON" >&2; die "host survey / payload measurement failed"; }
+
+# Tight but usable. Provisioning reserves nothing — the pool is a subvolume
+# sharing the filesystem's free space — so this is a forecast, and a forecast
+# is said rather than enforced.
+python3 -c '
+import json, sys
+for w in (json.load(open(sys.argv[1])).get("warnings") or []):
+    print(w)
+' "$PLAN_JSON" | while IFS= read -r w; do [ -n "$w" ] && warn "$w"; done
 
 # Re-run: stick to the pool a previous install already chose, instead of
 # asking again (and possibly picking a different spot).
@@ -742,9 +756,10 @@ if chosen:
             break
 req = p["required_bytes"]
 pay = p["payload_bytes"]
-hdr = "[snaplicator] pool size needed: " + human(req)
+mini = p.get("minimum_bytes") or req
+hdr = "[snaplicator] pool size needed: " + human(mini)
 if pay:
-    hdr += "  (payload " + human(pay) + " × 2, floor 10 GiB)"
+    hdr += "  (the data; " + human(req) + " would leave room for snapshots and clones)"
 print(hdr, file=sys.stderr)
 if fit:
     print("[snaplicator] locations with that much room:", file=sys.stderr)
@@ -769,7 +784,7 @@ for i, c in enumerate(fit, 1):
 for c in p["candidates"]:
     if not c["fits"]:
         print("  ✗  " + c["target"] + " — only " + human(c["avail_bytes"])
-              + " free (< " + human(req) + " needed)", file=sys.stderr)
+              + " free (< " + human(mini) + " needed)", file=sys.stderr)
 if fit:
     print("REC|" + str(rec))
 ' "$PLAN_JSON")

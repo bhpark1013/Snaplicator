@@ -5,6 +5,7 @@ from ...core.config import settings
 from ...services.sql_guard import assert_read_only_sql, ReadOnlyViolation
 from ...services import sync_log
 from ...services import bootstrap as bootstrap_svc
+from ...services import capacity as capacity_svc
 from ...services import selection as selection_svc
 from ...services import fdw_creds
 from ...services import publication as publication_svc
@@ -518,6 +519,18 @@ def post_bootstrap(force: bool = False):
         selection_svc.ensure_publication(
             _build_publisher_connstr(), _active_publication() or ""
         )
+        # Asked here rather than at install time, because here the selection
+        # exists: the check is about the tables actually chosen, not about the
+        # largest set anyone might have chosen. Only a copy that cannot finish
+        # is refused; being tight is reported and left to the caller.
+        if not force:
+            why = capacity_svc.refusal(
+                capacity_svc.check(
+                    _build_publisher_connstr(), _active_publication() or ""
+                )
+            )
+            if why:
+                raise HTTPException(status_code=409, detail=why)
         return bootstrap_svc.start(
             force=force, publisher_connstr=_build_publisher_connstr()
         )
@@ -538,6 +551,22 @@ def delete_bootstrap():
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to cancel bootstrap: {e}")
+
+
+@router.get("/capacity")
+def get_capacity():
+    """Will the current selection fit in the pool?
+
+    Two answers, deliberately: `fits` is a fact about this disk today and is
+    what the copy refuses over; `comfortable` is a forecast about the
+    snapshots and clones that come later, and is only ever said.
+    """
+    try:
+        return capacity_svc.check(
+            _build_publisher_connstr(), _active_publication() or ""
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to measure capacity: {e}")
 
 
 @router.get("/schema-drift")

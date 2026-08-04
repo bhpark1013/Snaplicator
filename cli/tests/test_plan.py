@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from snaplicator_init.plan import (
+    minimum_bytes,
     GiB,
     bare_disk_candidates,
     make_plan,
@@ -318,3 +319,55 @@ def test_data_dir_too_small_needs_force():
 
     forced = make_plan(fm, EMPTY_LSBLK, payload_bytes=50 * GiB, data_dir="/data/x", force=True)
     assert forced["chosen"]["target"] == "/data"
+
+
+# ── the floor vs the forecast ────────────────────────────────────────
+
+
+def test_minimum_is_the_data_itself():
+    assert minimum_bytes(100 * GiB) == 110 * GiB
+    assert minimum_bytes(1 * GiB) == 10 * GiB      # floor wins
+    assert minimum_bytes(0) == 10 * GiB
+
+
+def test_room_for_the_data_but_not_for_growth_still_installs():
+    """The case that used to refuse: 344 GiB of payload, 594 GiB free.
+
+    The data fits with room to spare and provisioning reserves nothing — the
+    pool is a subvolume sharing the filesystem's free space, with no quota.
+    Refusing here stops an install that works today over a forecast about
+    months from now, which is watched at runtime anyway.
+    """
+    fm = findmnt_of(fs_entry("/", "/dev/sda1", "btrfs", avail=594 * GiB))
+    plan = make_plan(fm, EMPTY_LSBLK, payload_bytes=344 * GiB)
+
+    assert plan["status"] == "ok"
+    assert plan["chosen"]["target"] == "/"
+    assert plan["chosen"]["comfortable"] is False
+    assert len(plan["warnings"]) == 1, "said, not enforced"
+    assert "room for snapshots and clones" in plan["warnings"][0]
+
+
+def test_no_room_for_the_data_is_still_a_refusal():
+    fm = findmnt_of(fs_entry("/", "/dev/sda1", "btrfs", avail=100 * GiB))
+    plan = make_plan(fm, EMPTY_LSBLK, payload_bytes=344 * GiB)
+    assert plan["status"] == "no-fit"
+    assert not plan["warnings"], "a refusal is not a warning"
+    assert "for the data itself" in "\n".join(plan["remediation"])
+
+
+def test_comfortable_candidates_warn_about_nothing():
+    fm = findmnt_of(fs_entry("/", "/dev/sda1", "btrfs", avail=900 * GiB))
+    plan = make_plan(fm, EMPTY_LSBLK, payload_bytes=344 * GiB)
+    assert plan["status"] == "ok"
+    assert plan["chosen"]["comfortable"] is True
+    assert plan["warnings"] == []
+
+
+def test_an_asked_for_pool_size_is_both_marks():
+    """--pool-bytes is a number someone chose; there is nothing to soften."""
+    fm = findmnt_of(fs_entry("/", "/dev/sda1", "btrfs", avail=50 * GiB))
+    plan = make_plan(fm, EMPTY_LSBLK, payload_bytes=0, required_override=80 * GiB)
+    assert plan["minimum_bytes"] == 80 * GiB
+    assert plan["required_bytes"] == 80 * GiB
+    assert plan["status"] == "no-fit"
