@@ -284,9 +284,92 @@ ask_target() {
   die "no connection URI given"
 }
 
+# An install that is already here has answered the question this script is
+# about to ask. Reading it out first is the difference between "which database
+# do you want clones of" being a question and being a formality — and the
+# formality was worse than pointless: the answer was taken, written into the
+# .env, and then quietly not acted on, because a running replica makes the
+# bootstrap a no-op. What came up was the old environment, now described by a
+# file naming a database it was never copied from.
+#
+# Emits "host|port|db|user|replica-state", or fails when there is nothing here.
+existing_install() {
+  envf="$SNAP_HOME/deploy/.env"
+  [ -f "$envf" ] || return 1
+  eh=$(sed -n 's/^PRIMARY_HOST=//p' "$envf" | tail -1)
+  [ -n "$eh" ] || return 1
+  ep=$(sed -n 's/^PRIMARY_PORT=//p' "$envf" | tail -1)
+  ed=$(sed -n 's/^PRIMARY_DB=//p' "$envf" | tail -1)
+  eu=$(sed -n 's/^PRIMARY_USER=//p' "$envf" | tail -1)
+  ec=$(sed -n 's/^CONTAINER_NAME=//p' "$envf" | tail -1)
+  es=absent
+  if [ -n "$ec" ] && docker inspect -f '{{.State.Status}}' "$ec" >/dev/null 2>&1; then
+    es=$(docker inspect -f '{{.State.Status}}' "$ec" 2>/dev/null)
+  fi
+  printf '%s|%s|%s|%s|%s\n' "$eh" "$ep" "$ed" "$eu" "$es"
+}
+
+# The same question from the Mac, where the install lives one machine away.
+mac_existing_install() {
+  orbctl list 2>/dev/null | awk '{print $1}' | grep -qx "$MACHINE" || return 1
+  orb -m "$MACHINE" -u root sh -c '
+    envf=/opt/snaplicator/deploy/.env
+    [ -f "$envf" ] || exit 1
+    eh=$(sed -n "s/^PRIMARY_HOST=//p" "$envf" | tail -1)
+    [ -n "$eh" ] || exit 1
+    ep=$(sed -n "s/^PRIMARY_PORT=//p" "$envf" | tail -1)
+    ed=$(sed -n "s/^PRIMARY_DB=//p" "$envf" | tail -1)
+    eu=$(sed -n "s/^PRIMARY_USER=//p" "$envf" | tail -1)
+    ec=$(sed -n "s/^CONTAINER_NAME=//p" "$envf" | tail -1)
+    es=absent
+    if [ -n "$ec" ]; then
+      docker inspect -f "{{.State.Status}}" "$ec" >/dev/null 2>&1 && es=$(docker inspect -f "{{.State.Status}}" "$ec")
+    fi
+    printf "%s|%s|%s|%s|%s\n" "$eh" "$ep" "$ed" "$eu" "$es"
+  ' 2>/dev/null
+}
+
+# Say what is here, then decide whether this run is about it or about
+# something new. Sets REUSE_EXISTING=1 when it is about what is already here.
+consider_existing_install() {
+  found=$1
+  [ -n "$found" ] || return 0
+  eh=${found%%|*}; rest=${found#*|}
+  ep=${rest%%|*}; rest=${rest#*|}
+  ed=${rest%%|*}; rest=${rest#*|}
+  es=${rest##*|}
+
+  echo >&2
+  info "Snaplicator is already installed here." >&2
+  info "  primary: $eh:$ep/$ed" >&2
+  info "  replica: $es" >&2
+
+  # An answer on the command line is a decision already made.
+  if [ -n "$CONNSTR" ] || [ "$DEMO" = "1" ]; then return 0; fi
+
+  # Nobody to ask means the safe reading of "run the installer again" is
+  # "bring up what is installed", not "replace it with something else".
+  if ! { : < /dev/tty; } 2>/dev/null; then
+    REUSE_EXISTING=1
+    info "no terminal to ask on — opening the install that is here" >&2
+    return 0
+  fi
+
+  echo >&2
+  echo "  1. open it (default)" >&2
+  echo "  2. point it at a different database — discards the replica's copy" >&2
+  reply=""
+  read -r -p "[snaplicator] 1 or 2: " reply < /dev/tty || reply=""
+  case "$reply" in
+    2) info "pointing it somewhere else." >&2 ;;
+    *) REUSE_EXISTING=1 ;;
+  esac
+}
+
 # ── argument parsing: [--demo] [CONNSTR] [VAR=VALUE ...] ─────────────
 DEMO=0
 CONNSTR="${CONNSTR:-}"
+REUSE_EXISTING="${REUSE_EXISTING:-0}"
 for a in "$@"; do
   case "$a" in
     --demo) DEMO=1 ;;
@@ -369,11 +452,16 @@ if [ "$(uname -s)" = "Darwin" ]; then
     fi
   fi
 
+  # Look before asking. The install lives inside the machine, so this is the
+  # first moment it can be seen from here — and it has to be seen before the
+  # question, because it may be the answer.
+  consider_existing_install "$(mac_existing_install || true)"
+
   # Ask here, where the user actually is. The handoff below runs without a
   # terminal of its own, so a prompt on the far side would have nothing to
   # read from.
-  ask_target
-  [ "$DEMO" = "1" ] || publisher_preflight soft
+  [ "$REUSE_EXISTING" = "1" ] || ask_target
+  [ "$DEMO" = "1" ] || [ "$REUSE_EXISTING" = "1" ] || publisher_preflight soft
 
   if orbctl list 2>/dev/null | awk '{print $1}' | grep -qx "$MACHINE"; then
     info "reusing the Linux machine '$MACHINE'"
@@ -478,7 +566,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "$TTY_SAVED" ]; then
       trap 'stty "$TTY_SAVED" < /dev/tty 2>/dev/null || true' EXIT INT TERM
     fi
-    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" bash -c "$FAR_CMD" < /dev/tty || RC=$?
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" bash -c "$FAR_CMD" < /dev/tty || RC=$?
     if [ -n "$TTY_SAVED" ]; then
       stty "$TTY_SAVED" < /dev/tty 2>/dev/null || true
       trap - EXIT INT TERM
@@ -486,7 +574,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
   else
     # No terminal here means orb allocates none there either, so the far side
     # sees no /dev/tty and takes its own recommendation.
-    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" bash -c "$FAR_CMD" < /dev/null || RC=$?
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" bash -c "$FAR_CMD" < /dev/null || RC=$?
   fi
   if [ "$RC" != "0" ]; then
     echo >&2
@@ -544,7 +632,10 @@ command -v python3 >/dev/null || die "python3 (>= 3.10) is required"
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' \
   || die "python3 >= 3.10 required (found $(python3 --version))"
 
-ask_target
+# The handoff from macOS already asked, and says so through the environment.
+# A run started in here has not, so it asks now.
+[ "$REUSE_EXISTING" = "1" ] || consider_existing_install "$(existing_install || true)"
+[ "$REUSE_EXISTING" = "1" ] || ask_target
 # Only knowable once the target is: the demo answer arrives at the prompt, not
 # only as a flag. 1 = subscribe before finishing, 0 = leave it to the UI (§7).
 : "${START_REPLICATION:=$DEMO}"
@@ -662,6 +753,19 @@ SQL
   fi
   PRIMARY_HOST=127.0.0.1 PRIMARY_PORT=$DEMO_PUB_PORT PRIMARY_DB=postgres
   PRIMARY_USER=postgres PRIMARY_PASSWORD=snapdemo
+elif [ "$REUSE_EXISTING" = "1" ]; then
+  # Read back rather than re-asked. The password especially: it is on disk
+  # here already, and a URI reconstructed from these parts would have to
+  # re-encode it correctly to mean the same thing.
+  ENVF="$SNAP_HOME/deploy/.env"
+  PRIMARY_HOST=$(sed -n 's/^PRIMARY_HOST=//p' "$ENVF" | tail -1)
+  PRIMARY_PORT=$(sed -n 's/^PRIMARY_PORT=//p' "$ENVF" | tail -1)
+  PRIMARY_DB=$(sed -n 's/^PRIMARY_DB=//p' "$ENVF" | tail -1)
+  PRIMARY_USER=$(sed -n 's/^PRIMARY_USER=//p' "$ENVF" | tail -1)
+  PRIMARY_PASSWORD=$(sed -n 's/^PRIMARY_PASSWORD=//p' "$ENVF" | tail -1)
+  [ -n "$PRIMARY_HOST" ] || die "$ENVF has no PRIMARY_HOST — pass a connection URI instead"
+  info "using the primary this install already has: $PRIMARY_HOST:$PRIMARY_PORT/$PRIMARY_DB"
+  publisher_preflight hard
 else
   read -r PRIMARY_HOST PRIMARY_PORT PRIMARY_DB PRIMARY_USER PRIMARY_PASSWORD <<EOF
 $(python3 - "$CONNSTR" <<'PY'
@@ -675,6 +779,31 @@ PY
 )
 EOF
   [ -n "$PRIMARY_HOST" ] || die "could not parse host from: $CONNSTR"
+
+  # A replica holds a copy of one database. Pointing the configuration at a
+  # different one leaves the manager talking to a primary the data on disk
+  # never came from — and the bootstrap that would resolve it is skipped
+  # precisely because the replica is already there. Refuse instead.
+  PREV=$(existing_install || true)
+  if [ -n "$PREV" ]; then
+    PREV_STATE=${PREV##*|}
+    PREV_WHERE=${PREV%|*|*}
+    PREV_H=${PREV_WHERE%%|*}
+    PREV_REST=${PREV_WHERE#*|}
+    if [ "$PREV_STATE" != "absent" ] \
+       && [ "$PREV_WHERE" != "$PRIMARY_HOST|$PRIMARY_PORT|$PRIMARY_DB" ] \
+       && [ "${REPOINT:-0}" != "1" ]; then
+      echo >&2
+      info "this install's replica was copied from $PREV_H:${PREV_REST%|*}/${PREV_REST#*|}" >&2
+      info "and you have asked for $PRIMARY_HOST:$PRIMARY_PORT/$PRIMARY_DB." >&2
+      info "A replica cannot be re-aimed: the copy on disk stays what it is." >&2
+      echo >&2
+      echo "  to start over against the new database, remove the replica first:" >&2
+      echo "    docker rm -f $CONTAINER_NAME" >&2
+      echo "  then re-run this installer. Or pass REPOINT=1 to proceed anyway." >&2
+      die "refusing to point an existing replica at a different database"
+    fi
+  fi
   # Here the connection is the machine's own, so a failure to reach the
   # publisher is the answer rather than an inconclusive one.
   publisher_preflight hard
