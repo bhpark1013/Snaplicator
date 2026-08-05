@@ -412,12 +412,17 @@ discard_existing_install() {
   edb=$(sed -n 's/^POSTGRES_DB=//p' "$envf" | tail -1)
   epool=$(sed -n 's/^ROOT_DATA_DIR=//p' "$envf" | tail -1)
   compose="$SNAP_HOME/deploy/docker-compose.yml"
+  # A second install on the same machine runs under its own project name, so
+  # the stack to stop is the one this .env names. Installs written before that
+  # was recorded are the default one.
+  eproj=$(sed -n 's/^COMPOSE_PROJECT=//p' "$envf" | tail -1)
+  eproj=${eproj:-snaplicator}
 
   # The manager first, and only stopped: it reconciles what it finds, so a
   # live one would repair the install being taken apart. Its state volume
   # goes at the end, once nothing is left to write to it.
   info "stopping the manager..."
-  docker compose -f "$compose" -p snaplicator stop >/dev/null 2>&1 || true
+  docker compose -f "$compose" -p "$eproj" stop >/dev/null 2>&1 || true
 
   if [ -n "$ec" ] && [ -n "$esub" ] \
      && [ "$(docker inspect -f '{{.State.Running}}' "$ec" 2>/dev/null)" = "true" ]; then
@@ -465,8 +470,8 @@ discard_existing_install() {
   # Named volumes outlive `docker compose down`, and this one holds the
   # publication choice. Left behind, the new install silently adopts the old
   # install's answers to questions it was never asked.
-  docker compose -f "$compose" -p snaplicator down -v >/dev/null 2>&1 || true
-  docker volume rm snaplicator_snaplicator-state >/dev/null 2>&1 || true
+  docker compose -f "$compose" -p "$eproj" down -v >/dev/null 2>&1 || true
+  docker volume rm "${eproj}_snaplicator-state" >/dev/null 2>&1 || true
 
   info "discarded. building the new install..."
 }
@@ -1149,6 +1154,11 @@ ENV_FILE="$SNAP_HOME/deploy/.env"
 cat > "$ENV_FILE.new" <<EOF
 WEB_PORT=$WEB_PORT
 BACKEND_PORT=$BACKEND_PORT
+# Which compose project these containers belong to. Recorded because a
+# second install on the same machine passes PROJECT=, and anything that
+# later has to take this install apart cannot otherwise know which stack
+# is ours — it would tear down the other one's, or nothing at all.
+COMPOSE_PROJECT=$PROJECT
 ROOT_DATA_DIR=$ROOT_DATA_DIR
 MAIN_DATA_DIR=$MAIN_DATA_DIR
 CONTAINER_NAME=$CONTAINER_NAME
