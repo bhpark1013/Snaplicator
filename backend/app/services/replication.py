@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import re
 import subprocess
 from typing import Dict, Iterable, List, Optional
 from pathlib import Path
@@ -617,8 +619,33 @@ CAPTURE_LOG_TABLE = "_snaplicator_ddl_log"
 CAPTURE_LOG_PUBLICATION = "_snaplicator_ddl"
 
 
+AUTO_ADD_PREFIX = "_snaplicator_auto_add_"
+
+
 def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
+
+
+def auto_add_name(publication_name: str) -> str:
+    """The auto-add trigger's name for one publication.
+
+    Per publication rather than one for the server, because this is the only
+    part of capture that differs between installs: it names a publication and
+    is scoped to what that publication covers. A single fixed name meant the
+    last install to start owned it, and the other one's new tables quietly
+    stopped being added — no error, because from PostgreSQL's side nothing is
+    wrong.
+
+    Names are capped at 63 bytes, so a long publication name is truncated and
+    given a digest of the whole thing: two publications that share a prefix
+    must not share a trigger.
+    """
+    room = 63 - len(AUTO_ADD_PREFIX)
+    safe = re.sub(r"[^a-zA-Z0-9_]", "_", publication_name)
+    if len(safe) > room:
+        digest = hashlib.sha1(publication_name.encode()).hexdigest()[:8]
+        safe = safe[: room - 9] + "_" + digest
+    return AUTO_ADD_PREFIX + safe
 
 
 def _quote_literal(value: str) -> str:
@@ -656,9 +683,17 @@ def install_capture_triggers(
     `excluded` names tables that must not be added back. A table someone took
     out is not a table to re-add the next time it is recreated.
 
-    Creates the _snaplicator_ddl_log outbox table plus two event triggers:
-      _snaplicator_capture_ddl   ON ddl_command_end  (CREATE/ALTER, wide)
-      _snaplicator_capture_drop  ON sql_drop         (DROP)
+    Creates the _snaplicator_ddl_log outbox table plus three event triggers,
+    split by whether they depend on a publication:
+      _snaplicator_capture_ddl    ON ddl_command_end  (CREATE/ALTER, wide)
+      _snaplicator_capture_drop   ON sql_drop         (DROP)
+      _snaplicator_auto_add_<pub> ON ddl_command_end  (new tables -> pub)
+
+    The first two log DDL and name no publication, so every install writes
+    the same function and they are shared. The third names one and is scoped
+    to what it covers, so it is per publication — which is what lets a second
+    install attach to the same primary without taking the first one's
+    auto-add away. See auto_add_name().
 
     Capture is intentionally wide — scoping decisions happen at apply time.
     Only three capture-side guards exist:
@@ -670,10 +705,8 @@ def install_capture_triggers(
          entries (serial sequences, PK indexes) and double-firing commands
          (ALTER TABLE DROP COLUMN hits both triggers) collapse to one row
 
-    Replaces the legacy _snaplicator_auto_pub_add trigger; its behaviour
-    (auto ALTER PUBLICATION ADD TABLE on CREATE TABLE) is folded into the
-    capture trigger, scoped to schemas the publication already covers, and
-    skipped for FOR ALL TABLES publications.
+    Replaces the legacy _snaplicator_auto_pub_add trigger, which had one fixed
+    name for the whole server.
 
     Idempotent: safe to call repeatedly; existing log rows are preserved.
 
@@ -731,8 +764,6 @@ AS $fn$
 DECLARE
     q text := current_query();
     cmd record;
-    tbl record;
-    allt boolean;
 BEGIN
     -- Never logged: DCL noise, plus publication/subscription DDL —
     -- publisher-only infrastructure that must not replay on a subscriber
@@ -777,40 +808,59 @@ BEGIN
         END;
     END IF;
 
-    -- Legacy behaviour: auto-add new tables to the publication, scoped to
-    -- schemas the publication already covers (legacy hardcoded 'public';
-    -- membership-derived scope needs no config). Deliberately excluded
-    -- schemas stay out — e.g. FDW-managed etl tables, some without PKs:
-    -- publishing one breaks publisher-side UPDATE/DELETE. FOR ALL TABLES
-    -- publications include new tables automatically (and reject ALTER
-    -- PUBLICATION ADD TABLE), so skip in that case.
-    SELECT puballtables INTO allt
-      FROM pg_publication WHERE pubname = '{publication_name}';
-    IF allt IS FALSE THEN
-        FOR tbl IN
-            SELECT c.object_identity
-              FROM pg_event_trigger_ddl_commands() c
-             WHERE c.command_tag IN ('CREATE TABLE', 'CREATE TABLE AS',
-                                     'SELECT INTO')
-               AND c.object_type = 'table'
-               AND c.object_identity !~ '_snaplicator_'
-               AND {scope_clause}
-               AND {exclude_clause}
-        LOOP
-            BEGIN
-                EXECUTE format(
-                    'ALTER PUBLICATION {publication_name} ADD TABLE %s',
-                    tbl.object_identity);
-            EXCEPTION WHEN OTHERS THEN
-                RAISE WARNING 'snaplicator: auto pub add failed for %: %',
-                    tbl.object_identity, SQLERRM;
-            END;
-        END LOOP;
-    END IF;
 END;
 $fn$;
 """
     _run_publisher_sql(publisher_connstr, capture_fn_sql)
+
+    # Auto-add: the only part of capture that belongs to one install. It names
+    # a publication, and its scope is that publication's coverage — so it gets
+    # a name derived from the publication, and a second install on the same
+    # primary installs its own beside this one instead of over it.
+    #
+    # FOR ALL TABLES publications include new tables by themselves (and reject
+    # ALTER PUBLICATION ADD TABLE), so the body checks and skips.
+    #
+    # Excluded schemas stay out — e.g. FDW-managed etl tables, some without
+    # PKs: publishing one breaks publisher-side UPDATE/DELETE.
+    auto_add = auto_add_name(publication_name)
+    auto_add_fn_sql = f"""
+CREATE OR REPLACE FUNCTION {auto_add}()
+RETURNS event_trigger
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+    tbl record;
+    allt boolean;
+BEGIN
+    SELECT puballtables INTO allt
+      FROM pg_publication WHERE pubname = {_quote_literal(publication_name)};
+    IF allt IS NOT FALSE THEN
+        RETURN;
+    END IF;
+    FOR tbl IN
+        SELECT c.object_identity
+          FROM pg_event_trigger_ddl_commands() c
+         WHERE c.command_tag IN ('CREATE TABLE', 'CREATE TABLE AS',
+                                 'SELECT INTO')
+           AND c.object_type = 'table'
+           AND c.object_identity !~ '_snaplicator_'
+           AND {scope_clause}
+           AND {exclude_clause}
+    LOOP
+        BEGIN
+            EXECUTE format(
+                'ALTER PUBLICATION {_quote_ident(publication_name)} ADD TABLE %s',
+                tbl.object_identity);
+        EXCEPTION WHEN OTHERS THEN
+            RAISE WARNING 'snaplicator: auto pub add failed for %: %',
+                tbl.object_identity, SQLERRM;
+        END;
+    END LOOP;
+END;
+$fn$;
+"""
+    _run_publisher_sql(publisher_connstr, auto_add_fn_sql)
 
     drop_fn_sql = f"""
 CREATE OR REPLACE FUNCTION _snaplicator_capture_drop()
@@ -861,20 +911,40 @@ $fn$;
 """
     _run_publisher_sql(publisher_connstr, drop_fn_sql)
 
-    # DROP + CREATE so function references stay fresh; DDL on event triggers
-    # does not itself fire event triggers, so this cannot recurse.
-    triggers_sql = """
+    # The functions above are CREATE OR REPLACE, so an existing trigger already
+    # points at the new body and recreating it would buy nothing — while the
+    # gap between DROP and CREATE is a window where DDL goes uncaptured. With
+    # two installs reinstalling on their own schedules that window is somebody
+    # else's data loss, so the triggers are only made when they are missing.
+    # Disabled counts as missing: a trigger that does not fire is not capture.
+    triggers_sql = f"""
 DO $do$
 BEGIN
     DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;
-    DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
-    DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
-    CREATE EVENT TRIGGER _snaplicator_capture_ddl
-        ON ddl_command_end
-        EXECUTE FUNCTION _snaplicator_capture_ddl();
-    CREATE EVENT TRIGGER _snaplicator_capture_drop
-        ON sql_drop
-        EXECUTE FUNCTION _snaplicator_capture_drop();
+
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger
+                    WHERE evtname = '_snaplicator_capture_ddl' AND evtenabled <> 'D') THEN
+        DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
+        CREATE EVENT TRIGGER _snaplicator_capture_ddl
+            ON ddl_command_end
+            EXECUTE FUNCTION _snaplicator_capture_ddl();
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger
+                    WHERE evtname = '_snaplicator_capture_drop' AND evtenabled <> 'D') THEN
+        DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
+        CREATE EVENT TRIGGER _snaplicator_capture_drop
+            ON sql_drop
+            EXECUTE FUNCTION _snaplicator_capture_drop();
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger
+                    WHERE evtname = '{auto_add}' AND evtenabled <> 'D') THEN
+        DROP EVENT TRIGGER IF EXISTS {_quote_ident(auto_add)};
+        CREATE EVENT TRIGGER {_quote_ident(auto_add)}
+            ON ddl_command_end
+            EXECUTE FUNCTION {auto_add}();
+    END IF;
 END;
 $do$;
 """
@@ -884,38 +954,97 @@ $do$;
         "installed": True,
         "publication": publication_name,
         "log_table": CAPTURE_LOG_TABLE,
+        "auto_add_trigger": auto_add,
     }
 
 
-def verify_capture_installed(publisher_connstr: str) -> bool:
-    """Check that both capture event triggers exist on the publisher."""
-    sql = (
-        "SELECT count(*) FROM pg_event_trigger "
-        "WHERE evtname IN ('_snaplicator_capture_ddl', '_snaplicator_capture_drop');"
+def verify_capture_installed(
+    publisher_connstr: str, publication_name: Optional[str] = None
+) -> bool:
+    """Whether capture is in place — and, if asked, for this publication.
+
+    The two shared triggers say DDL is being logged. They say nothing about
+    whether new tables still join *this* publication, which is what the
+    per-publication trigger is for; naming the publication asks the whole
+    question.
+    """
+    names = ["_snaplicator_capture_ddl", "_snaplicator_capture_drop"]
+    if publication_name:
+        names.append(auto_add_name(publication_name))
+    listed = ", ".join(_quote_literal(n) for n in names)
+    out = _run_publisher_sql(
+        publisher_connstr,
+        f"SELECT count(*) FROM pg_event_trigger WHERE evtname IN ({listed});",
     )
-    out = _run_publisher_sql(publisher_connstr, sql)
-    return out.strip() == "2"
+    return out.strip() == str(len(names))
 
 
-def uninstall_capture_triggers(publisher_connstr: str, drop_log: bool = False) -> Dict:
+def uninstall_capture_triggers(
+    publisher_connstr: str,
+    publication_name: Optional[str] = None,
+    drop_log: bool = False,
+) -> Dict:
     """Take the capture triggers back off the publisher.
 
     The counterpart to install, and the thing a primary is owed: these are
     event triggers on somebody's production server, and leaving no way to
-    remove them means an install can only ever be added to. Removal covers the
-    legacy _snaplicator_auto_pub_add too, so a publisher that has seen both
-    versions comes away clean.
+    remove them means an install can only ever be added to.
+
+    Naming a publication removes that install's share and leaves the rest: its
+    auto-add trigger goes, and the two shared ones go only once no auto-add
+    trigger is left, because until then another install is still relying on
+    them for its DDL log. Naming nothing means take it all off, which is what
+    a single-install publisher wants and what the legacy call did.
 
     The log table is data — rows that may not have been applied yet — so it
     stays unless asked for, and the functions go with the triggers because
     nothing else calls them.
     """
-    _run_publisher_sql(publisher_connstr, """
+    if publication_name:
+        auto_add = auto_add_name(publication_name)
+        _run_publisher_sql(publisher_connstr, f"""
 DO $do$
+BEGIN
+    DROP EVENT TRIGGER IF EXISTS {_quote_ident(auto_add)};
+
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger
+                    WHERE evtname LIKE '{AUTO_ADD_PREFIX}%') THEN
+        DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;
+        DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
+        DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
+    END IF;
+END;
+$do$;
+DROP FUNCTION IF EXISTS {auto_add}();
+""")
+        # Only orphaned now — dropping a function an event trigger still
+        # executes would fail, which is exactly the guard we want.
+        _run_publisher_sql(publisher_connstr, """
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger
+                    WHERE evtname IN ('_snaplicator_capture_ddl',
+                                      '_snaplicator_capture_drop')) THEN
+        DROP FUNCTION IF EXISTS _snaplicator_capture_ddl();
+        DROP FUNCTION IF EXISTS _snaplicator_capture_drop();
+    END IF;
+END;
+$do$;
+""")
+    else:
+        _run_publisher_sql(publisher_connstr, f"""
+DO $do$
+DECLARE t record;
 BEGIN
     DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;
     DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
     DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
+    FOR t IN SELECT evtname FROM pg_event_trigger
+              WHERE evtname LIKE '{AUTO_ADD_PREFIX}%'
+    LOOP
+        EXECUTE format('DROP EVENT TRIGGER IF EXISTS %I', t.evtname);
+        EXECUTE format('DROP FUNCTION IF EXISTS %I()', t.evtname);
+    END LOOP;
 END;
 $do$;
 DROP FUNCTION IF EXISTS _snaplicator_auto_add_to_pub();

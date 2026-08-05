@@ -595,8 +595,11 @@ def get_trigger_status():
     """Check if the DDL capture event triggers are installed on the publisher."""
     try:
         connstr = _build_publisher_connstr()
-        installed = verify_capture_installed(connstr)
-        return {"installed": installed, "publication": _active_publication()}
+        pub_name = _active_publication()
+        # Asked of this publication: the shared triggers being there says DDL
+        # is logged, not that new tables still join ours.
+        installed = verify_capture_installed(connstr, pub_name)
+        return {"installed": installed, "publication": pub_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to check trigger status: {e}")
 

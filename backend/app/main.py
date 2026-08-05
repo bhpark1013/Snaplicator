@@ -96,7 +96,9 @@ async def ddl_sync_loop():
                 # Safety net: DDL capture triggers must exist on the publisher —
                 # a gap in capture is an unrecoverable hole in the DDL log.
                 try:
-                    trigger_ok = await asyncio.to_thread(verify_capture_installed, connstr)
+                    trigger_ok = await asyncio.to_thread(
+                        verify_capture_installed, connstr, pub_name,
+                    )
                     if not trigger_ok:
                         logger.warning("DDL capture triggers missing on publisher, reinstalling...")
                         await asyncio.to_thread(
