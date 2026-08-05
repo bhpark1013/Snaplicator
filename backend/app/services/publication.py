@@ -84,10 +84,12 @@ def may_rewrite(name: str) -> bool:
 def list_existing(publisher_connstr: str, include_internal: bool = False) -> List[Dict]:
     """Publications on the primary, with how much each covers.
 
-    Snaplicator's own DDL-log publication is left out. This list exists to ask
-    which publication belongs to someone else; offering the one this install
-    created for its own plumbing asks the reader to arbitrate between us and
-    us, and picking it would point the replica at a single log table.
+    A DDL-log publication left over from an older install is filtered out.
+    Nothing creates one any more — the log rides the data publication — but
+    installs that ran before that still have it on their primary, and this
+    list exists to ask which publication belongs to someone else. Offering
+    one that holds a single log table asks the reader to arbitrate between
+    us and us.
     """
     from .replication import CAPTURE_LOG_PUBLICATION
 

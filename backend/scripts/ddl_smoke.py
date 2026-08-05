@@ -92,14 +92,14 @@ def setup() -> None:
 	psql(SUB_PORT, "CREATE TABLE orders (id int PRIMARY KEY, item text, qty int NOT NULL);")
 	max_id = int(psql(PUB_PORT, "SELECT coalesce(max(id), 0) FROM _snaplicator_ddl_log;"))
 	install_ddl_apply(SUB_CONTAINER, USER, PASSWORD, DB, initial_watermark=max_id)
-	ensure_ddl_publication(connstr(PUB_PORT))
+	ensure_ddl_publication(connstr(PUB_PORT), PUBLICATION)
 
 	psql(
 		SUB_PORT,
 		f"CREATE SUBSCRIPTION {SUBSCRIPTION} "
 		f"CONNECTION 'host={PUB_CONTAINER} port=5432 dbname={DB} "
 		f"user={USER} password={PASSWORD}' "
-		f'PUBLICATION {PUBLICATION}, "{CAPTURE_LOG_PUBLICATION}";',
+		f"PUBLICATION {PUBLICATION};",
 	)
 	for _ in range(120):
 		if psql(SUB_PORT, "SELECT count(*) FROM pg_subscription_rel WHERE srsubstate IN ('r','s');") == "2":

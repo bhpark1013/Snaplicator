@@ -59,20 +59,20 @@ def _status():
 class TestInfra:
 	def test_apply_installed_and_log_published(self, pg_pair):
 		assert verify_ddl_apply_installed(E2E_SUB, PG_USER, PG_PASSWORD, PG_DB) is True
-		# The log rides its own publication, so that reading a publication
-		# this install does not own never means writing to it.
-		out = psql_conn(
-			pg_pair["pub"],
-			f"SELECT count(*) FROM pg_publication_tables "
-			f"WHERE pubname = '{CAPTURE_LOG_PUBLICATION}' AND tablename = '{LOG_TABLE}';",
-		)
-		assert out == "1"
+		# The log rides the data publication — one publication, and the
+		# subscription was never told a second name.
 		out = psql_conn(
 			pg_pair["pub"],
 			f"SELECT count(*) FROM pg_publication_tables "
 			f"WHERE pubname = '{PUBLICATION}' AND tablename = '{LOG_TABLE}';",
 		)
-		assert out == "0", "the data publication must not carry the log table"
+		assert out == "1", "the data publication carries the log table"
+		out = psql_conn(
+			pg_pair["pub"],
+			f"SELECT count(*) FROM pg_publication "
+			f"WHERE pubname = '{CAPTURE_LOG_PUBLICATION}';",
+		)
+		assert out == "0", "and nothing creates a second publication for it"
 
 	def test_pre_watermark_ddl_not_replayed(self, pg_pair):
 		"""Rows captured before the watermark arrive via initial COPY (they
@@ -98,8 +98,8 @@ class TestInfra:
 			pg_pair["pub"], PUBLICATION,
 			E2E_SUB, PG_USER, PG_PASSWORD, PG_DB, E2E_SUBSCRIPTION,
 		)
-		assert res["created"] is False, "the log publication is already there"
-		assert res["refreshed"] is False, "the subscription already names it"
+		assert res["added"] is False, "the log table is already in the publication"
+		assert res["refreshed"] is False, "so nothing has to be refreshed"
 
 
 class TestInStreamApply:

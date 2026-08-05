@@ -229,12 +229,11 @@ def pg_pair():
 
 	Mirrors the production shape: table-list publication, capture triggers on
 	the publisher (host-psql path), apply infra on the subscriber (docker-exec
-	path — same as _run_subscriber_sql in production), log table in the
-	publication, watermark initialised to the publisher's max(id) BEFORE the
-	subscription starts so pre-existing log rows are never replayed.
+	path — same as _run_subscriber_sql in production), log table joining that
+	same publication, watermark initialised to the publisher's max(id) BEFORE
+	it joins so pre-existing log rows are never replayed.
 	"""
 	from app.services.replication import (
-		CAPTURE_LOG_PUBLICATION,
 		ensure_ddl_publication,
 		install_capture_triggers,
 		install_ddl_apply,
@@ -270,15 +269,15 @@ def pg_pair():
 
 	max_id = int(psql_conn(pub, f"SELECT coalesce(max(id), 0) FROM {LOG_TABLE};"))
 	install_ddl_apply(E2E_SUB, PG_USER, PG_PASSWORD, PG_DB, initial_watermark=max_id)
-	ensure_ddl_publication(pub)
+	ensure_ddl_publication(pub, PUBLICATION)
 
-	# Two publications, as in production: the data one, plus the log's own.
+	# One publication, as in production: the log table joined it above.
 	psql_conn(
 		sub,
 		f"CREATE SUBSCRIPTION {E2E_SUBSCRIPTION} "
 		f"CONNECTION 'host={E2E_PUB} port=5432 dbname={PG_DB} "
 		f"user={PG_USER} password={PG_PASSWORD}' "
-		f'PUBLICATION {PUBLICATION}, "{CAPTURE_LOG_PUBLICATION}";',
+		f"PUBLICATION {PUBLICATION};",
 	)
 	# wait until initial sync of both tables (seed + ddl log) is done
 	wait_until(

@@ -50,10 +50,9 @@ def all_tables(publisher_connstr: str) -> List[str]:
         "SELECT table_schema || '.' || table_name FROM information_schema.tables "
         "WHERE table_type = 'BASE TABLE' "
         "AND table_schema NOT IN ('pg_catalog', 'information_schema') "
-        # Snaplicator's own outbox. It rides its own publication, so offering
-        # it here would let someone put it in the data publication as well —
-        # and take it out again, which is the one way to stop DDL replicating
-        # while every screen still says it is on.
+        # Snaplicator's own outbox. It is always in the publication and never
+        # a choice: offering it would let someone untick it, which is the one
+        # way to stop DDL replicating while every screen still says it is on.
         f"AND table_name <> '{CAPTURE_LOG_TABLE}';",
     )
     return sorted(l.strip() for l in out.splitlines() if l.strip())
@@ -110,7 +109,15 @@ def current_selection(publisher_connstr: str, publication_name: str) -> Dict:
         "SELECT schemaname || '.' || tablename FROM pg_publication_tables "
         f"WHERE pubname = {_quote_literal(publication_name)};",
     )
-    published_set = sorted({l.strip() for l in published.splitlines() if l.strip()})
+    # The log table is a member like any other now, and every reader below
+    # treats membership as "someone chose this": it would show up as a
+    # replicated table, and its schema would count as one that follows new
+    # tables. It is plumbing, so it is dropped here rather than explained
+    # everywhere downstream.
+    published_set = sorted(
+        t for t in {l.strip() for l in published.splitlines() if l.strip()}
+        if t != f"public.{CAPTURE_LOG_TABLE}"
+    )
 
     # Schema-level membership is the absence of a pg_publication_rel row for a
     # table that is nonetheless published — the same distinction the table list
@@ -210,16 +217,27 @@ def apply_selection(
         parts: List[str] = []
         if whole_schemas:
             parts.append("FOR TABLES IN SCHEMA " + ", ".join(_quote_ident(s) for s in whole_schemas))
-        if explicit:
+        # The DDL log rides this publication too, and the statement below is a
+        # DROP: whatever is not named here stops being replicated the moment
+        # it runs. Nobody would notice — rows keep arriving, only DDL stops —
+        # so it is named on every path rather than left to the caller, who
+        # cannot name it because all_tables() does not offer it.
+        #
+        # Except where a broader form already covers it: adding a table to a
+        # publication that publishes its whole schema is an error, not a
+        # no-op.
+        log_covered = "public" in whole_schemas
+        keep = list(explicit)
+        if not log_covered:
+            keep.append(f"public.{CAPTURE_LOG_TABLE}")
+        if keep:
             keyword = "TABLE" if parts else "FOR TABLE"
-            parts.append(f"{keyword} " + ", ".join(_quote_fqn(t) for t in explicit))
-        if not parts:
-            # Replicating nothing is a legal wish and an empty publication is
-            # how PostgreSQL spells it. Anything else would be inventing a
-            # meaning for "none".
-            body = ""
-        else:
-            body = ", ".join(parts) if len(parts) > 1 else parts[0]
+            parts.append(f"{keyword} " + ", ".join(_quote_fqn(t) for t in keep))
+        # Replicating nothing is still a legal wish, and it no longer means an
+        # empty publication: the log table is in it either way, so what the
+        # publication holds is the plumbing and none of the data. `count` in
+        # the result is what says nothing was chosen.
+        body = ", ".join(parts) if len(parts) > 1 else parts[0]
 
     # A publication that already exists and was not created here belongs to
     # someone else until a person says otherwise. Narrowing it is a DROP, so
