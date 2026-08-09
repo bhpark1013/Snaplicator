@@ -876,7 +876,7 @@ function PublicationChooser({
                     {busy ? 'Saving…' : 'Continue'}
                 </Button>
                 <span className="text-[12px] text-muted-foreground">
-                    Changeable later in Config.
+                    Changeable until the first copy starts.
                 </span>
             </div>
         </div>
@@ -1352,24 +1352,42 @@ export function ReplicationTables() {
                 />
             )}
 
-            {/* Said once, above the tables, because every control below it is
-                inert and a page of quietly dead buttons is worse than the
-                error it replaced. */}
-            {readOnlyPub && !reopenChooser && bootstrapped === false && (
+            {/* Which publication is in force, and the way back to that question.
+                Shown for any answer, not only the read-only one: the choice is
+                worth stating either way, and the reader who picked wrong needs
+                somewhere to go. Config says "changeable later" and has no such
+                control, so this is the only way back — until the first copy,
+                after which the question is no longer which publication to use
+                but whether to discard what was copied. */}
+            {pubs?.chosen && !reopenChooser && bootstrapped === false && (
                 <div className="rounded-xl border border-border bg-card px-5 py-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                         <span className="text-[13px]">
-                            <span className="font-mono">{info?.publication_name}</span> is used as it
-                            stands — <span className="text-muted-foreground">this install never rewrites it.</span>
+                            <span className="font-mono">{info?.publication_name}</span>
+                            {readOnlyPub ? (
+                                <>
+                                    {' '}is used as it stands —{' '}
+                                    <span className="text-muted-foreground">this install never rewrites it.</span>
+                                </>
+                            ) : (
+                                <>
+                                    {' '}is this install's —{' '}
+                                    <span className="text-muted-foreground">
+                                        what you pick below is written to it.
+                                    </span>
+                                </>
+                            )}
                         </span>
                         <Button size="sm" variant="ghost" onClick={() => setReopenChooser(true)}>
                             Choose differently
                         </Button>
                     </div>
-                    <p className="mt-1 text-[12.5px] text-muted-foreground">
-                        What it covers is what gets replicated. To pick tables yourself, take it over
-                        or create a new one.
-                    </p>
+                    {readOnlyPub && (
+                        <p className="mt-1 text-[12.5px] text-muted-foreground">
+                            What it covers is what gets replicated. To pick tables yourself, take it over
+                            or create a new one.
+                        </p>
+                    )}
                 </div>
             )}
 
