@@ -336,7 +336,10 @@ mac_existing_install() {
 }
 
 # Say what is here, then decide whether this run is about it or about
-# something new. Sets REUSE_EXISTING=1 when it is about what is already here.
+# something new: REUSE_EXISTING=1 to open it, NEW_INSTALL=1 to build another
+# one beside it. Nothing on this menu deletes anything — the two answers a
+# re-run can honestly offer are "the one you have" and "one more", and
+# discarding a copy is a separate, deliberate act (REPOINT=1).
 consider_existing_install() {
   found=$1
   [ -n "$found" ] || return 0
@@ -347,23 +350,32 @@ consider_existing_install() {
 
   echo >&2
   info "Snaplicator is already installed here." >&2
+  info "  path:    $SNAP_HOME" >&2
   info "  primary: $eh:$ep/$ed" >&2
   info "  replica: $es" >&2
 
-  # An answer on the command line is a decision already made.
-  if [ -n "$CONNSTR" ] || [ "$DEMO" = "1" ]; then return 0; fi
+  # Asking for somewhere new to point is not an answer to "which install" —
+  # it is what someone says when they want another one. Reading it as consent
+  # to reuse sent the URI nowhere; reading it as consent to discard would
+  # destroy a copy nobody mentioned.
+  if [ -n "$CONNSTR" ] || [ "$DEMO" = "1" ]; then
+    NEW_INSTALL=1
+    info "a target was given, so this is a new install — the one above stays." >&2
+    return 0
+  fi
 
   # Nobody to ask means the safe reading of "run the installer again" is
-  # "bring up what is installed", not "replace it with something else".
+  # "bring up what is installed". NEW_INSTALL=1 says otherwise in advance.
   if ! { : < /dev/tty; } 2>/dev/null; then
     REUSE_EXISTING=1
     info "no terminal to ask on — opening the install that is here" >&2
+    info "  (pass NEW_INSTALL=1 to add another one instead)" >&2
     return 0
   fi
 
   echo >&2
   echo "  1. open it (default)" >&2
-  echo "  2. start over against a different database — discards this copy" >&2
+  echo "  2. add a new install beside it — this one is left alone" >&2
   reply=""
   read -r -p "[snaplicator] 1 or 2: " reply < /dev/tty || reply=""
   apply_existing_choice "$reply"
@@ -373,16 +385,54 @@ consider_existing_install() {
 # exercised without a terminal to ask on — the tests have none.
 apply_existing_choice() {
   case "$1" in
-    # Choosing 2 IS the consent for the discard. Asking again later, after
-    # the URI has been typed, would be asking the same question twice; and
-    # answering 2 and then refusing — which is what this did — makes the
-    # menu a lie.
-    2) REPOINT=1
-       info "starting over: the replica, its clones and its snapshots will be removed." >&2 ;;
+    2) NEW_INSTALL=1 ;;
     # Anything else, including a bare Enter, is the default. An unrecognised
-    # answer must not read as consent to delete a copy.
+    # answer must land on the one that changes nothing.
     *) REUSE_EXISTING=1 ;;
   esac
+}
+
+# Where a new install goes when there is already one here.
+#
+# Everything that would otherwise be shared takes an index: the checkout and
+# the compose project (or the second install tears down the first one's
+# stack), the three published ports, the pool, the replica container and its
+# network — and the publication, because two installs sharing one share a
+# table list, and either narrowing it narrows the other's replica too.
+#
+# Values the caller pinned are left as they are: an explicit WEB_PORT= is an
+# instruction, not a coincidence to route around.
+apply_new_install_slot() {
+  n=2
+  while [ "$n" -lt 64 ]; do
+    home="/opt/snaplicator$n"; pool="/snaplicator$n"
+    web=$((8080 + n - 1)); back=$((8888 + n - 1)); hp=$((5433 + n - 1))
+    if [ ! -e "$home" ] && [ ! -e "$pool" ] \
+       && ! ss -ltn 2>/dev/null | grep -q ":$web " \
+       && ! ss -ltn 2>/dev/null | grep -q ":$back " \
+       && ! ss -ltn 2>/dev/null | grep -q ":$hp "; then
+      break
+    fi
+    n=$((n + 1))
+  done
+  [ "$n" -lt 64 ] || die "no free slot for another install — remove one, or pass SNAP_HOME=/path with its own ports"
+
+  pinned SNAP_HOME         || SNAP_HOME=$home
+  pinned ROOT_DATA_DIR     || ROOT_DATA_DIR=$pool
+  pinned PROJECT           || PROJECT="snaplicator$n"
+  pinned WEB_PORT          || WEB_PORT=$web
+  pinned BACKEND_PORT      || BACKEND_PORT=$back
+  pinned HOST_PORT         || HOST_PORT=$hp
+  pinned CONTAINER_NAME    || CONTAINER_NAME="snaplicator${n}_replica"
+  pinned NETWORK_NAME      || NETWORK_NAME="snaplicator$n"
+  pinned PUBLICATION_NAME  || PUBLICATION_NAME="snaplicator_publication$n"
+  pinned SUBSCRIPTION_NAME || SUBSCRIPTION_NAME="snaplicator_subscription$n"
+
+  echo >&2
+  info "adding a new install:" >&2
+  info "  path:        $SNAP_HOME   (pool $ROOT_DATA_DIR)" >&2
+  info "  ports:       UI $WEB_PORT, api $BACKEND_PORT, replica $HOST_PORT" >&2
+  info "  publication: $PUBLICATION_NAME" >&2
 }
 
 # A replica holds a copy of one database. Pointing the configuration at a
@@ -486,6 +536,7 @@ discard_existing_install() {
 DEMO=0
 CONNSTR="${CONNSTR:-}"
 REUSE_EXISTING="${REUSE_EXISTING:-0}"
+NEW_INSTALL="${NEW_INSTALL:-0}"
 REPOINT="${REPOINT:-0}"
 for a in "$@"; do
   case "$a" in
@@ -496,6 +547,18 @@ for a in "$@"; do
     *) CONNSTR="$a" ;;
   esac
 done
+
+# What the caller pinned, recorded before the defaults below fill the rest
+# in — after that the two are indistinguishable. A second install picks its
+# own path, ports and names, and must not pick over a value someone chose.
+PINNED=""
+for v in SNAP_HOME PROJECT ROOT_DATA_DIR WEB_PORT BACKEND_PORT HOST_PORT \
+         CONTAINER_NAME NETWORK_NAME PUBLICATION_NAME SUBSCRIPTION_NAME; do
+  eval "[ -n \"\${$v:-}\" ]" && PINNED="$PINNED $v"
+done
+pinned() {
+  case " $PINNED " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
 
 # ── defaults (override with VAR=VALUE arguments) ─────────────────────
 : "${SNAP_HOME:=/opt/snaplicator}"
@@ -683,7 +746,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "$TTY_SAVED" ]; then
       trap 'stty "$TTY_SAVED" < /dev/tty 2>/dev/null || true' EXIT INT TERM
     fi
-    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" REPOINT="$REPOINT" bash -c "$FAR_CMD" < /dev/tty || RC=$?
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" NEW_INSTALL="$NEW_INSTALL" REPOINT="$REPOINT" bash -c "$FAR_CMD" < /dev/tty || RC=$?
     if [ -n "$TTY_SAVED" ]; then
       stty "$TTY_SAVED" < /dev/tty 2>/dev/null || true
       trap - EXIT INT TERM
@@ -691,7 +754,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
   else
     # No terminal here means orb allocates none there either, so the far side
     # sees no /dev/tty and takes its own recommendation.
-    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" REPOINT="$REPOINT" bash -c "$FAR_CMD" < /dev/null || RC=$?
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" NEW_INSTALL="$NEW_INSTALL" REPOINT="$REPOINT" bash -c "$FAR_CMD" < /dev/null || RC=$?
   fi
   if [ "$RC" != "0" ]; then
     echo >&2
@@ -751,7 +814,13 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' \
 
 # The handoff from macOS already asked, and says so through the environment.
 # A run started in here has not, so it asks now.
-[ "$REUSE_EXISTING" = "1" ] || consider_existing_install "$(existing_install || true)"
+[ "$REUSE_EXISTING" = "1" ] || [ "$NEW_INSTALL" = "1" ] \
+  || consider_existing_install "$(existing_install || true)"
+# Before anything reads SNAP_HOME: the checkout, the .env and the port survey
+# all belong to whichever install this run turns out to be. An `if`, not a
+# `&&` — under `set -e` a false test at statement level ends the script, and
+# the false case here is the ordinary one.
+if [ "$NEW_INSTALL" = "1" ]; then apply_new_install_slot; fi
 [ "$REUSE_EXISTING" = "1" ] || ask_target
 # Only knowable once the target is: the demo answer arrives at the prompt, not
 # only as a flag. 1 = subscribe before finishing, 0 = leave it to the UI (§7).

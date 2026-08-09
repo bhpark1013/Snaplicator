@@ -13,6 +13,8 @@ die()  { printf '[snaplicator] ERROR: %s\n' "$*" >&2; exit 1; }
 eval "$(awk '/^consider_existing_install\(\) \{/,/^\}/' "$SRC")"
 eval "$(awk '/^apply_existing_choice\(\) \{/,/^\}/' "$SRC")"
 eval "$(awk '/^repoint_decision\(\) \{/,/^\}/' "$SRC")"
+eval "$(awk '/^apply_new_install_slot\(\) \{/,/^\}/' "$SRC")"
+eval "$(awk '/^pinned\(\) \{/,/^\}/' "$SRC")"
 
 pass=0; fail=0
 check() { # desc, expected, actual
@@ -20,28 +22,30 @@ check() { # desc, expected, actual
   else fail=$((fail+1)); printf '  FAIL %s\n    expected [%s]\n    got      [%s]\n' "$1" "$2" "$3"; fi
 }
 
-echo "### nothing installed -> the question is still a question"
-CONNSTR=""; DEMO=0; REUSE_EXISTING=0
+SNAP_HOME=/opt/snaplicator
+
+echo "### nothing installed -> no question, and nothing to answer"
+CONNSTR=""; DEMO=0; REUSE_EXISTING=0; NEW_INSTALL=0
 consider_existing_install "" 2>/dev/null
-check "no probe result leaves REUSE_EXISTING alone" 0 "$REUSE_EXISTING"
+check "an empty machine installs straight away" "0 0" "$REUSE_EXISTING $NEW_INSTALL"
 
 echo
 echo "### installed, no terminal -> re-running means 'open what is here'"
-CONNSTR=""; DEMO=0; REUSE_EXISTING=0
+CONNSTR=""; DEMO=0; REUSE_EXISTING=0; NEW_INSTALL=0
 consider_existing_install "old.example.com|5432|prod|u|running" < /dev/null 2>/dev/null
-check "reuses instead of asking" 1 "$REUSE_EXISTING"
+check "opens it rather than guessing" "1 0" "$REUSE_EXISTING $NEW_INSTALL"
 
 echo
-echo "### installed, but a URI was given on the command line"
-CONNSTR="postgres://u:p@new.example.com:5432/other"; DEMO=0; REUSE_EXISTING=0
+echo "### installed, but a target was given on the command line"
+CONNSTR="postgres://u:p@new.example.com:5432/other"; DEMO=0; REUSE_EXISTING=0; NEW_INSTALL=0
 consider_existing_install "old.example.com|5432|prod|u|running" < /dev/null 2>/dev/null
-check "an answer already given is not overridden" 0 "$REUSE_EXISTING"
+check "somewhere new to point means a new install" "0 1" "$REUSE_EXISTING $NEW_INSTALL"
 
 echo
 echo "### installed, --demo asked for"
-CONNSTR=""; DEMO=1; REUSE_EXISTING=0
+CONNSTR=""; DEMO=1; REUSE_EXISTING=0; NEW_INSTALL=0
 consider_existing_install "old.example.com|5432|prod|u|running" < /dev/null 2>/dev/null
-check "demo is a decision too" 0 "$REUSE_EXISTING"
+check "demo is a target too" "0 1" "$REUSE_EXISTING $NEW_INSTALL"
 
 echo
 echo "### what it prints"
@@ -57,13 +61,14 @@ check "and the replica's state" yes "$r"
 echo
 echo "### what the menu's answer means"
 for reply in "" 1 y junk; do
-  REUSE_EXISTING=0; REPOINT=0
+  REUSE_EXISTING=0; NEW_INSTALL=0; REPOINT=0
   apply_existing_choice "$reply" 2>/dev/null
-  check "'$reply' opens what is here"      "1 0" "$REUSE_EXISTING $REPOINT"
+  check "'$reply' opens what is here"    "1 0" "$REUSE_EXISTING $NEW_INSTALL"
 done
-REUSE_EXISTING=0; REPOINT=0
+REUSE_EXISTING=0; NEW_INSTALL=0; REPOINT=0
 apply_existing_choice 2 2>/dev/null
-check "'2' starts over, and says so once" "0 1" "$REUSE_EXISTING $REPOINT"
+check "'2' adds a new one"               "0 1" "$REUSE_EXISTING $NEW_INSTALL"
+check "and nothing on the menu discards" 0 "$REPOINT"
 
 echo
 echo "### and then: open it, take it apart, or refuse"
@@ -85,6 +90,32 @@ check "a removed replica contradicts nothing" \
 check "a stopped one still holds a copy" \
   refuse "$(repoint_decision "h|5432|d|u|exited" new.example.com 5432 other 0)"
 check "nothing installed" ok "$(repoint_decision "" new.example.com 5432 other 0)"
+
+echo
+echo "### where a new install goes"
+PINNED=""; SNAP_HOME=""; ROOT_DATA_DIR=""; PROJECT=""; WEB_PORT=""; BACKEND_PORT=""
+HOST_PORT=""; CONTAINER_NAME=""; NETWORK_NAME=""; PUBLICATION_NAME=""; SUBSCRIPTION_NAME=""
+apply_new_install_slot 2>/dev/null
+N=${SNAP_HOME#/opt/snaplicator}
+check "picks a free indexed path"  "/opt/snaplicator$N" "$SNAP_HOME"
+check "pool matches the index"     "/snaplicator$N"     "$ROOT_DATA_DIR"
+check "compose project too"        "snaplicator$N"      "$PROJECT"
+check "ports are offset by it"     "$((8080 + N - 1)) $((8888 + N - 1)) $((5433 + N - 1))" \
+                                   "$WEB_PORT $BACKEND_PORT $HOST_PORT"
+check "its own replica container"  "snaplicator${N}_replica" "$CONTAINER_NAME"
+# Sharing one publication means sharing one table list: either install
+# narrowing it narrows the other's replica.
+check "and its own publication"    "snaplicator_publication$N" "$PUBLICATION_NAME"
+
+echo
+echo "### a value the caller pinned survives the slot"
+PINNED=" WEB_PORT PUBLICATION_NAME "; SNAP_HOME=""; ROOT_DATA_DIR=""; PROJECT=""
+WEB_PORT=9999; BACKEND_PORT=""; HOST_PORT=""; CONTAINER_NAME=""; NETWORK_NAME=""
+PUBLICATION_NAME="mine"; SUBSCRIPTION_NAME=""
+apply_new_install_slot 2>/dev/null
+check "an explicit port is kept"        9999   "$WEB_PORT"
+check "an explicit publication is kept" mine   "$PUBLICATION_NAME"
+check "the rest is still filled in"     "/opt/snaplicator${SNAP_HOME#/opt/snaplicator}" "$SNAP_HOME"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
