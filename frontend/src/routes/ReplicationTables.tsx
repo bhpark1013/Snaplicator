@@ -1510,7 +1510,12 @@ export function ReplicationTables() {
                 587 tables is 25 screens: a search box at the top of them is a
                 search box nobody scrolled back up to find, and a reader three
                 screens down has no evidence the page can be searched at all. */}
-            <div className="sticky top-0 z-10 -mx-6 mt-4 border-b border-border/60 bg-background/95 px-6 py-2 backdrop-blur">
+            {/* Content width, not bled to the gutters. The wrapper's 24px
+                padding holds nothing — every block on this page starts and
+                ends where the cards do — so a full-bleed background bought no
+                coverage and cost the one thing a pinned bar cannot afford:
+                being the only element on the page with different edges. */}
+            <div className="sticky top-0 z-10 mt-4 border-b border-border/60 bg-background/95 py-2 backdrop-blur">
                 <div className="flex flex-wrap items-center gap-2">
                     <div className="relative max-w-96 flex-1">
                         <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
