@@ -623,7 +623,17 @@ const gib = (n: number | null) =>
 
 type PubMode = 'reuse' | 'adopt' | 'create'
 
-/** One of the three answers, with whatever it needs asked underneath it.
+/** The question the reader actually arrives with: this primary's, or mine?
+ *
+ * Whether an existing publication is read as it stands or taken over matters
+ * enormously — one is harmless, the other can cut off another replica — but it
+ * is not the first thing anyone wants to decide, and putting all three answers
+ * on one level made the page ask about consequences before it had established
+ * the subject. Same split the installer offers: open what is here, or add
+ * something of your own. */
+type PubBranch = 'existing' | 'new'
+
+/** One of the answers, with whatever it needs asked underneath it.
  *
  * Declared here rather than inside the chooser because a component defined in
  * another component's body is a new type on every render, and React replaces
@@ -634,7 +644,7 @@ type PubMode = 'reuse' | 'adopt' | 'create'
  * The label covers the radio and its text and stops there. A click anywhere
  * in a label is forwarded to its control, so a field inside one would hand
  * its clicks to the radio instead of taking the caret. */
-function ChoiceCard({
+function ChoiceCard<T extends string>({
     value,
     mode,
     setMode,
@@ -643,9 +653,9 @@ function ChoiceCard({
     tone,
     children,
 }: {
-    value: PubMode
-    mode: PubMode
-    setMode: (m: PubMode) => void
+    value: T
+    mode: T
+    setMode: (m: T) => void
     title: string
     desc: string
     tone?: 'warn'
@@ -678,13 +688,56 @@ function ChoiceCard({
     )
 }
 
+/** The as-it-stands / take-it-over question, asked only once a publication is picked.
+ *
+ * Nested rather than promoted: it is a question about one publication, and
+ * there is nothing to ask until the reader has said which. */
+function SubChoice({
+    checked,
+    onSelect,
+    title,
+    desc,
+    tone,
+}: {
+    checked: boolean
+    onSelect: () => void
+    title: string
+    desc: string
+    tone?: 'warn'
+}) {
+    return (
+        <label
+            className={cn(
+                'flex cursor-pointer items-start gap-2.5 rounded-md border px-2.5 py-2 transition-colors',
+                checked ? 'border-primary/50 bg-background' : 'border-transparent hover:border-border/70',
+            )}
+        >
+            <input type="radio" className="mt-0.5" checked={checked} onChange={onSelect} />
+            <span className="min-w-0 flex-1">
+                <span className="block text-[12.5px] font-medium">
+                    {title}
+                    {tone === 'warn' && (
+                        <Badge variant="warning" className="ml-2 text-[10.5px]">
+                            affects other subscribers
+                        </Badge>
+                    )}
+                </span>
+                <span className="mt-0.5 block text-[12px] leading-relaxed text-muted-foreground">{desc}</span>
+            </span>
+        </label>
+    )
+}
+
 /** Which publication this replica speaks for — asked once, before anything is narrowed.
  *
  * The primary may already carry publications that have nothing to do with this
  * install. Narrowing one means dropping and recreating it, so adopting the
  * wrong one does not misconfigure this replica; it cuts off whoever was using
- * that publication. Hence three answers rather than a yes/no: read one as it
- * stands, take one over, or start a new one. */
+ * that publication.
+ *
+ * Two answers at the top — use one of these, or make one of mine — with the
+ * dangerous half of the first one asked underneath it, once there is a
+ * publication for the question to be about. */
 function PublicationChooser({
     base,
     rows,
@@ -696,7 +749,12 @@ function PublicationChooser({
     suggested: string | null
     onChosen: () => void
 }) {
-    const [mode, setMode] = useState<PubMode>(rows.length ? 'reuse' : 'create')
+    const [branch, setBranch] = useState<PubBranch>(rows.length ? 'existing' : 'new')
+    // Which of the two things "use an existing one" can mean. Kept separate
+    // from the branch so that leaving and returning to it does not silently
+    // re-arm a takeover the reader had already declined.
+    const [takeOver, setTakeOver] = useState(false)
+    const mode: PubMode = branch === 'new' ? 'create' : takeOver ? 'adopt' : 'reuse'
     const [picked, setPicked] = useState<string>(rows[0]?.name || '')
     // Filled in with a name nothing on the primary is using — the proposed one,
     // or the next _v2/_v3 after it. Still editable: it is a starting point, not
@@ -756,52 +814,45 @@ function PublicationChooser({
 
             <div className="mt-4 grid gap-2">
                 {rows.length > 0 && (
-                    <>
-                        <ChoiceCard
-                            value="reuse"
-                            mode={mode}
-                            setMode={setMode}
-                            title="Use one as it stands"
-                            desc="Replicate what it covers. Never rewritten by this install."
+                    <ChoiceCard
+                        value="existing"
+                        mode={branch}
+                        setMode={setBranch}
+                        title="Use one that is already here"
+                        desc={`${rows.length} on this primary. Pick which, then how.`}
+                    >
+                        <select
+                            className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12.5px]"
+                            value={picked}
+                            onChange={(e) => setPicked(e.target.value)}
                         >
-                            <select
-                                className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12.5px]"
-                                value={picked}
-                                onChange={(e) => setPicked(e.target.value)}
-                            >
-                                {rows.map((r) => (
-                                    <option key={r.name} value={r.name}>
-                                        {r.name} — {r.all_tables ? 'all tables' : `${r.table_count} tables`}
-                                    </option>
-                                ))}
-                            </select>
-                        </ChoiceCard>
-                        <ChoiceCard
-                            value="adopt"
-                            mode={mode}
-                            setMode={setMode}
-                            title="Take one over"
-                            tone="warn"
-                            desc="This install may change what it covers — including for any other replica using it."
-                        >
-                            <select
-                                className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12.5px]"
-                                value={picked}
-                                onChange={(e) => setPicked(e.target.value)}
-                            >
-                                {rows.map((r) => (
-                                    <option key={r.name} value={r.name}>
-                                        {r.name} — {r.all_tables ? 'all tables' : `${r.table_count} tables`}
-                                    </option>
-                                ))}
-                            </select>
-                        </ChoiceCard>
-                    </>
+                            {rows.map((r) => (
+                                <option key={r.name} value={r.name}>
+                                    {r.name} — {r.all_tables ? 'all tables' : `${r.table_count} tables`}
+                                </option>
+                            ))}
+                        </select>
+                        <div className="mt-2 grid gap-1 rounded-md bg-muted/40 p-1">
+                            <SubChoice
+                                checked={!takeOver}
+                                onSelect={() => setTakeOver(false)}
+                                title="As it stands"
+                                desc="Replicate what it covers. Never rewritten by this install."
+                            />
+                            <SubChoice
+                                checked={takeOver}
+                                onSelect={() => setTakeOver(true)}
+                                tone="warn"
+                                title="Take it over"
+                                desc="This install may change what it covers — including for any other replica using it."
+                            />
+                        </div>
+                    </ChoiceCard>
                 )}
                 <ChoiceCard
-                    value="create"
-                    mode={mode}
-                    setMode={setMode}
+                    value="new"
+                    mode={branch}
+                    setMode={setBranch}
                     title="Create a new one"
                     desc="Starts empty, filled from what you pick next. Existing publications untouched."
                 >
