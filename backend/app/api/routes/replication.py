@@ -82,7 +82,12 @@ def get_lag():
 def get_copy_progress():
     try:
         _require_subscriber_settings()
-        return get_initial_copy_progress(settings.container_name, settings.postgres_user, settings.postgres_db)
+        return get_initial_copy_progress(
+            settings.container_name,
+            settings.postgres_user,
+            settings.postgres_db,
+            publisher_connstr=settings.publisher_connstr or None,
+        )
     except HTTPException:
         raise
     except Exception as e:

@@ -22,6 +22,7 @@ interface TableInfo {
     pub_via: 'table' | 'schema' | null
     in_subscriber: boolean
     estimated_rows: number
+    size_bytes?: number
 }
 
 interface ConnInfo {
@@ -144,10 +145,23 @@ function fmtSync(e: any): { label: string; tone: 'ok' | 'warn' | 'err'; lines: s
 
 const TONE_VARIANT = { ok: 'success', warn: 'warning', err: 'destructive' } as const
 
+/** Row counts, with the unit attached.
+ *
+ * A bare "2.5M" beside a table in a database tool reads as megabytes to most
+ * people, and the column had no header to say otherwise. The suffix costs four
+ * characters and removes the only reading that is wrong. */
 function formatRows(n: number) {
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-    return String(n)
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M rows`
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K rows`
+    return `${n} rows`
+}
+
+function formatSize(n: number) {
+    if (!n) return '—'
+    if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(1)} GiB`
+    if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MiB`
+    if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(0)} KiB`
+    return `${n} B`
 }
 
 const MODE_LABEL: Record<TableMode, string> = {
@@ -1144,20 +1158,21 @@ export function ReplicationTables() {
         }
         return Array.from(map.entries())
             .map(([schema, items]) => {
-                let replicated = 0, fdwCount = 0, excluded = 0, rows = 0, changed = 0, missingOnSub = 0
+                let replicated = 0, fdwCount = 0, excluded = 0, rows = 0, bytes = 0, changed = 0, missingOnSub = 0
                 for (const t of items) {
                     const m = modeOf(t)
                     if (m === 'replicated') replicated++
                     else if (m === 'fdw') fdwCount++
                     else excluded++
                     rows += t.estimated_rows
+                    bytes += t.size_bytes || 0
                     if (m !== currentMode(t)) changed++
                     if (t.in_publication && !t.in_subscriber) missingOnSub++
                 }
                 return {
                     schema,
                     items: items.slice().sort((a, b) => a.table.localeCompare(b.table)),
-                    replicated, fdwCount, excluded, rows, changed, missingOnSub,
+                    replicated, fdwCount, excluded, rows, bytes, changed, missingOnSub,
                 }
             })
             .sort((a, b) => a.schema.localeCompare(b.schema))
@@ -1581,7 +1596,12 @@ export function ReplicationTables() {
                                     onChange={(m) => setMode(fqns, m)}
                                     onNeedsFdw={() => openLive(fqns)}
                                 />
-                                <span className="text-right font-mono text-xs text-muted-foreground">{formatRows(g.rows)}</span>
+                                <span className="w-[7.5rem] shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                                    <span className="text-foreground/70">{formatSize(g.bytes)}</span>
+                                    <span className="block text-[10.5px] leading-tight text-muted-foreground/70">
+                                        {formatRows(g.rows)}
+                                    </span>
+                                </span>
                             </div>
 
                             {/* One guide line, drawn beside the children rather
@@ -1623,7 +1643,12 @@ export function ReplicationTables() {
                                                     onChange={(next) => setMode([fqn], next)}
                                                     onNeedsFdw={() => openLive([fqn])}
                                                 />
-                                                <span className="text-right font-mono text-xs text-muted-foreground">{formatRows(t.estimated_rows)}</span>
+                                                <span className="w-[7.5rem] shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                                                    <span className="text-foreground/70">{formatSize(t.size_bytes || 0)}</span>
+                                                    <span className="block text-[10.5px] leading-tight text-muted-foreground/70">
+                                                        {formatRows(t.estimated_rows)}
+                                                    </span>
+                                                </span>
                                             </div>
                                         )
                                     })}

@@ -21,6 +21,7 @@ interface CopyProgress {
     finished_tables: number
     percent: number
     active?: { schema: string; table: string; bytes_processed: number; bytes_total: number; percent: number | null }[] | null
+    expected_bytes?: number | null
     details?: { state: string; schema: string; table: string; size_bytes?: number }[] | null
 }
 
@@ -194,9 +195,22 @@ export function BootstrapGate({
 
     // Bytes landed against bytes expected, so a run made of one large table
     // and twenty small ones does not sit at "1 of 21" for most of its life.
+    //
+    // The denominator comes from the primary; without it there is nothing to
+    // weigh bytes against and the bar falls back to counting tables, which is
+    // the honest version of not knowing rather than a guess dressed as
+    // progress. Clamped at 100: the replica rebuilds indexes instead of
+    // copying them, so the total is commonly passed before the last table is.
     const bytesDone = details.reduce((n, d) => n + (PHASE_OF[d.state] === 'done' ? (d.size_bytes || 0) : 0), 0)
     const bytesMoving = (copy?.active || []).reduce((n, a) => n + a.bytes_processed, 0)
-    const pctOf = (n: number) => (details.length ? (n / details.length) * 100 : 0)
+    const expected = copy?.expected_bytes || 0
+    const clamp = (n: number) => Math.max(0, Math.min(100, n))
+    const doneWidth = expected
+        ? clamp((bytesDone / expected) * 100)
+        : clamp(details.length ? (groups.done.length / details.length) * 100 : 0)
+    const movingWidth = expected
+        ? Math.min(clamp((bytesMoving / expected) * 100), 100 - doneWidth)
+        : clamp(details.length ? (groups.copying.length / details.length) * 100 : 0)
 
     const busy = status.state === 'running' || copying
 
@@ -226,11 +240,11 @@ export function BootstrapGate({
                             <div className="mt-3 flex h-2 overflow-hidden rounded-full bg-secondary">
                                 <div
                                     className="bg-success transition-[width] duration-500"
-                                    style={{ width: `${pctOf(groups.done.length)}%` }}
+                                    style={{ width: `${doneWidth}%` }}
                                 />
                                 <div
                                     className="animate-pulse bg-info transition-[width] duration-500"
-                                    style={{ width: `${pctOf(groups.copying.length)}%` }}
+                                    style={{ width: `${movingWidth}%` }}
                                 />
                             </div>
 
@@ -239,8 +253,16 @@ export function BootstrapGate({
                                 <span className="text-info">⟳ {groups.copying.length} copying</span>
                                 <span className="text-muted-foreground">· {groups.waiting.length} to go</span>
                                 {bytesDone + bytesMoving > 0 && (
-                                    <span className="ml-auto font-mono text-muted-foreground">
-                                        {fmtBytes(bytesDone + bytesMoving)} copied
+                                    <span
+                                        className="ml-auto font-mono tabular-nums text-muted-foreground"
+                                        title={
+                                            expected
+                                                ? 'Measured on the primary, including indexes and TOAST. The replica rebuilds indexes and carries no bloat, so the same rows usually land smaller — the total is often reached early.'
+                                                : undefined
+                                        }
+                                    >
+                                        {fmtBytes(bytesDone + bytesMoving)}
+                                        {expected ? ` of ~${fmtBytes(expected)}` : ''} copied
                                     </span>
                                 )}
                             </div>

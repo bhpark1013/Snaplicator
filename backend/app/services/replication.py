@@ -49,7 +49,12 @@ def get_replication_lag_seconds(container_name: str, postgres_user: str, postgre
 	}
 
 
-def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_db: str) -> Dict:
+def get_initial_copy_progress(
+	container_name: str,
+	postgres_user: str,
+	postgres_db: str,
+	publisher_connstr: str | None = None,
+) -> Dict:
 	"""Report initial logical replication copy progress on the subscriber.
 
 	Heuristic:
@@ -57,6 +62,13 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 	- finished_tables = count rows with srsubstate in ('r','s')
 	- status: 'idle' if total=0; 'copying' if finished<total; 'complete' otherwise
 	- active copy details from pg_subscription_rel (states not 'r') and, if available, pg_stat_progress_copy
+
+	`publisher_connstr` buys the denominator. Everything else here is measured
+	on the subscriber, which can only report what has already landed: a table
+	that has not started copying is zero bytes there, so summing the subscriber
+	gives "how much so far" and can never give "out of how much". The size the
+	copy is heading towards is a fact about the primary, and only the primary
+	can be asked for it.
 	"""
 	# Summary counts
 	summary_sql = (
@@ -162,6 +174,41 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 	except subprocess.CalledProcessError:
 		pass
 
+	# What the copy is heading towards, asked of the primary.
+	#
+	# Only for the tables actually in the copy set: a publication covering a
+	# tenth of the database would otherwise be measured against the whole of
+	# it, and the bar would crawl to 10% and stop looking like it worked.
+	#
+	# pg_total_relation_size on both sides — heap, TOAST and indexes — because
+	# the numerator is the subscriber's pg_total_relation_size and comparing
+	# two different measures is worse than comparing one imperfectly. It is
+	# imperfect: the subscriber rebuilds indexes rather than copying them and
+	# carries none of the primary's bloat, so the same rows commonly land
+	# smaller. Expect the total to be reached early rather than late.
+	expected_bytes: int | None = None
+	if publisher_connstr and details:
+		wanted = {(d["schema"], d["table"]) for d in details}
+		try:
+			rows = _run_publisher_sql(
+				publisher_connstr,
+				"SELECT n.nspname, c.relname, pg_total_relation_size(c.oid)::text "
+				"FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+				"WHERE c.relkind IN ('r','p') "
+				"AND n.nspname NOT IN ('pg_catalog','information_schema');",
+			)
+			acc = 0
+			for ln in rows.splitlines():
+				parts = ln.strip().split(",")
+				if len(parts) >= 3 and (parts[0], parts[1]) in wanted:
+					try:
+						acc += int(parts[2])
+					except ValueError:
+						pass
+			expected_bytes = acc or None
+		except Exception:
+			expected_bytes = None
+
 	status = "idle" if total == 0 else ("copying" if done < total else "complete")
 	percent = (done / total * 100.0) if total > 0 else 0.0
 	return {
@@ -169,6 +216,7 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 		"total_tables": total,
 		"finished_tables": done,
 		"percent": percent,
+		"expected_bytes": expected_bytes,
 		"active": active if active else None,
 		"details": details if details else None,
 	}
@@ -271,10 +319,19 @@ def list_replication_tables(
 ) -> List[Dict]:
     """List all public tables from publisher with publication/subscriber status and estimated rows."""
 
-    # 1) All public tables + estimated row count from publisher
+    # 1) All public tables + estimated row count and size from publisher
+    #
+    # Rows and bytes answer different questions and neither substitutes for
+    # the other: 40 million narrow rows and 400 thousand rows of JSON are not
+    # comparable by count, and the copy is paid for in bytes while the screen
+    # was only ever showing counts. Both, labelled, or the reader supplies the
+    # missing unit themselves — and reads 2.5M as megabytes.
     all_tables_sql = (
-        "SELECT t.table_schema, t.table_name, COALESCE(s.n_live_tup, 0)::text "
+        "SELECT t.table_schema, t.table_name, COALESCE(s.n_live_tup, 0)::text, "
+        "COALESCE(pg_total_relation_size(c.oid), 0)::text "
         "FROM information_schema.tables t "
+        "LEFT JOIN pg_namespace n ON n.nspname = t.table_schema "
+        "LEFT JOIN pg_class c ON c.relname = t.table_name AND c.relnamespace = n.oid "
         "LEFT JOIN pg_stat_user_tables s ON s.schemaname = t.table_schema AND s.relname = t.table_name "
         "WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema') AND t.table_type = 'BASE TABLE' "
         # Snaplicator's own outbox rides its own publication; showing it as a
@@ -343,6 +400,10 @@ def list_replication_tables(
         schema = parts[0]
         table = parts[1]
         estimated_rows = int(parts[2]) if parts[2] else 0
+        try:
+            size_bytes = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+        except ValueError:
+            size_bytes = 0
         fqn = f"{schema}.{table}"
         in_pub = fqn in pub_set
         result.append({
@@ -352,6 +413,7 @@ def list_replication_tables(
             "pub_via": ("table" if fqn in indiv_set else "schema") if in_pub else None,
             "in_subscriber": fqn in sub_set,
             "estimated_rows": estimated_rows,
+            "size_bytes": size_bytes,
         })
 
     return result
