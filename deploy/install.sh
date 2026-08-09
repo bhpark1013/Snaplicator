@@ -42,6 +42,11 @@ info() { printf '\033[1;32m[snaplicator]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[snaplicator] WARNING:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[snaplicator] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Written by the run that does the installing, read by the one that handed off
+# to it. /tmp rather than the install directory: which install directory is
+# precisely what the reader does not know yet.
+LANDED_FILE=/tmp/snaplicator-landed
+
 # Ask the publisher the question that decides whether this install can finish,
 # and ask it before anything has been built. The answer used to arrive at the
 # publication step — after a machine had been created, 150 MB of packages
@@ -734,6 +739,11 @@ if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "$COPY_ERR" ]; then printf '%s\n' "$COPY_ERR" >&2; fi
     die "could not copy the installer into '$MACHINE'"
   fi
+  # A leftover from an earlier run would be read as this one's answer, and it
+  # is the answer to "which install did you just make" — the one question
+  # where a stale reply is worse than none.
+  orb -m "$MACHINE" -u root rm -f "$LANDED_FILE" >/dev/null 2>&1 || true
+
   FAR_CMD="bash /tmp/snaplicator-install.sh $FWD"
   # script(1) keeps a pty, so the far side still sees a terminal: its prompts
   # still find /dev/tty and its progress ticker still knows it has a reader.
@@ -766,10 +776,19 @@ if [ "$(uname -s)" = "Darwin" ]; then
 
   IP=$(orbctl list 2>/dev/null | awk -v m="$MACHINE" '$1 == m {print $NF}')
   case "$IP" in [0-9]*.[0-9]*.[0-9]*.[0-9]*) ;; *) IP="" ;; esac
-  # what the machine actually settled on, not what was asked for here
-  FAR_PORT=$(orb -m "$MACHINE" -u root sh -c \
-    "sed -n 's/^WEB_PORT=//p' '$SNAP_HOME/deploy/.env' 2>/dev/null | tail -1" 2>/dev/null)
+  # What the machine actually settled on, not what was asked for here. This
+  # side never learned that "2" meant /opt/snaplicator2 on 8081 — the slot is
+  # picked over there, against what is over there — so reading a path chosen
+  # here would answer with the install that was deliberately left alone.
+  LANDED=$(orb -m "$MACHINE" -u root cat "$LANDED_FILE" 2>/dev/null || true)
+  FAR_PORT=$(printf '%s\n' "$LANDED" | sed -n 's/^WEB_PORT=//p' | tail -1)
+  FAR_CONTAINER=$(printf '%s\n' "$LANDED" | sed -n 's/^CONTAINER_NAME=//p' | tail -1)
+  if [ -z "$FAR_PORT" ]; then
+    FAR_PORT=$(orb -m "$MACHINE" -u root sh -c \
+      "sed -n 's/^WEB_PORT=//p' '$SNAP_HOME/deploy/.env' 2>/dev/null | tail -1" 2>/dev/null)
+  fi
   case "$FAR_PORT" in ''|*[!0-9]*) FAR_PORT=$WEB_PORT ;; esac
+  [ -n "$FAR_CONTAINER" ] || FAR_CONTAINER=$CONTAINER_NAME
 
   echo
   info "this runs inside the Linux machine '$MACHINE', not on macOS directly:"
@@ -787,7 +806,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     # that cannot exist yet. Once the replica is up, home is the right page
     # again — so this asks the machine which of the two situations it is in.
     UI_URL="http://$IP:$FAR_PORT"
-    if ! orb -m "$MACHINE" -u root docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true; then
+    if ! orb -m "$MACHINE" -u root docker inspect -f '{{.State.Running}}' "$FAR_CONTAINER" 2>/dev/null | grep -q true; then
       UI_URL="$UI_URL/replication"
     fi
     if [ "${NO_BROWSER:-0}" = "1" ]; then
@@ -1279,6 +1298,19 @@ else
   [ -f "$ENV_FILE" ] && mv "$ENV_FILE" "$ENV_FILE.bak"
   mv "$ENV_FILE.new" "$ENV_FILE"
 fi
+
+# Where this run landed, for a caller that cannot see it.
+#
+# On macOS the outer copy of this script picks /opt/snaplicator and port 8080
+# before the Linux machine has been asked anything, then hands off to this
+# copy inside it — which is where "add a new install" is answered and where
+# /opt/snaplicator2 on 8081 is chosen. The outer copy is the one that opens
+# the browser at the end. Left to its own values it opens the install this run
+# was explicitly told to leave alone, which reads as the menu having ignored
+# the answer. So the far side states where it went, and the near side reads it.
+printf 'SNAP_HOME=%s\nWEB_PORT=%s\nCONTAINER_NAME=%s\nPROJECT=%s\n' \
+  "$SNAP_HOME" "$WEB_PORT" "$CONTAINER_NAME" "$PROJECT" \
+  > "$LANDED_FILE" 2>/dev/null || true
 
 info "starting the management plane (first build takes a few minutes)..."
 ( cd "$SNAP_HOME/deploy" && docker compose -p "$PROJECT" up -d --build )
