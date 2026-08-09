@@ -310,10 +310,16 @@ existing_install() {
 }
 
 # The same question from the Mac, where the install lives one machine away.
+# The install lives one machine away, so this asks over there — at the path
+# THIS run would use. A second install on the same machine is SNAP_HOME= and
+# nothing else, and probing the default path regardless would report the
+# first install to a run that has nothing to do with it: without a terminal
+# that reads as "open what is here", and with one it offers to discard a copy
+# the person never mentioned.
 mac_existing_install() {
   orbctl list 2>/dev/null | awk '{print $1}' | grep -qx "$MACHINE" || return 1
-  orb -m "$MACHINE" -u root sh -c '
-    envf=/opt/snaplicator/deploy/.env
+  orb -m "$MACHINE" -u root env SNAP_HOME="$SNAP_HOME" sh -c '
+    envf=$SNAP_HOME/deploy/.env
     [ -f "$envf" ] || exit 1
     eh=$(sed -n "s/^PRIMARY_HOST=//p" "$envf" | tail -1)
     [ -n "$eh" ] || exit 1
