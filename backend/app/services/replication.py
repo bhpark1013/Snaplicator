@@ -188,23 +188,24 @@ def get_initial_copy_progress(
 	# smaller. Expect the total to be reached early rather than late.
 	expected_bytes: int | None = None
 	if publisher_connstr and details:
-		wanted = {(d["schema"], d["table"]) for d in details}
+		# Named explicitly rather than filtered afterwards. This runs every
+		# three seconds for as long as the copy lasts, against a primary that
+		# is usually production and may hold hundreds of relations —
+		# pg_total_relation_size stats every fork of every one of them, and
+		# asking for 587 to keep 3 is a cost paid on someone's live database
+		# once per poll.
+		wanted = sorted({(d["schema"], d["table"]) for d in details})
 		try:
+			pairs = ", ".join(
+				f"({_quote_literal(s)}, {_quote_literal(t)})" for s, t in wanted
+			)
 			rows = _run_publisher_sql(
 				publisher_connstr,
-				"SELECT n.nspname, c.relname, pg_total_relation_size(c.oid)::text "
+				"SELECT COALESCE(sum(pg_total_relation_size(c.oid)), 0)::text "
 				"FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
-				"WHERE c.relkind IN ('r','p') "
-				"AND n.nspname NOT IN ('pg_catalog','information_schema');",
+				f"WHERE c.relkind IN ('r','p') AND (n.nspname, c.relname) IN ({pairs});",
 			)
-			acc = 0
-			for ln in rows.splitlines():
-				parts = ln.strip().split(",")
-				if len(parts) >= 3 and (parts[0], parts[1]) in wanted:
-					try:
-						acc += int(parts[2])
-					except ValueError:
-						pass
+			acc = int((rows.strip().splitlines() or ["0"])[0] or 0)
 			expected_bytes = acc or None
 		except Exception:
 			expected_bytes = None
