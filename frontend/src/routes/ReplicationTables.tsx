@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronDown, ChevronRight, Eye, EyeOff, Radio, Search } from 'lucide-react'
+import { ChevronDown, ChevronRight, Eye, EyeOff, Radio, Search, X } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -1194,6 +1194,9 @@ export function ReplicationTables() {
     // A search is a request to see what matched, so matching schemas open
     // themselves and the collapse state is left alone underneath.
     const searching = search.trim().length > 0
+    // Narrowed by either control — a filter tab is as much a statement of
+    // "these ones" as a typed query, and both leave a set worth acting on.
+    const narrowed = searching || filter !== 'all'
     const isOpen = (schema: string) => searching || !collapsed.has(schema)
 
     const toggleSchema = (schema: string) =>
@@ -1503,37 +1506,84 @@ export function ReplicationTables() {
             {message && <p className="mt-3 text-[13px] text-success">{message}</p>}
             {error && <p className="mt-3 text-[13px] text-destructive">{error}</p>}
 
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-                <div className="relative max-w-96 flex-1">
-                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                        placeholder="Search schema.table…"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className="pl-8"
-                    />
-                </div>
-                <div className="flex gap-1">
-                    {([
-                        ['all', `All (${stats.total})`],
-                        ['replicated', `Replicated (${stats.replicated})`],
-                        ['fdw', `Live (${stats.fdw})`],
-                        ['none', `Excluded (${stats.none})`],
-                    ] as [FilterTab, string][]).map(([key, label]) => (
-                        <Button key={key} size="sm" variant={filter === key ? 'primary' : 'ghost'} onClick={() => setFilter(key)}>
-                            {label}
+            {/* Pinned, because it is the only way to act on a list this long.
+                587 tables is 25 screens: a search box at the top of them is a
+                search box nobody scrolled back up to find, and a reader three
+                screens down has no evidence the page can be searched at all. */}
+            <div className="sticky top-0 z-10 -mx-6 mt-4 border-b border-border/60 bg-background/95 px-6 py-2 backdrop-blur">
+                <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative max-w-96 flex-1">
+                        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                            placeholder="Search schema.table…"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            className="pl-8"
+                        />
+                        {search && (
+                            <button
+                                onClick={() => setSearch('')}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                                title="Clear"
+                            >
+                                <X className="h-3.5 w-3.5" />
+                            </button>
+                        )}
+                    </div>
+                    <div className="flex gap-1">
+                        {([
+                            ['all', `All (${stats.total})`],
+                            ['replicated', `Replicated (${stats.replicated})`],
+                            ['fdw', `Live (${stats.fdw})`],
+                            ['none', `Excluded (${stats.none})`],
+                        ] as [FilterTab, string][]).map(([key, label]) => (
+                            <Button key={key} size="sm" variant={filter === key ? 'primary' : 'ghost'} onClick={() => setFilter(key)}>
+                                {label}
+                            </Button>
+                        ))}
+                    </div>
+                    {groups.length > 0 && (
+                        <Button
+                            size="sm"
+                            variant="ghost"
+                            className="ml-auto"
+                            onClick={() => setCollapsed(collapsed.size ? new Set() : new Set(groups.map((g) => g.schema)))}
+                        >
+                            {collapsed.size ? 'Expand all' : 'Collapse all'}
                         </Button>
-                    ))}
+                    )}
                 </div>
-                {groups.length > 0 && (
-                    <Button
-                        size="sm"
-                        variant="ghost"
-                        className="ml-auto"
-                        onClick={() => setCollapsed(collapsed.size ? new Set() : new Set(groups.map((g) => g.schema)))}
-                    >
-                        {collapsed.size ? 'Expand all' : 'Collapse all'}
-                    </Button>
+
+                {/* Narrowing the list is most of the way to a decision about
+                    it. Without this the reader who has just found their twelve
+                    tables sets them one at a time, twelve scroll-and-clicks,
+                    and the search was only ever a way of finding work.
+
+                    Shown only when the list is actually narrowed: offered
+                    against all 587 it is a mis-click that rewrites the whole
+                    publication. */}
+                {narrowed && filtered.length > 0 && !lockedReason && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px]">
+                        <span className="text-muted-foreground">
+                            {filtered.length} match{filtered.length === 1 ? '' : 'es'} · set all to
+                        </span>
+                        {([
+                            ['replicated', 'Replicate'],
+                            ['fdw', 'Live'],
+                            ['none', 'Exclude'],
+                        ] as [TableMode, string][]).map(([m, label]) => (
+                            <Button
+                                key={m}
+                                size="sm"
+                                variant="ghost"
+                                disabled={m === 'fdw' && !fdwReady}
+                                title={m === 'fdw' && !fdwReady ? 'Live queries need FDW set up first' : undefined}
+                                onClick={() => setMode(filtered.map((t) => `${t.schema}.${t.table}`), m)}
+                            >
+                                {label}
+                            </Button>
+                        ))}
+                    </div>
                 )}
             </div>
 

@@ -45,8 +45,17 @@ export default {
         },
       },
       animation: {
-        'page-in': 'page-in 0.25s ease both',
-        'toast-in': 'toast-in 0.14s ease-out both',
+        // `backwards`, not `both`. A filling animation whose keyframes mention
+        // transform leaves the element with a computed transform forever —
+        // matrix(1,0,0,1,0,0), an identity, but not `none` — and any transform
+        // other than none makes that element the containing block for every
+        // position:fixed descendant. The page wrapper carries page-in, so a
+        // bar pinned to the bottom of the viewport was instead pinned to the
+        // bottom of a 22,000px page: present, correct, and 7,000px below the
+        // fold. `backwards` still applies the from-state before the animation
+        // starts, so nothing flashes, and drops the fill once it ends.
+        'page-in': 'page-in 0.25s ease backwards',
+        'toast-in': 'toast-in 0.14s ease-out backwards',
       },
     },
   },
