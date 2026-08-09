@@ -14,8 +14,23 @@ server {
         proxy_read_timeout 3600s;
     }
 
-    # SPA fallback
+    # Content-hashed by vite, so a name never means two different files and
+    # the only wrong answer is fetching it twice.
+    location /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # SPA fallback.
+    #
+    # index.html is the one file whose name does not change, and it is what
+    # names the hashed bundle. Cached, it pins the browser to the version it
+    # was built against: the server upgrades, every asset beside it changes,
+    # and the page goes on loading the old bundle — an upgrade that appears
+    # to have done nothing, for as long as the cache lives. Cost of not
+    # caching it is one 800-byte request.
     location / {
         try_files $uri /index.html;
+        add_header Cache-Control "no-store, must-revalidate";
     }
 }

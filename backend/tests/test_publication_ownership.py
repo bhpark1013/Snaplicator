@@ -262,3 +262,54 @@ def test_the_chooser_is_not_offered_a_leftover_ddl_publication(conn):
     # on the server rather than about what to put in front of a person.
     everything = {p["name"] for p in publication_svc.list_existing(conn, include_internal=True)}
     assert CAPTURE_LOG_PUBLICATION in everything
+
+
+class TestSuggestedName:
+    """What "create a new one" starts out saying.
+
+    Versioned rather than dated or random: the reason to make a second one is
+    almost always that the first covers the wrong tables, and someone reading
+    pg_publication on the primary later should be able to tell the order.
+    """
+
+    def test_the_proposed_name_when_nothing_holds_it(self, conn):
+        from app.services import publication as publication_svc
+
+        assert publication_svc.suggest_name(conn, "unused_publication") == "unused_publication"
+
+    def test_v2_when_the_base_is_taken(self, conn):
+        from app.services import publication as publication_svc
+
+        assert publication_svc.suggest_name(conn, PUBLICATION) == f"{PUBLICATION}_v2"
+
+    def test_it_keeps_counting(self, conn):
+        from app.services import publication as publication_svc
+
+        psql(f"CREATE PUBLICATION {PUBLICATION}_v2;")
+        psql(f"CREATE PUBLICATION {PUBLICATION}_v3;")
+        try:
+            assert publication_svc.suggest_name(conn, PUBLICATION) == f"{PUBLICATION}_v4"
+        finally:
+            psql(f"DROP PUBLICATION IF EXISTS {PUBLICATION}_v2;")
+            psql(f"DROP PUBLICATION IF EXISTS {PUBLICATION}_v3;")
+
+    def test_a_gap_is_filled_rather_than_skipped(self, conn):
+        """_v2 free with _v3 taken means _v2 — the count is of what is free."""
+        from app.services import publication as publication_svc
+
+        psql(f"CREATE PUBLICATION {PUBLICATION}_v3;")
+        try:
+            assert publication_svc.suggest_name(conn, PUBLICATION) == f"{PUBLICATION}_v2"
+        finally:
+            psql(f"DROP PUBLICATION IF EXISTS {PUBLICATION}_v3;")
+
+    def test_the_suggestion_is_one_create_accepts(self, conn):
+        """It has to survive the name rules, not just be unused."""
+        from app.services import publication as publication_svc
+
+        name = publication_svc.suggest_name(conn, PUBLICATION)
+        publication_svc.create(conn, name)
+        try:
+            assert name in publications()
+        finally:
+            psql(f"DROP PUBLICATION IF EXISTS {name};")

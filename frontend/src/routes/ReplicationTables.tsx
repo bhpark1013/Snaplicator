@@ -191,11 +191,14 @@ const MODE_STATE: Record<TableMode, string> = {
 function ModeSwitch({
     value,
     fdwReady,
+    locked,
     onChange,
     onNeedsFdw,
 }: {
     value: TableMode | null
     fdwReady: boolean
+    /** Why this cannot be changed, when it cannot. */
+    locked?: string
     onChange: (mode: TableMode) => void
     onNeedsFdw: () => void
 }) {
@@ -211,6 +214,23 @@ function ModeSwitch({
     // true and the other two are an offer nobody is currently taking up.
     //
     // Both layers occupy the same box, so nothing moves when they swap.
+    // A publication this install promised not to rewrite has no draft to
+    // make: the offer would be taken up and then refused by the server, which
+    // is how this page came to show three buttons that all returned 409.
+    if (locked) {
+        return (
+            <div className="relative flex h-5 items-center" title={locked} onClick={(e) => e.stopPropagation()}>
+                {value ? (
+                    <span className={cn('rounded px-1.5 py-0.5 text-[11.5px] leading-5 opacity-60', MODE_CHIP[value])}>
+                        {MODE_STATE[value]}
+                    </span>
+                ) : (
+                    <span className="px-1.5 text-[11.5px] leading-5 text-muted-foreground/70">Mixed</span>
+                )}
+            </div>
+        )
+    }
+
     return (
         <div className="relative h-5" onClick={(e) => e.stopPropagation()}>
             <div className="absolute inset-0 flex items-center transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
@@ -262,26 +282,34 @@ function ModeSwitch({
  * has no row of its own to sit against and nothing to be read in relation to
  * — a two-word toggle up in the header is a label without its subject.
  */
-function FollowRow({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+function FollowRow({ on, locked, onChange }: { on: boolean; locked?: string; onChange: (v: boolean) => void }) {
     // Once per schema, so it has to be quiet: at full sentence weight, four
     // schemas put four copies of the same sentence down the page and the rule
     // shouts louder than the tables it applies to. Short at rest, explained
     // under the cursor.
     return (
         <button
-            onClick={(e) => { e.stopPropagation(); onChange(!on) }}
-            title={on
-                ? 'Tables created in this schema later join on their own — click to stop'
-                : 'Tables created in this schema later are left out — click to include them'}
-            className="group/f flex w-full items-center gap-1 rounded-md py-0.5 pl-[26px] pr-2 text-left text-[11px] text-muted-foreground/45 transition-colors hover:bg-white/[0.03] hover:text-muted-foreground"
+            disabled={!!locked}
+            onClick={(e) => { e.stopPropagation(); if (!locked) onChange(!on) }}
+            title={locked
+                ? locked
+                : on
+                    ? 'Tables created in this schema later join on their own — click to stop'
+                    : 'Tables created in this schema later are left out — click to include them'}
+            className={cn(
+                'group/f flex w-full items-center gap-1 rounded-md py-0.5 pl-[26px] pr-2 text-left text-[11px] text-muted-foreground/45 transition-colors',
+                !locked && 'hover:bg-white/[0.03] hover:text-muted-foreground',
+            )}
         >
             <span>new tables →</span>
             <span className={cn(on ? 'text-success/70' : 'text-muted-foreground/60')}>
                 {on ? 'replicated' : 'left out'}
             </span>
-            <span className="opacity-0 transition-opacity group-hover/f:opacity-100">
-                · click to {on ? 'leave them out' : 'replicate them'}
-            </span>
+            {!locked && (
+                <span className="opacity-0 transition-opacity group-hover/f:opacity-100">
+                    · click to {on ? 'leave them out' : 'replicate them'}
+                </span>
+            )}
         </button>
     )
 }
@@ -660,17 +688,20 @@ function ChoiceCard({
 function PublicationChooser({
     base,
     rows,
-    proposed,
+    suggested,
     onChosen,
 }: {
     base: string
     rows: PubRow[]
-    proposed: string | null
+    suggested: string | null
     onChosen: () => void
 }) {
     const [mode, setMode] = useState<PubMode>(rows.length ? 'reuse' : 'create')
     const [picked, setPicked] = useState<string>(rows[0]?.name || '')
-    const [newName, setNewName] = useState<string>(proposed && !rows.some((r) => r.name === proposed) ? proposed : '')
+    // Filled in with a name nothing on the primary is using — the proposed one,
+    // or the next _v2/_v3 after it. Still editable: it is a starting point, not
+    // a decision, and the create refuses a taken name anyway.
+    const [newName, setNewName] = useState<string>(suggested || '')
     const [busy, setBusy] = useState(false)
     const [err, setErr] = useState<string | null>(null)
 
@@ -852,7 +883,16 @@ export function ReplicationTables() {
     // and confirming, and the two deserve different words.
     const [selection, setSelection] = useState<{ exists: boolean; all_tables: boolean; count: number; available: number } | null>(null)
 
-    const [pubs, setPubs] = useState<{ chosen: boolean; proposed: string | null; publications: PubRow[] } | null>(null)
+    const [pubs, setPubs] = useState<{ chosen: boolean; ours: boolean; proposed: string | null; suggested: string | null; publications: PubRow[] } | null>(null)
+    // "Use one as it stands" is a promise never to rewrite that publication,
+    // and the server keeps it: every edit comes back 409. So the page must
+    // stop offering edits — and must offer a way to change the answer, since
+    // the question is otherwise asked exactly once and never again.
+    const readOnlyPub = !!pubs?.chosen && !pubs.ours
+    const lockedReason = readOnlyPub
+        ? `${info?.publication_name || 'This publication'} is used as it stands — this install never rewrites it. Take it over, or create a new one, to choose what is replicated.`
+        : undefined
+    const [reopenChooser, setReopenChooser] = useState(false)
     // null until known, so the question never flashes on a settled install.
     const [bootstrapped, setBootstrapped] = useState<boolean | null>(null)
     // Whether what is selected will fit in the pool. Two answers: `fits` is a
@@ -1246,18 +1286,40 @@ export function ReplicationTables() {
                 And only before the first copy. After it the replica is already
                 reading from a publication, so the question is no longer which
                 one to adopt — it is whether to throw away what was copied. */}
-            {pubs && !pubs.chosen && pubs.publications.length > 0 && bootstrapped === false && (
+            {pubs && (!pubs.chosen || reopenChooser) && pubs.publications.length > 0 && bootstrapped === false && (
                 <PublicationChooser
                     base={base}
                     rows={pubs.publications}
-                    proposed={pubs.proposed}
+                    suggested={pubs.suggested ?? pubs.proposed}
                     onChosen={() => {
+                        setReopenChooser(false)
                         loadPublications()
                         loadSelection()
                         loadTables()
                         loadInfo()
                     }}
                 />
+            )}
+
+            {/* Said once, above the tables, because every control below it is
+                inert and a page of quietly dead buttons is worse than the
+                error it replaced. */}
+            {readOnlyPub && !reopenChooser && bootstrapped === false && (
+                <div className="rounded-xl border border-border bg-card px-5 py-4">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                        <span className="text-[13px]">
+                            <span className="font-mono">{info?.publication_name}</span> is used as it
+                            stands — <span className="text-muted-foreground">this install never rewrites it.</span>
+                        </span>
+                        <Button size="sm" variant="ghost" onClick={() => setReopenChooser(true)}>
+                            Choose differently
+                        </Button>
+                    </div>
+                    <p className="mt-1 text-[12.5px] text-muted-foreground">
+                        What it covers is what gets replicated. To pick tables yourself, take it over
+                        or create a new one.
+                    </p>
+                </div>
             )}
 
             {/* Before the first copy this page is the whole install: the
@@ -1446,6 +1508,7 @@ export function ReplicationTables() {
                                 <ModeSwitch
                                     value={schemaMode}
                                     fdwReady={fdwReady}
+                                    locked={lockedReason}
                                     onChange={(m) => setMode(fqns, m)}
                                     onNeedsFdw={() => openLive(fqns)}
                                 />
@@ -1487,6 +1550,7 @@ export function ReplicationTables() {
                                                 <ModeSwitch
                                                     value={m}
                                                     fdwReady={fdwReady}
+                                                    locked={lockedReason}
                                                     onChange={(next) => setMode([fqn], next)}
                                                     onNeedsFdw={() => openLive([fqn])}
                                                 />
@@ -1494,7 +1558,7 @@ export function ReplicationTables() {
                                             </div>
                                         )
                                     })}
-                                    <FollowRow on={autoOf(g.schema)} onChange={(v) => setAuto(g.schema, v)} />
+                                    <FollowRow on={autoOf(g.schema)} locked={lockedReason} onChange={(v) => setAuto(g.schema, v)} />
                                 </div>
                             )}
                         </div>

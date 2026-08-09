@@ -121,6 +121,34 @@ def list_existing(publisher_connstr: str, include_internal: bool = False) -> Lis
     return rows
 
 
+def suggest_name(publisher_connstr: str, base: str) -> str:
+    """A name for a new publication that nothing on the primary is using.
+
+    `base`, then `base_v2`, `base_v3`. Versioned rather than dated or random
+    because the reason to make a second one is almost always that the first
+    covers the wrong tables — and a person reading `pg_publication` on the
+    primary six months from now should be able to tell which came after which.
+
+    Only a suggestion: it is what the field is filled in with, and the create
+    still refuses a name that is taken. Two installs asking at the same moment
+    would be offered the same answer, and the second one to press the button
+    is the one that finds out.
+    """
+    taken = {
+        line.strip()
+        for line in _run_publisher_sql(
+            publisher_connstr, "SELECT pubname FROM pg_publication;"
+        ).splitlines()
+        if line.strip()
+    }
+    if base not in taken:
+        return base
+    n = 2
+    while f"{base}_v{n}" in taken and n < 1000:
+        n += 1
+    return f"{base}_v{n}"
+
+
 def create(publisher_connstr: str, name: str) -> Dict:
     """Make a new, empty publication and record it as ours.
 

@@ -411,12 +411,18 @@ def list_publications():
     """What the primary already carries, and which one this replica speaks for."""
     try:
         chosen = publication_svc.load()
+        connstr = _build_publisher_connstr()
         return {
             "proposed": settings.publication_name,
             "active": _active_publication(),
             "chosen": chosen["chosen"],
             "ours": chosen["ours"],
-            "publications": publication_svc.list_existing(_build_publisher_connstr()),
+            # What "create a new one" should start out saying. Answered here
+            # because only the primary knows which names are already taken.
+            "suggested": publication_svc.suggest_name(
+                connstr, settings.publication_name or "snaplicator_publication"
+            ),
+            "publications": publication_svc.list_existing(connstr),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list publications: {e}")
