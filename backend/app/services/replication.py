@@ -1452,6 +1452,105 @@ def get_publisher_max_ddl_log_id(publisher_connstr: str) -> int:
     return int(out or 0)
 
 
+def catch_up_unapplied_ddl(
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> Dict:
+    """Apply log rows that arrived without the trigger seeing them.
+
+    The apply trigger fires on INSERT, and the initial copy of a table is not
+    an INSERT: PostgreSQL fills it with COPY, which row triggers do not see.
+    The log table is a table like any other, so whatever it already held when
+    its copy ran lands on the replica unexecuted — present, above the
+    watermark, and silently skipped.
+
+    Most of that is harmless, because the watermark marks everything the
+    schema clone already carries. The gap is the DDL captured after the clone
+    and before the copy: not in the schema, and never executed. A CREATE
+    TABLE lost there is worse than a missing table — the table joins the
+    publication, the publisher starts sending its rows, and the apply worker
+    jams on a relation that does not exist locally, holding up everything
+    behind it.
+
+    Only once the copy is finished. Half a replica is not a thing to run
+    migrations against, and the same rows are still here a cycle later.
+
+    Idempotent by the same dedupe set the trigger uses, so a row cannot be
+    applied twice however it arrived.
+    """
+    pending = _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+        f"""
+SELECT count(*) FROM public.{CAPTURE_LOG_TABLE} l
+ WHERE l.id > coalesce((SELECT last_applied_id FROM public._snaplicator_ddl_watermark
+                         WHERE id = 1), 0)
+   AND NOT EXISTS (SELECT 1 FROM public._snaplicator_ddl_applied a WHERE a.id = l.id)
+   AND NOT EXISTS (SELECT 1 FROM pg_subscription_rel WHERE srsubstate <> 'r');
+""",
+    ).strip()
+    try:
+        count = int(pending.splitlines()[0])
+    except (IndexError, ValueError):
+        count = 0
+    if count == 0:
+        return {"applied": 0}
+
+    _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+        f"""
+DO $catchup$
+DECLARE
+    r record;
+    wm bigint;
+    saved_sp text;
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_subscription_rel WHERE srsubstate <> 'r') THEN
+        RETURN;
+    END IF;
+    SELECT coalesce(last_applied_id, 0) INTO wm
+      FROM public._snaplicator_ddl_watermark WHERE id = 1;
+
+    FOR r IN SELECT * FROM public.{CAPTURE_LOG_TABLE} l
+              WHERE l.id > coalesce(wm, 0)
+                AND NOT EXISTS (SELECT 1 FROM public._snaplicator_ddl_applied a
+                                 WHERE a.id = l.id)
+              ORDER BY l.id
+    LOOP
+        -- Claimed before it is run, exactly as the trigger does: a statement
+        -- that half-succeeds must not come round again.
+        INSERT INTO public._snaplicator_ddl_applied (id) VALUES (r.id)
+            ON CONFLICT DO NOTHING;
+
+        IF r.ddl_text ~* 'CONCURRENTLY' THEN
+            INSERT INTO public._snaplicator_ddl_deferred (log_id, ddl_text, search_path)
+            VALUES (r.id, r.ddl_text, r.search_path);
+            CONTINUE;
+        END IF;
+
+        saved_sp := current_setting('search_path', true);
+        BEGIN
+            IF r.search_path IS NOT NULL AND r.search_path <> '' THEN
+                PERFORM set_config('search_path', r.search_path, true);
+            END IF;
+            EXECUTE r.ddl_text;
+        EXCEPTION WHEN OTHERS THEN
+            INSERT INTO public._snaplicator_ddl_failures
+                (log_id, ddl_text, error, search_path)
+            VALUES (r.id, r.ddl_text, SQLERRM, r.search_path);
+            RAISE WARNING 'snaplicator: ddl catch-up failed for log id %: %',
+                r.id, SQLERRM;
+        END;
+        PERFORM set_config('search_path', coalesce(saved_sp, 'public'), true);
+    END LOOP;
+END;
+$catchup$;
+""",
+    )
+    return {"applied": count}
+
+
 def enable_ddl_apply(
     publisher_connstr: str,
     publication_name: str,

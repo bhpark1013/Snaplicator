@@ -30,8 +30,13 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.config import settings
+from . import policy as policy_svc
 from . import publication as publication_svc
-from .replication import _run_subscriber_sql, get_publisher_max_ddl_log_id
+from .replication import (
+    _run_subscriber_sql,
+    get_publisher_max_ddl_log_id,
+    install_capture_triggers,
+)
 
 APP_DIR = Path("/app")
 SCRIPT = Path("scripts/run-replica-postgres.sh")
@@ -187,10 +192,30 @@ def start(force: bool = False, publisher_connstr: Optional[str] = None) -> dict:
     if not script.exists():
         raise RuntimeError(f"bootstrap script not found at {script}")
 
-    # Read before the script runs, because the first thing it does is clone
-    # the schema. A best-effort read: a primary with no log table yet has no
-    # history to skip, and 0 is the right answer for that.
+    # Capture first, then the mark, then the clone — in that order, because
+    # each one only means anything if the one before it already happened.
+    #
+    # Capture must be running before the schema is read, or a change made
+    # while the clone runs is in neither place: not in the copy that was
+    # taken before it, and not in a log that was not recording yet. Nothing
+    # afterwards can tell that it is missing.
+    #
+    # The mark then says where the clone starts from. Rows above it are what
+    # the replica still owes; rows below are already in the schema it was
+    # given. A primary with no log table yet has no history to skip, and 0 is
+    # the right answer for that.
     if publisher_connstr:
+        pub_for_capture = publication_svc.active(settings.publication_name)
+        if pub_for_capture:
+            try:
+                install_capture_triggers(
+                    publisher_connstr, pub_for_capture,
+                    *policy_svc.capture_scope(pub_for_capture),
+                )
+            except Exception:
+                # Not fatal: the loop reinstalls, and the mark below is still
+                # the honest answer for whatever is being recorded now.
+                pass
         try:
             _clone_watermark_path().write_text(
                 str(get_publisher_max_ddl_log_id(publisher_connstr))

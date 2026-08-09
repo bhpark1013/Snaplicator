@@ -22,6 +22,7 @@ from .services.replication import (
     compare_published_schemas,
     install_capture_triggers,
     verify_capture_installed,
+    catch_up_unapplied_ddl,
     enable_ddl_apply,
     get_ddl_apply_status,
     run_deferred_ddl,
@@ -191,6 +192,17 @@ async def ddl_sync_loop():
                         if res.get("created") or res.get("added") or res.get("refreshed"):
                             logger.info(f"DDL apply enabled: {res}")
                             sync_log.record("ddl_apply_enabled", res)
+
+                        # Rows the trigger never saw, because they arrived
+                        # in the table's initial copy rather than one at a
+                        # time. Runs after enable, so the watermark and the
+                        # dedupe set it seeds are already in place.
+                        caught = await asyncio.to_thread(
+                            catch_up_unapplied_ddl, container, user, password, db,
+                        )
+                        if caught.get("applied"):
+                            logger.info(f"DDL catch-up applied {caught['applied']} row(s)")
+                            sync_log.record("ddl_catch_up", caught)
 
                         st = await asyncio.to_thread(
                             get_ddl_apply_status, container, user, password, db,

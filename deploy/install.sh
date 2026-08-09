@@ -827,7 +827,12 @@ if [ "$NEW_INSTALL" = "1" ]; then apply_new_install_slot; fi
 : "${START_REPLICATION:=$DEMO}"
 
 if [ "$DEMO" = "0" ]; then
-  case "$CONNSTR" in postgres://*|postgresql://*) ;; *) die "URI form required: postgres://user:pw@host:port/db" ;; esac
+  # Opening an install takes its target from that install's .env, further
+  # down. Demanding a URI here is how "open it" died before it opened
+  # anything: the answer to the menu was never a URI, and never had to be.
+  if [ "$REUSE_EXISTING" != "1" ]; then
+    case "$CONNSTR" in postgres://*|postgresql://*) ;; *) die "URI form required: postgres://user:pw@host:port/db" ;; esac
+  fi
   command -v psql >/dev/null || die "psql is required to measure/verify the publisher (apt install postgresql-client)"
 fi
 
@@ -950,6 +955,20 @@ elif [ "$REUSE_EXISTING" = "1" ]; then
   PRIMARY_USER=$(sed -n 's/^PRIMARY_USER=//p' "$ENVF" | tail -1)
   PRIMARY_PASSWORD=$(sed -n 's/^PRIMARY_PASSWORD=//p' "$ENVF" | tail -1)
   [ -n "$PRIMARY_HOST" ] || die "$ENVF has no PRIMARY_HOST — pass a connection URI instead"
+  # Everything downstream — the preflight, the pool survey, the publication
+  # check — takes a URI, so one is built back from the parts. Percent-encoded
+  # rather than pasted: a password holding an @ or a / turns a working install
+  # into an unreachable host the moment it is reassembled by hand.
+  CONNSTR=$(python3 - "$PRIMARY_USER" "$PRIMARY_PASSWORD" "$PRIMARY_HOST" "$PRIMARY_PORT" "$PRIMARY_DB" <<'REBUILD'
+import sys
+from urllib.parse import quote
+user, pw, host, port, db = sys.argv[1:6]
+cred = quote(user, safe="")
+if pw:
+    cred += ":" + quote(pw, safe="")
+print(f"postgres://{cred}@{host}:{port}/{quote(db, safe='')}")
+REBUILD
+)
   info "using the primary this install already has: $PRIMARY_HOST:$PRIMARY_PORT/$PRIMARY_DB"
   publisher_preflight hard
 else
