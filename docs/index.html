@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snaplicator — a test database your agent is allowed to break</title>
+<meta name="description" content="Snaplicator keeps one Postgres replica following your primary and hands out disposable, copy-on-write clones — a real test database your AI agent is allowed to break and reset in seconds.">
+<meta name="color-scheme" content="light dark">
+<meta property="og:title" content="Snaplicator — a test database your agent is allowed to break">
+<meta property="og:description" content="Production-shaped Postgres for AI agents. Clones take seconds and almost no disk; reset to a snapshot when the agent breaks it.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%233faf8c'/></svg>">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; }
+  h1, h2, h3, p, ol, ul, pre, figure { margin: 0; }
+  button { font: inherit; }
+  /* ── tone on tone ─────────────────────────────────────────
+     One hue family (~168°) carries everything: the neutrals are
+     biased into it rather than being grey, and the three concepts
+     are three lightness steps of the same hue rather than three
+     different colours. They still have to be told apart — that is
+     what the steps are for — but nothing on the page is a
+     different colour from anything else. */
+  :root {
+    --paper:     #f5f7f6;
+    --paper-2:   #eaefec;
+    --paper-3:   #e0e7e3;
+    --ink:       #101a17;
+    --ink-2:     #384c46;
+    --ink-3:     #5a6f68;
+    --rule:      #cfdad5;
+    --rule-soft: #e0e7e3;
+
+    --t-deep:  #1f5449;   /* replica  */
+    --t-mid:   #276f5d;   /* snapshot */
+    --t-live:  #3faf8c;   /* clone — fills, dots, bars      */
+    --t-live-ink: #28795f; /* clone — the same step, as text */
+    --t-deep-bg: #1f544912;
+    --t-mid-bg:  #2f857012;
+    --t-live-bg: #3faf8c14;
+
+    --measure: 66ch;
+    --gap: clamp(3rem, 6vw, 5rem);
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Pretendard, 'Apple SD Gothic Neo',
+            'Hiragino Sans', 'Noto Sans JP', system-ui, sans-serif;
+    --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1211; --paper-2: #121a18; --paper-3: #18231f;
+      --ink: #e6edea; --ink-2: #adbfb9; --ink-3: #7b8f89;
+      --rule: #24322d; --rule-soft: #1a2421;
+      --t-deep: #4b8d7d; --t-mid: #5fb69a; --t-live: #79dcb6; --t-live-ink: #79dcb6;
+      --t-deep-bg: #4b8d7d1c; --t-mid-bg: #5fb69a1c; --t-live-bg: #79dcb61f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0c1211; --paper-2: #121a18; --paper-3: #18231f;
+    --ink: #e6edea; --ink-2: #adbfb9; --ink-3: #7b8f89;
+    --rule: #24322d; --rule-soft: #1a2421;
+    --t-deep: #4b8d7d; --t-mid: #5fb69a; --t-live: #79dcb6; --t-live-ink: #79dcb6;
+    --t-deep-bg: #4b8d7d1c; --t-mid-bg: #5fb69a1c; --t-live-bg: #79dcb61f;
+  }
+  :root[data-theme="light"] {
+    --paper: #f5f7f6; --paper-2: #eaefec; --paper-3: #e0e7e3;
+    --ink: #101a17; --ink-2: #384c46; --ink-3: #5a6f68;
+    --rule: #cfdad5; --rule-soft: #e0e7e3;
+    --t-deep: #1f5449; --t-mid: #276f5d; --t-live: #3faf8c; --t-live-ink: #28795f;
+    --t-deep-bg: #1f544912; --t-mid-bg: #2f857012; --t-live-bg: #3faf8c14;
+  }
+
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 72rem; margin: 0 auto; padding: 0 clamp(1.15rem, 4vw, 3rem); }
+  .col { max-width: var(--measure); }
+
+  /* ── header / menu ───────────────────────────────────────── */
+  header {
+    position: sticky; top: 0; z-index: 40;
+    background: color-mix(in srgb, var(--paper) 92%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .bar { display: flex; align-items: center; gap: 1rem; padding: .7rem 0; flex-wrap: wrap; }
+  .brand {
+    font-family: var(--mono); font-weight: 600; letter-spacing: -.02em;
+    display: inline-flex; align-items: center; gap: .5rem; font-size: .95rem;
+  }
+  .brand .mark {
+    width: 15px; height: 15px; border-radius: 3px; flex: none;
+    background: linear-gradient(150deg, var(--t-live), var(--t-deep));
+  }
+  nav { display: flex; gap: .15rem; margin-left: auto; flex-wrap: wrap; }
+  nav button {
+    font-family: var(--mono); font-size: .78rem; letter-spacing: .02em;
+    padding: .4rem .7rem; border-radius: 6px; border: 1px solid transparent;
+    background: none; color: var(--ink-3); cursor: pointer;
+    transition: color .15s, background .15s;
+  }
+  nav button:hover { color: var(--ink); background: var(--paper-2); }
+  nav button[aria-current="page"] { color: var(--t-mid); background: var(--t-mid-bg); border-color: color-mix(in srgb, var(--t-mid) 25%, transparent); }
+
+  .langs { display: flex; gap: .1rem; border: 1px solid var(--rule); border-radius: 6px; padding: .12rem; }
+  .langs button {
+    font-family: var(--mono); font-size: .7rem; padding: .22rem .45rem;
+    border: 0; border-radius: 4px; background: none; color: var(--ink-3); cursor: pointer;
+  }
+  .langs button[aria-pressed="true"] { background: var(--t-mid); color: var(--paper); }
+
+  /* ── shared type ─────────────────────────────────────────── */
+  main > section { display: none; padding-block: var(--gap) calc(var(--gap) + 1rem); }
+  main > section.active { display: block; animation: fade .2s ease backwards; }
+  @keyframes fade { from { opacity: 0 } }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-3); display: flex; align-items: center; gap: .8rem; margin-bottom: 1.35rem;
+  }
+  .eyebrow::after { content: ''; flex: 1; height: 1px; background: var(--rule); }
+
+  h1 { font-family: var(--mono); font-size: clamp(1.95rem, 5vw, 3.25rem); line-height: 1.07;
+       letter-spacing: -.035em; font-weight: 600; text-wrap: balance; margin: 0; }
+  h2 { font-family: var(--mono); font-size: clamp(1.3rem, 2.6vw, 1.7rem); line-height: 1.22;
+       letter-spacing: -.025em; font-weight: 600; text-wrap: balance; margin: 0 0 .85rem; }
+  h3 { font-family: var(--mono); font-size: .98rem; font-weight: 600; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  p { margin: 0 0 1.05rem; color: var(--ink-2); }
+  .lead { font-size: clamp(1.02rem, 1.9vw, 1.16rem); }
+  strong { color: var(--ink); font-weight: 600; }
+  code { font-family: var(--mono); font-size: .875em; }
+  h2 + .sub { margin-top: -.35rem; }
+
+  .subnav { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 2rem; }
+  .subnav a {
+    font-family: var(--mono); font-size: .74rem; color: var(--ink-3);
+    text-decoration: none; padding: .28rem .6rem; border: 1px solid var(--rule);
+    border-radius: 999px;
+  }
+  .subnav a:hover { color: var(--ink); border-color: var(--ink-3); }
+
+  /* ── command line ────────────────────────────────────────── */
+  .cmd { display: flex; border: 1px solid var(--rule); border-radius: 8px;
+         background: var(--paper-2); overflow: hidden; max-width: min(46rem, 100%); margin-top: 1.4rem; }
+  .cmd .p { font-family: var(--mono); font-size: .8rem; display: flex; align-items: center;
+            padding: 0 .8rem; color: var(--ink-3); border-right: 1px solid var(--rule); }
+  .cmd .l { font-family: var(--mono); font-size: .8rem; padding: .8rem .95rem; flex: 1;
+            min-width: 0; overflow-x: auto; white-space: nowrap; }
+  .cmd button.copy {
+    border: 0; border-left: 1px solid var(--rule); background: none; cursor: pointer;
+    font-family: var(--mono); font-size: .7rem; color: var(--ink-3); padding: 0 .8rem;
+  }
+  .cmd button.copy:hover { color: var(--t-mid); background: var(--t-mid-bg); }
+  .cmd-note { font-family: var(--mono); font-size: .73rem; color: var(--ink-3); margin-top: .55rem; }
+
+  pre.term {
+    font-family: var(--mono); font-size: .78rem; line-height: 1.7;
+    background: var(--paper-2); border: 1px solid var(--rule); border-radius: 8px;
+    padding: .95rem 1.1rem; overflow-x: auto; color: var(--ink-2);
+    max-width: min(46rem, 100%); margin: 1.2rem 0 0; white-space: pre;
+  }
+  pre.term .k { color: var(--t-live-ink); }
+  pre.term .c { color: var(--ink-3); }
+  pre.term .s { color: var(--t-mid); }
+
+  /* ── spine ───────────────────────────────────────────────── */
+  .spine { display: grid; grid-template-columns: repeat(3, minmax(0,1fr));
+           border: 1px solid var(--rule); border-radius: 10px; background: var(--paper-2);
+           overflow: hidden; margin-top: 2rem; }
+  .stage { padding: 1.3rem 1.25rem 1.4rem; border-left: 1px solid var(--rule);
+           background: none; text-align: left; font: inherit; color: inherit; cursor: pointer;
+           transition: background .15s; }
+  .stage:first-child { border-left: 0; }
+  .stage:hover { background: var(--paper-3); }
+  .stage[aria-expanded="true"] { background: var(--paper-3); }
+  .tag { font-family: var(--mono); font-size: .68rem; letter-spacing: .12em; text-transform: uppercase;
+         display: inline-flex; align-items: center; gap: .4rem; padding: .18rem .45rem;
+         border-radius: 4px; margin-bottom: .75rem; }
+  .tag .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .stage p { font-size: .87rem; margin: 0; line-height: 1.55; }
+  .cost { font-family: var(--mono); font-size: .72rem; color: var(--ink-3);
+          margin-top: .85rem; padding-top: .7rem; border-top: 1px dashed var(--rule); }
+  .more { font-size: .87rem; margin-top: .85rem; padding-top: .8rem;
+          border-top: 1px solid var(--rule); color: var(--ink-2); }
+  .more[hidden] { display: none; }
+  .s1 .tag { color: var(--t-deep); background: var(--t-deep-bg); } .s1 .dot { background: var(--t-deep); }
+  .s2 .tag { color: var(--t-mid);  background: var(--t-mid-bg); }  .s2 .dot { background: var(--t-mid); }
+  .s3 .tag { color: var(--t-live-ink); background: var(--t-live-bg); } .s3 .dot { background: var(--t-live); }
+  .flow { grid-column: 1/-1; display: flex; align-items: center; gap: .55rem; flex-wrap: wrap;
+          font-family: var(--mono); font-size: .76rem; color: var(--ink-3);
+          padding: .75rem 1.25rem; border-top: 1px solid var(--rule); }
+  @media (max-width: 760px) {
+    .spine { grid-template-columns: 1fr; }
+    .stage { border-left: 0; border-top: 1px solid var(--rule); }
+    .stage:first-child { border-top: 0; }
+  }
+
+  /* ── the lab ─────────────────────────────────────────────── */
+  .lab { border: 1px solid var(--rule); border-radius: 10px; background: var(--paper-2);
+         margin-top: 2rem; overflow: hidden; }
+  .lab-head { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+              padding: .85rem 1.15rem; border-bottom: 1px solid var(--rule); }
+  .lab-head h3 { margin: 0; }
+  .lab-head .hint { font-family: var(--mono); font-size: .7rem; color: var(--ink-3); margin-left: auto; }
+  .lab-body { padding: 1.15rem; display: grid; gap: 1.15rem; }
+
+  .meters { display: grid; gap: .8rem; }
+  .meter .m-top { display: flex; justify-content: space-between; align-items: baseline;
+                  font-family: var(--mono); font-size: .75rem; margin-bottom: .3rem; }
+  .meter .m-label { color: var(--ink-2); }
+  .meter .m-val { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .track { height: 10px; border-radius: 999px; background: var(--paper-3); overflow: hidden;
+           border: 1px solid var(--rule); }
+  .fill { height: 100%; transition: width .45s cubic-bezier(.2,.7,.3,1); }
+  .fill.base { background: var(--t-deep); }
+  .fill.snap { background: var(--t-live); }
+  .fill.naive { background: repeating-linear-gradient(135deg, var(--ink-3) 0 5px, transparent 5px 10px); }
+  .m-note { font-family: var(--mono); font-size: .7rem; color: var(--ink-3); margin-top: .25rem; }
+
+  .lab-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .btn { font-family: var(--mono); font-size: .76rem; padding: .42rem .8rem; cursor: pointer;
+         border-radius: 6px; border: 1px solid var(--rule); background: var(--paper);
+         color: var(--ink-2); transition: all .15s; }
+  .btn:hover:not(:disabled) { border-color: var(--t-mid); color: var(--t-mid); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn.primary { background: var(--t-mid); border-color: var(--t-mid); color: var(--paper); }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.08); color: var(--paper); }
+
+  .clones { display: grid; gap: .4rem; }
+  .clone-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+               border: 1px solid var(--rule); border-radius: 7px; padding: .5rem .7rem;
+               background: var(--paper); font-family: var(--mono); font-size: .75rem;
+               animation: pop .25s ease backwards; }
+  @keyframes pop { from { opacity: 0; transform: translateY(-3px) } }
+  .clone-row .cname { color: var(--t-live-ink); }
+  .clone-row .cport { color: var(--ink-3); }
+  .clone-row .cw { margin-left: auto; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .clone-row .mini { font-size: .68rem; padding: .2rem .45rem; }
+  .empty { font-family: var(--mono); font-size: .75rem; color: var(--ink-3);
+           border: 1px dashed var(--rule); border-radius: 7px; padding: .8rem; text-align: center; }
+
+  .verdict { font-family: var(--mono); font-size: .78rem; padding: .7rem .9rem;
+             border-radius: 7px; background: var(--t-live-bg);
+             border: 1px solid color-mix(in srgb, var(--t-live) 30%, transparent); color: var(--ink-2); }
+  .verdict b { color: var(--t-live-ink); }
+
+  /* ── steps / loop / notes ────────────────────────────────── */
+  .steps { list-style: none; padding: 0; margin: 1.6rem 0 0; counter-reset: s; max-width: var(--measure); }
+  /* minmax(0,1fr), not 1fr: a grid track's automatic minimum is its content's
+     min-content width, and a <pre> that scrolls internally still reports the
+     width of its longest line. Left as 1fr the track refuses to shrink and
+     the whole page scrolls sideways on a phone instead of the code block. */
+  .steps > li { counter-increment: s; display: grid; grid-template-columns: 1.9rem minmax(0, 1fr); gap: .95rem;
+                padding: 1.05rem 0; border-top: 1px solid var(--rule-soft); }
+  .steps > li > div { min-width: 0; }
+  .steps > li:first-child { border-top: 0; padding-top: 0; }
+  .steps > li::before { content: counter(s, decimal-leading-zero); font-family: var(--mono);
+                        font-size: .76rem; color: var(--ink-3); padding-top: .2rem; }
+  .steps p { margin: 0; font-size: .93rem; }
+  .steps pre.term { margin-top: .8rem; }
+
+  .note { border-left: 2px solid var(--t-mid); padding-left: 1rem; margin-top: 1.7rem; max-width: var(--measure); }
+  .note .label { font-family: var(--mono); font-size: .68rem; letter-spacing: .12em;
+                 text-transform: uppercase; color: var(--t-mid); display: block; margin-bottom: .25rem; }
+  .note p { margin: 0; font-size: .91rem; }
+
+  .loop { display: grid; margin-top: 1.6rem; max-width: 50rem; }
+  .beat { display: grid; grid-template-columns: 8.5rem 1fr; gap: 1.1rem;
+          padding: .85rem 0; border-top: 1px solid var(--rule-soft); align-items: baseline; }
+  .beat:first-child { border-top: 0; }
+  .beat .who { font-family: var(--mono); font-size: .74rem; letter-spacing: .06em;
+               text-transform: uppercase; color: var(--ink-3); }
+  .beat.hi .who { color: var(--t-live-ink); }
+  .beat p { margin: 0; font-size: .93rem; }
+  @media (max-width: 620px) { .beat { grid-template-columns: 1fr; gap: .2rem; } }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+           gap: 1rem; margin-top: 1.6rem; }
+  .card { border: 1px solid var(--rule); border-radius: 9px; padding: 1rem 1.1rem; background: var(--paper-2); }
+  .card p { margin: 0; font-size: .88rem; }
+
+  footer { border-top: 1px solid var(--rule-soft); padding-block: 2rem 3.5rem;
+           font-family: var(--mono); font-size: .74rem; color: var(--ink-3);
+           display: flex; gap: 1.4rem; flex-wrap: wrap; }
+  a { color: inherit; text-underline-offset: 3px; text-decoration-color: var(--rule); }
+  a:hover { text-decoration-color: currentColor; }
+  :focus-visible { outline: 2px solid var(--t-mid); outline-offset: 2px; border-radius: 4px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap bar">
+    <span class="brand"><span class="mark"></span>Snaplicator</span>
+    <nav id="nav">
+      <button data-view="overview" data-i18n="nav.overview">Overview</button>
+      <button data-view="concepts" data-i18n="nav.concepts">Concepts</button>
+      <button data-view="guide"    data-i18n="nav.guide">Guide</button>
+      <button data-view="install"  data-i18n="nav.install">Install</button>
+    </nav>
+    <div class="langs" id="langs">
+      <button data-lang="en">EN</button>
+      <button data-lang="ko">KO</button>
+      <button data-lang="ja">JA</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ═══════════════ OVERVIEW ═══════════════ -->
+  <section id="overview">
+    <div class="eyebrow" data-i18n="hero.eyebrow">Test DB for AI</div>
+    <h1 data-i18n="hero.title">Give your agent a database it is allowed to break.</h1>
+    <p class="lead col" style="margin-top:1.3rem" data-i18n="hero.lead">
+      Your agent cannot test a migration against seed data — the rows that break it only exist
+      in production. It cannot test against production either. Snaplicator keeps one replica
+      following your primary and hands out disposable copies of it: seconds to make, almost no
+      disk, and nothing upstream notices when one is destroyed.
+    </p>
+
+    <div class="cmd">
+      <span class="p">$</span>
+      <span class="l" id="cmd1">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
+      <button class="copy" data-copy="cmd1" data-i18n="common.copy">copy</button>
+    </div>
+    <p class="cmd-note" data-i18n="hero.macnote">macOS: drop the sudo — it builds a Linux machine and continues inside it.</p>
+
+    <div style="margin-top:var(--gap)">
+      <div class="eyebrow" data-i18n="loop.eyebrow">The loop</div>
+      <h2 data-i18n="loop.title">What an agent actually does with it</h2>
+      <div class="loop">
+        <div class="beat"><span class="who" data-i18n="loop.w1">Agent</span>
+          <p data-i18n="loop.b1">Takes a clone. Seconds, no coordination, nobody else affected.</p></div>
+        <div class="beat"><span class="who" data-i18n="loop.w2">Agent</span>
+          <p data-i18n="loop.b2">Runs the migration. Drops the wrong column. Deletes without a WHERE.</p></div>
+        <div class="beat hi"><span class="who" data-i18n="loop.w3">Reset</span>
+          <p data-i18n="loop.b3">Back to the snapshot it started from. The damage only ever existed in the clone's own blocks.</p></div>
+        <div class="beat"><span class="who" data-i18n="loop.w4">Agent</span>
+          <p data-i18n="loop.b4">Tries the next version. The loop is seconds long, so being wrong is cheap.</p></div>
+      </div>
+      <p style="margin-top:1.5rem;max-width:var(--measure)" data-i18n="loop.mcp">
+        It drives this itself. Snaplicator ships an MCP server, so creating, resetting and
+        dropping clones are tools the agent calls — not steps you perform for it.
+      </p>
+    </div>
+
+    <div style="margin-top:var(--gap)">
+      <div class="eyebrow" data-i18n="why.eyebrow">Why not the alternatives</div>
+      <div class="grid2">
+        <div class="card">
+          <h3 data-i18n="why.t1">A shared staging DB</h3>
+          <p data-i18n="why.p1">One agent's failed migration is every other agent's flaky test. Parallel runs need isolation, and staging has none.</p>
+        </div>
+        <div class="card">
+          <h3 data-i18n="why.t2">Restoring a dump</h3>
+          <p data-i18n="why.p2">Correct, and an hour long. An agent's iteration is seconds; a reset that takes an hour is a reset it will avoid doing.</p>
+        </div>
+        <div class="card">
+          <h3 data-i18n="why.t3">Seed fixtures</h3>
+          <p data-i18n="why.p3">Fast and clean, and they never reproduce the bug. The row with the null you did not expect is in production, not in your factory.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ CONCEPTS ═══════════════ -->
+  <section id="concepts">
+    <div class="eyebrow" data-i18n="con.eyebrow">Three words</div>
+    <h2 data-i18n="con.title">Replica, snapshot, clone</h2>
+    <p class="col sub" data-i18n="con.lead">
+      Each is made from the one before it. That is the whole model — there is no fourth thing.
+      Select a card to see what it costs you.
+    </p>
+
+    <div class="spine" id="spine">
+      <button class="stage s1" aria-expanded="false">
+        <span class="tag"><span class="dot"></span><span data-i18n="con.k1">one, always on</span></span>
+        <h3 data-i18n="con.h1">Replica</h3>
+        <p data-i18n="con.p1">A Postgres that subscribes to your primary and keeps following it. You never query it and never write to it — it exists to be current.</p>
+        <div class="cost" data-i18n="con.c1">costs: one replication slot on the primary</div>
+        <div class="more" hidden data-i18n="con.m1">There is exactly one per install. It is not the thing you hand to an agent; it is the thing everything else is cut from. Schema changes on the primary replicate here too, so it does not drift out of shape.</div>
+      </button>
+      <button class="stage s2" aria-expanded="false">
+        <span class="tag"><span class="dot"></span><span data-i18n="con.k2">an instant, not a server</span></span>
+        <h3 data-i18n="con.h2">Snapshot</h3>
+        <p data-i18n="con.p2">The replica's files frozen at a moment in time. Nothing is running: you cannot connect to a snapshot. It is the point you come back to.</p>
+        <div class="cost" data-i18n="con.c2">costs: O(1) to take · only what later diverges</div>
+        <div class="more" hidden data-i18n="con.m2">This is the one people expect to be able to query, and it is the one thing here that is not a database. Think of it as a named instant. Its value is that a clone can be put back to it.</div>
+      </button>
+      <button class="stage s3" aria-expanded="false">
+        <span class="tag"><span class="dot"></span><span data-i18n="con.k3">as many as you like</span></span>
+        <h3 data-i18n="con.h3">Clone</h3>
+        <p data-i18n="con.p3">A snapshot with a Postgres started on top of it, on its own port. Writable, yours, disposable. Drop a table in it and nothing upstream notices.</p>
+        <div class="cost" data-i18n="con.c3">costs: seconds to build · ~0 GB until you write</div>
+        <div class="more" hidden data-i18n="con.m3">This is the connection string your agent gets. It does not follow the primary — it is a fixed point, which is what makes a test repeatable. Rebuild it from a newer snapshot when you want newer data.</div>
+      </button>
+      <div class="flow">
+        <span style="color:var(--ink)">primary</span><span>→</span>
+        <span style="color:var(--t-deep)">replica</span><span>→</span>
+        <span style="color:var(--t-mid)">snapshot</span><span>→</span>
+        <span style="color:var(--t-live-ink)">clone · clone · clone …</span>
+      </div>
+    </div>
+
+    <!-- interactive -->
+    <div class="lab">
+      <div class="lab-head">
+        <h3 data-i18n="lab.title">Copy-on-write, at your fingertips</h3>
+        <span class="hint" data-i18n="lab.hint">illustrative model — 300 GB base</span>
+      </div>
+      <div class="lab-body">
+        <p style="margin:0;font-size:.9rem" data-i18n="lab.intro">
+          A clone shares every block with the snapshot it came from and allocates only what it
+          changes. Add a few and watch what the disk does.
+        </p>
+
+        <div class="lab-actions">
+          <button class="btn primary" id="addClone" data-i18n="lab.add">+ Add clone</button>
+          <button class="btn" id="writeAll" data-i18n="lab.write">Write 2 GB in each</button>
+          <button class="btn" id="resetAll" data-i18n="lab.reset">Reset all to snapshot</button>
+          <button class="btn" id="clearAll" data-i18n="lab.clear">Delete all</button>
+        </div>
+
+        <div class="clones" id="cloneList"></div>
+
+        <div class="meters">
+          <div class="meter">
+            <div class="m-top">
+              <span class="m-label" data-i18n="lab.m1">Disk used with Snaplicator</span>
+              <span class="m-val" id="valSnap">300.0 GB</span>
+            </div>
+            <div class="track"><div class="fill snap" id="barSnap" style="width:10%"></div></div>
+            <div class="m-note" id="noteSnap"></div>
+          </div>
+          <div class="meter">
+            <div class="m-top">
+              <span class="m-label" data-i18n="lab.m2">Disk used if each were a full copy</span>
+              <span class="m-val" id="valNaive">300.0 GB</span>
+            </div>
+            <div class="track"><div class="fill naive" id="barNaive" style="width:10%"></div></div>
+            <div class="m-note" id="noteNaive"></div>
+          </div>
+        </div>
+
+        <div class="verdict" id="verdict"></div>
+      </div>
+    </div>
+
+    <div class="note">
+      <span class="label" data-i18n="con.notelabel">The part that makes it work</span>
+      <p data-i18n="con.note">
+        The pool is btrfs, so this is the filesystem's behaviour rather than a trick Snaplicator
+        performs. Ten clones of a 300 GB replica are not 3 TB. They are 300 GB plus whatever the
+        ten of them wrote.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══════════════ GUIDE ═══════════════ -->
+  <section id="guide">
+    <div class="eyebrow" data-i18n="g.eyebrow">Guide</div>
+    <h2 data-i18n="g.title">From nothing to an agent with its own database</h2>
+    <p class="col sub" data-i18n="g.lead">
+      Steps 1–3 happen once. Steps 4–6 are the part your agent repeats.
+    </p>
+
+    <div class="subnav">
+      <a href="#g1" data-i18n="g.n1">1. Install</a>
+      <a href="#g2" data-i18n="g.n2">2. Choose tables</a>
+      <a href="#g3" data-i18n="g.n3">3. First copy</a>
+      <a href="#g4" data-i18n="g.n4">4. Snapshot</a>
+      <a href="#g5" data-i18n="g.n5">5. Clone</a>
+      <a href="#g6" data-i18n="g.n6">6. Wire up the agent</a>
+    </div>
+
+    <ol class="steps">
+      <li id="g1"><div>
+        <h3 data-i18n="g.h1">Install and point it at the primary</h3>
+        <p data-i18n="g.p1">One line. It provisions the btrfs pool, starts the management plane and opens the UI. Answer the prompt with a connection URI — it only ever reads from that database — or with <code>demo</code> to seed a sample one first.</p>
+        <pre class="term"><span class="c"># Linux</span>
+curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash
+
+<span class="c"># macOS — no sudo; creates an OrbStack Linux machine and continues inside it</span>
+curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</pre>
+      </div></li>
+
+      <li id="g2"><div>
+        <h3 data-i18n="g.h2">Choose what to replicate</h3>
+        <p data-i18n="g.p2">In the UI, with size and row count beside every table. Search narrows the list; the toolbar then sets everything matching in one go. Nothing is copied until you say so — a 300 GB decision should not be a default.</p>
+        <p style="margin-top:.6rem" data-i18n="g.p2b">Pick the tables your agent's work actually touches. A smaller selection means a faster first copy and smaller clones, and you can add more later.</p>
+      </div></li>
+
+      <li id="g3"><div>
+        <h3 data-i18n="g.h3">Run the first copy</h3>
+        <p data-i18n="g.p3">The schema is cloned, a subscription is created, and Postgres copies the selected tables in full. This is the one slow step and it happens once; the screen shows bytes landed against bytes expected. After it finishes the replica streams changes continuously, schema changes included.</p>
+      </div></li>
+
+      <li id="g4"><div>
+        <h3 data-i18n="g.h4">Take a snapshot</h3>
+        <p data-i18n="g.p4">A named instant of the replica, taken in O(1). This is what your agents will reset to, so take one when the data is in a state worth returning to — and take a fresh one whenever "current" has moved on.</p>
+        <pre class="term"><span class="k">create_snapshot</span>(name: <span class="s">"before-migration-42"</span>)
+<span class="k">list_snapshots</span>()</pre>
+      </div></li>
+
+      <li id="g5"><div>
+        <h3 data-i18n="g.h5">Create a clone</h3>
+        <p data-i18n="g.p5">A writable Postgres on its own port, built from that snapshot. The reply carries the connection string; that string is the whole handoff to whatever runs the tests.</p>
+        <pre class="term"><span class="k">create_clone</span>(description: <span class="s">"agent-a / migration-42"</span>)
+<span class="c">→ postgres://snaplicator:…@host:5455/appdb</span></pre>
+        <p style="margin-top:.75rem" data-i18n="g.p5b">If the data is sensitive, <code>configs/anonymize.sql</code> runs while the clone is built — before anyone is given that string.</p>
+      </div></li>
+
+      <li id="g6"><div>
+        <h3 data-i18n="g.h6">Wire it into the agent</h3>
+        <p data-i18n="g.p6">Register the MCP server with your client and the loop becomes the agent's own. Scope which clones it may mutate with the <code>clones</code> query parameter — an accident guardrail, so a confused agent cannot reset one that is not its own.</p>
+        <pre class="term"><span class="c">// .mcp.json</span>
+{
+  <span class="s">"mcpServers"</span>: {
+    <span class="s">"snaplicator"</span>: {
+      <span class="s">"url"</span>: <span class="s">"http://snaplicator-host:8765/mcp?clones=5455"</span>
+    }
+  }
+}</pre>
+        <pre class="term"><span class="c"># the loop, in the agent's own words</span>
+<span class="k">create_clone</span>(description: <span class="s">"try #1"</span>)   <span class="c">→ port 5455</span>
+<span class="c">… run migration, run the suite, it fails …</span>
+<span class="k">reset_clone_to_snapshot</span>(clone_id: <span class="s">"5455"</span>, snapshot_name: <span class="s">"before-migration-42"</span>)
+<span class="c">… try #2 …</span>
+<span class="k">delete_clone</span>(clone_id: <span class="s">"5455"</span>)</pre>
+      </div></li>
+    </ol>
+
+    <div class="note">
+      <span class="label" data-i18n="g.tiplabel">Keeping clones current</span>
+      <p data-i18n="g.tip">
+        A clone is a fixed point — it does not follow the primary, which is exactly what makes a
+        test repeatable. When you want newer data, take a newer snapshot and <code>refresh_clone</code>.
+        The replacement is built beside the old one and swapped in only once it is serving, so
+        clients see about half a second of unavailability rather than the whole rebuild.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══════════════ INSTALL ═══════════════ -->
+  <section id="install">
+    <div class="eyebrow" data-i18n="i.eyebrow">Install</div>
+    <h2 data-i18n="i.title">One line, then a UI</h2>
+    <p class="col sub" data-i18n="i.lead">
+      The installer surveys the host for somewhere to put the btrfs pool, provisions it, starts
+      the management plane, and stops at the screen where you choose what to replicate.
+    </p>
+
+    <h3 style="margin-top:2rem" data-i18n="i.h1">Linux</h3>
+    <div class="cmd">
+      <span class="p">$</span>
+      <span class="l" id="cmdL">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
+      <button class="copy" data-copy="cmdL" data-i18n="common.copy">copy</button>
+    </div>
+    <p class="cmd-note" data-i18n="i.n1">Needs Docker. btrfs-progs, postgresql-client and the compose plugin are added if missing.</p>
+
+    <h3 style="margin-top:1.8rem" data-i18n="i.h2">macOS</h3>
+    <div class="cmd">
+      <span class="p">$</span>
+      <span class="l" id="cmdM">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</span>
+      <button class="copy" data-copy="cmdM" data-i18n="common.copy">copy</button>
+    </div>
+    <p class="cmd-note" data-i18n="i.n2">btrfs is a Linux kernel filesystem, so there is nothing to install onto here. It creates an OrbStack machine named snaplicator and continues inside it.</p>
+
+    <h3 style="margin-top:1.8rem" data-i18n="i.h3">No database to hand?</h3>
+    <div class="cmd">
+      <span class="p">$</span>
+      <span class="l" id="cmdD">curl -fsSL …/install.sh | sudo bash -s -- --demo</span>
+      <button class="copy" data-copy="cmdD" data-i18n="common.copy">copy</button>
+    </div>
+    <p class="cmd-note" data-i18n="i.n3">Seeds a sample publisher so you can watch the whole thing work first.</p>
+
+    <div class="note">
+      <span class="label" data-i18n="i.rerunlabel">Running it again</span>
+      <p data-i18n="i.rerun">
+        Re-running is how you upgrade: it refreshes the checkout and rebuilds. Nothing on the
+        second run destroys anything — it offers to open what is already there, or to build a
+        second install beside it with its own ports, pool and publication.
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">
+  <span>Snaplicator</span>
+  <span data-i18n="foot.tag">Postgres logical replication + btrfs copy-on-write</span>
+  <span><a href="https://github.com/bhpark1013/Snaplicator">github.com/bhpark1013/Snaplicator</a></span>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ── i18n ───────────────────────────────────────────────────
+     English lives in the markup, so the page reads correctly
+     before this script runs and there is one copy of it rather
+     than two that can drift. The other languages are overlays. */
+  var DICT = {
+    ko: {
+      'nav.overview':'개요','nav.concepts':'개념','nav.guide':'사용법','nav.install':'설치',
+      'common.copy':'복사',
+      'hero.eyebrow':'AI를 위한 테스트 DB',
+      'hero.title':'에이전트가 마음껏 망가뜨려도 되는 데이터베이스.',
+      'hero.lead':'에이전트는 시드 데이터로 마이그레이션을 검증할 수 없습니다 — 그걸 깨뜨리는 행은 프로덕션에만 있으니까요. 그렇다고 프로덕션에 붙일 수도 없습니다. Snaplicator는 리플리카 하나를 프라이머리에 계속 따라붙게 해두고, 그 복사본을 얼마든지 찍어 냅니다. 만드는 데 몇 초, 디스크는 거의 0, 하나를 부숴도 상류는 아무것도 모릅니다.',
+      'hero.macnote':'macOS는 sudo 없이 — 리눅스 머신을 만들어 그 안에서 이어서 진행합니다.',
+      'loop.eyebrow':'반복 루프','loop.title':'에이전트가 실제로 하는 일',
+      'loop.w1':'에이전트','loop.b1':'클론을 하나 만듭니다. 몇 초, 조율 불필요, 아무에게도 영향 없음.',
+      'loop.w2':'에이전트','loop.b2':'마이그레이션을 돌립니다. 엉뚱한 컬럼을 지웁니다. WHERE 없이 DELETE 합니다.',
+      'loop.w3':'초기화','loop.b3':'시작했던 스냅샷으로 되돌립니다. 피해는 애초에 그 클론 자신의 블록 안에만 있었습니다.',
+      'loop.w4':'에이전트','loop.b4':'다음 버전을 시도합니다. 루프가 몇 초짜리라 틀려도 쌉니다.',
+      'loop.mcp':'이 루프는 에이전트가 직접 돕니다. Snaplicator에는 MCP 서버가 딸려 있어서, 클론 생성·초기화·삭제가 사람이 대신 해주는 절차가 아니라 에이전트가 호출하는 도구입니다.',
+      'why.eyebrow':'다른 방법이 안 되는 이유',
+      'why.t1':'공용 스테이징 DB','why.p1':'한 에이전트의 실패한 마이그레이션이 다른 모든 에이전트의 불안정한 테스트가 됩니다. 병렬 실행에는 격리가 필요한데 스테이징에는 없습니다.',
+      'why.t2':'덤프 복원','why.p2':'정확하지만 한 시간짜리입니다. 에이전트의 반복은 몇 초인데, 한 시간 걸리는 초기화는 결국 안 하게 되는 초기화입니다.',
+      'why.t3':'시드 픽스처','why.p3':'빠르고 깔끔하지만 버그를 재현하지 못합니다. 예상 못 한 NULL이 든 그 행은 팩토리가 아니라 프로덕션에 있습니다.',
+      'con.eyebrow':'세 단어','con.title':'리플리카, 스냅샷, 클론',
+      'con.lead':'각각은 바로 앞의 것으로 만들어집니다. 이게 모델의 전부이고 네 번째 개념은 없습니다. 카드를 눌러 비용을 확인해 보세요.',
+      'con.k1':'하나, 항상 켜짐','con.h1':'리플리카',
+      'con.p1':'프라이머리를 구독해 계속 따라가는 Postgres입니다. 여기에 직접 쿼리하지도, 쓰지도 않습니다 — 최신 상태를 유지하는 게 존재 이유입니다.',
+      'con.c1':'비용: 프라이머리의 복제 슬롯 하나',
+      'con.m1':'설치당 정확히 하나입니다. 에이전트에게 건네는 물건이 아니라, 나머지 전부를 잘라내는 원본입니다. 프라이머리의 스키마 변경도 여기로 복제되므로 형태가 어긋나지 않습니다.',
+      'con.k2':'서버가 아니라 한 순간','con.h2':'스냅샷',
+      'con.p2':'리플리카의 파일을 특정 시점에 얼린 것입니다. 돌아가는 게 없으므로 스냅샷에는 접속할 수 없습니다. 되돌아올 지점입니다.',
+      'con.c2':'비용: 생성 O(1) · 이후 달라진 만큼만',
+      'con.m2':'사람들이 쿼리할 수 있다고 기대하는 대상이면서, 여기서 유일하게 데이터베이스가 아닌 것입니다. 이름 붙인 순간이라고 보면 됩니다. 클론을 이 지점으로 되돌릴 수 있다는 게 가치입니다.',
+      'con.k3':'원하는 만큼','con.h3':'클론',
+      'con.p3':'스냅샷 위에 Postgres를 띄운 것, 자기 포트를 가집니다. 쓰기 가능하고, 당신 것이고, 버려도 됩니다. 안에서 테이블을 지워도 상류는 모릅니다.',
+      'con.c3':'비용: 생성 몇 초 · 쓰기 전까지 약 0 GB',
+      'con.m3':'에이전트가 받는 접속 문자열이 이겁니다. 프라이머리를 따라가지 않는 고정된 지점이고, 그래서 테스트가 재현 가능합니다. 더 최신 데이터가 필요하면 더 최신 스냅샷으로 다시 만드세요.',
+      'lab.title':'Copy-on-write, 직접 만져 보기',
+      'lab.hint':'설명용 모델 — 기준 300 GB',
+      'lab.intro':'클론은 자기가 나온 스냅샷과 모든 블록을 공유하고, 바뀐 만큼만 새로 할당합니다. 몇 개 추가해 보고 디스크가 어떻게 되는지 보세요.',
+      'lab.add':'+ 클론 추가','lab.write':'각각 2 GB 쓰기','lab.reset':'전부 스냅샷으로 초기화','lab.clear':'전부 삭제',
+      'lab.m1':'Snaplicator로 쓰는 디스크','lab.m2':'전부 완전 복사본이었다면',
+      'lab.empty':'클론 없음 — 리플리카만 있습니다',
+      'lab.verdict0':'클론을 추가해 차이를 확인해 보세요.',
+      'con.notelabel':'이걸 가능하게 하는 것',
+      'con.note':'풀이 btrfs라서, 이건 Snaplicator가 부리는 재주가 아니라 파일시스템의 동작입니다. 300 GB 리플리카의 클론 10개는 3 TB가 아닙니다. 300 GB + 그 10개가 쓴 만큼입니다.',
+      'g.eyebrow':'사용법','g.title':'아무것도 없는 상태에서 에이전트 전용 DB까지',
+      'g.lead':'1–3단계는 한 번뿐입니다. 4–6단계가 에이전트가 반복하는 부분입니다.',
+      'g.n1':'1. 설치','g.n2':'2. 테이블 선택','g.n3':'3. 초기 복제','g.n4':'4. 스냅샷','g.n5':'5. 클론','g.n6':'6. 에이전트 연결',
+      'g.h1':'설치하고 프라이머리를 지정',
+      'g.p1':'한 줄이면 됩니다. btrfs 풀을 준비하고 관리 서버를 띄운 뒤 UI를 엽니다. 프롬프트에 접속 URI를 답하면 되고 — 그 DB에서는 읽기만 합니다 — 없으면 <code>demo</code>로 샘플 DB를 먼저 만들 수 있습니다.',
+      'g.h2':'무엇을 복제할지 고르기',
+      'g.p2':'UI에서 테이블마다 용량과 행 수를 보며 고릅니다. 검색으로 좁히면 툴바에서 일치하는 전부를 한 번에 설정할 수 있습니다. 말하기 전까지는 아무것도 복사하지 않습니다 — 300 GB짜리 결정이 기본값이어서는 안 되니까요.',
+      'g.p2b':'에이전트의 작업이 실제로 건드리는 테이블만 고르세요. 선택이 작을수록 초기 복제가 빠르고 클론도 작아지며, 나중에 더 추가할 수 있습니다.',
+      'g.h3':'초기 복제 실행',
+      'g.p3':'스키마를 복제하고 구독을 만든 뒤 선택한 테이블을 전부 복사합니다. 유일하게 오래 걸리는 단계이고 한 번뿐입니다. 화면에는 안착한 바이트 대 예상 바이트가 표시됩니다. 끝나면 리플리카는 스키마 변경을 포함해 변경분을 계속 스트리밍합니다.',
+      'g.h4':'스냅샷 찍기',
+      'g.p4':'리플리카의 이름 붙은 순간을 O(1)로 남깁니다. 에이전트들이 되돌아올 지점이므로, 돌아올 가치가 있는 상태일 때 찍고 "현재"가 옮겨 갔으면 새로 찍으세요.',
+      'g.h5':'클론 만들기',
+      'g.p5':'그 스냅샷에서 만든, 자기 포트를 가진 쓰기 가능한 Postgres입니다. 응답에 접속 문자열이 담겨 오고, 테스트를 돌리는 쪽에 넘길 건 그 문자열이 전부입니다.',
+      'g.p5b':'민감한 데이터라면 클론을 만드는 동안 <code>configs/anonymize.sql</code>이 실행됩니다 — 그 문자열을 누구에게 주기 전에요.',
+      'g.h6':'에이전트에 연결',
+      'g.p6':'클라이언트에 MCP 서버를 등록하면 이 루프가 에이전트 자신의 것이 됩니다. <code>clones</code> 쿼리 파라미터로 변경 가능한 클론을 제한하세요 — 혼란에 빠진 에이전트가 남의 클론을 초기화하지 못하게 하는 사고 방지턱입니다.',
+      'g.tiplabel':'클론을 최신으로 유지하기',
+      'g.tip':'클론은 고정된 지점입니다 — 프라이머리를 따라가지 않고, 그래서 테스트가 재현 가능합니다. 더 최신 데이터가 필요하면 새 스냅샷을 찍고 <code>refresh_clone</code>을 쓰세요. 교체본은 기존 것 옆에 만들어져 서비스 가능해진 뒤에야 바뀌므로, 클라이언트는 재빌드 전체가 아니라 0.5초 남짓만 끊깁니다.',
+      'i.eyebrow':'설치','i.title':'한 줄, 그다음은 UI',
+      'i.lead':'설치 프로그램이 btrfs 풀을 놓을 자리를 호스트에서 찾아 준비하고, 관리 서버를 띄운 뒤, 무엇을 복제할지 고르는 화면에서 멈춥니다.',
+      'i.h1':'Linux','i.n1':'Docker가 필요합니다. btrfs-progs, postgresql-client, compose 플러그인은 없으면 설치해 줍니다.',
+      'i.h2':'macOS','i.n2':'btrfs는 리눅스 커널 파일시스템이라 여기에는 설치할 대상이 없습니다. snaplicator라는 OrbStack 머신을 만들어 그 안에서 이어 갑니다.',
+      'i.h3':'붙일 DB가 없다면?','i.n3':'샘플 publisher를 만들어 전체 동작을 먼저 볼 수 있게 합니다.',
+      'i.rerunlabel':'다시 실행할 때','i.rerun':'재실행이 곧 업그레이드입니다. 체크아웃을 갱신하고 다시 빌드합니다. 두 번째 실행에서 파괴되는 건 없습니다 — 이미 있는 걸 열지, 자기 포트·풀·publication을 가진 두 번째 설치를 옆에 만들지 물어봅니다.',
+      'lab.verdict':'<b>{saved}</b> 할당되지 않음 · 클론 {n}개 · 디스크 {x}배 절약',
+      'lab.notesnap':'기준 {base} GB + 클론 {n}개가 쓴 {w}',
+      'lab.notenaive':'{base} GB × {n}',
+      'foot.tag':'Postgres 논리 복제 + btrfs copy-on-write'
+    },
+    ja: {
+      'nav.overview':'概要','nav.concepts':'コンセプト','nav.guide':'使い方','nav.install':'インストール',
+      'common.copy':'コピー',
+      'hero.eyebrow':'AI のためのテスト DB',
+      'hero.title':'エージェントが壊してもいいデータベースを。',
+      'hero.lead':'エージェントはシードデータでマイグレーションを検証できません。それを壊す行は本番にしか存在しないからです。かといって本番につなぐわけにもいきません。Snaplicator はレプリカ 1 台をプライマリに追従させ続け、その使い捨てコピーを配ります。作成は数秒、ディスクはほぼゼロ、1 つ壊しても上流は何も気づきません。',
+      'hero.macnote':'macOS では sudo 不要 — Linux マシンを作り、その中で続行します。',
+      'loop.eyebrow':'ループ','loop.title':'エージェントが実際にやること',
+      'loop.w1':'エージェント','loop.b1':'クローンを 1 つ取ります。数秒、調整不要、誰にも影響しません。',
+      'loop.w2':'エージェント','loop.b2':'マイグレーションを実行。間違った列を削除。WHERE なしで DELETE。',
+      'loop.w3':'リセット','loop.b3':'開始時のスナップショットへ。被害はそのクローン自身のブロック内にしかありませんでした。',
+      'loop.w4':'エージェント','loop.b4':'次の版を試します。ループが数秒なので、間違えるコストが低いのです。',
+      'loop.mcp':'このループはエージェント自身が回します。Snaplicator には MCP サーバーが同梱されており、クローンの作成・リセット・削除は人が代行する手順ではなく、エージェントが呼ぶツールです。',
+      'why.eyebrow':'他の手段では足りない理由',
+      'why.t1':'共有ステージング DB','why.p1':'あるエージェントの失敗したマイグレーションが、他の全エージェントの不安定なテストになります。並列実行には分離が要りますが、ステージングにはありません。',
+      'why.t2':'ダンプのリストア','why.p2':'正確ですが 1 時間かかります。エージェントの反復は数秒。1 時間かかるリセットは、結局やらなくなるリセットです。',
+      'why.t3':'シードフィクスチャ','why.p3':'速くて綺麗ですが、バグを再現しません。想定外の NULL が入ったその行は、ファクトリではなく本番にあります。',
+      'con.eyebrow':'3 つの言葉','con.title':'レプリカ、スナップショット、クローン',
+      'con.lead':'それぞれ 1 つ前のものから作られます。モデルはこれだけで、4 つ目はありません。カードを選ぶとコストが見えます。',
+      'con.k1':'1 つ、常時稼働','con.h1':'レプリカ',
+      'con.p1':'プライマリを購読して追従し続ける Postgres です。ここに直接クエリも書き込みもしません — 最新であることが存在理由です。',
+      'con.c1':'コスト: プライマリのレプリケーションスロット 1 つ',
+      'con.m1':'インストールごとにちょうど 1 つ。エージェントに渡すものではなく、他のすべてを切り出す元です。プライマリのスキーマ変更もここへ複製されるので、形がずれません。',
+      'con.k2':'サーバーではなく瞬間','con.h2':'スナップショット',
+      'con.p2':'レプリカのファイルをある時点で凍結したものです。動いているものが無いので、スナップショットには接続できません。戻ってくる地点です。',
+      'con.c2':'コスト: 取得は O(1) · 以後に差分が出た分だけ',
+      'con.m2':'クエリできると期待されがちな対象でありながら、ここで唯一データベースでないものです。名前を付けた瞬間だと考えてください。クローンをそこへ戻せることが価値です。',
+      'con.k3':'いくつでも','con.h3':'クローン',
+      'con.p3':'スナップショットの上に Postgres を起動したもので、専用ポートを持ちます。書き込み可、あなたのもの、使い捨て。中でテーブルを消しても上流は気づきません。',
+      'con.c3':'コスト: 作成は数秒 · 書き込むまで約 0 GB',
+      'con.m3':'エージェントが受け取る接続文字列はこれです。プライマリに追従しない固定点であり、それがテストを再現可能にします。新しいデータが要るなら、新しいスナップショットから作り直します。',
+      'lab.title':'Copy-on-write を手元で',
+      'lab.hint':'説明用モデル — ベース 300 GB',
+      'lab.intro':'クローンは元のスナップショットと全ブロックを共有し、変更した分だけ確保します。いくつか足して、ディスクの動きを見てください。',
+      'lab.add':'+ クローン追加','lab.write':'各 2 GB 書き込み','lab.reset':'全てスナップショットへ','lab.clear':'全て削除',
+      'lab.m1':'Snaplicator でのディスク使用量','lab.m2':'すべて完全コピーだった場合',
+      'lab.empty':'クローンなし — レプリカのみ',
+      'lab.verdict0':'クローンを追加して差を確かめてください。',
+      'con.notelabel':'これを成り立たせているもの',
+      'con.note':'プールが btrfs なので、これは Snaplicator の小細工ではなくファイルシステムの挙動です。300 GB のレプリカのクローン 10 個は 3 TB ではありません。300 GB + その 10 個が書いた分です。',
+      'g.eyebrow':'使い方','g.title':'ゼロから、エージェント専用 DB まで',
+      'g.lead':'手順 1–3 は一度きり。4–6 がエージェントの繰り返す部分です。',
+      'g.n1':'1. インストール','g.n2':'2. テーブル選択','g.n3':'3. 初回コピー','g.n4':'4. スナップショット','g.n5':'5. クローン','g.n6':'6. エージェント連携',
+      'g.h1':'インストールしてプライマリを指定',
+      'g.p1':'一行です。btrfs プールを用意し、管理プレーンを起動し、UI を開きます。プロンプトには接続 URI を — その DB からは読むだけです — 無ければ <code>demo</code> でサンプルを先に作れます。',
+      'g.h2':'複製対象を選ぶ',
+      'g.p2':'UI で、各テーブルの容量と行数を見ながら選びます。検索で絞れば、ツールバーから一致するもの全部を一度に設定できます。指示するまで何もコピーしません — 300 GB の判断が既定値であってはいけません。',
+      'g.p2b':'エージェントの作業が実際に触れるテーブルだけ選んでください。選択が小さいほど初回コピーは速く、クローンも小さくなります。後から追加できます。',
+      'g.h3':'初回コピーを実行',
+      'g.p3':'スキーマを複製し、サブスクリプションを作り、選択したテーブルを丸ごとコピーします。唯一の遅い工程で、一度きりです。画面には到達バイト数と予想バイト数が出ます。完了後はスキーマ変更を含め、変更が継続的に流れ込みます。',
+      'g.h4':'スナップショットを取る',
+      'g.p4':'レプリカの名前付きの瞬間を O(1) で残します。エージェントが戻る地点なので、戻る価値のある状態のときに取り、「現在」が進んだら取り直してください。',
+      'g.h5':'クローンを作る',
+      'g.p5':'そのスナップショットから作られた、専用ポートを持つ書き込み可能な Postgres です。応答に接続文字列が入っており、テストを走らせる側へ渡すのはその文字列だけです。',
+      'g.p5b':'機微なデータなら、クローン構築中に <code>configs/anonymize.sql</code> が走ります — 誰かにその文字列を渡す前に。',
+      'g.h6':'エージェントに組み込む',
+      'g.p6':'クライアントに MCP サーバーを登録すれば、ループはエージェント自身のものになります。<code>clones</code> クエリパラメータで変更可能なクローンを限定してください — 混乱したエージェントが他人のクローンをリセットしないための事故防止です。',
+      'g.tiplabel':'クローンを新しく保つ',
+      'g.tip':'クローンは固定点です — プライマリに追従せず、だからこそテストが再現可能です。新しいデータが要るときは新しいスナップショットを取り <code>refresh_clone</code> を使います。置き換えは既存の隣に作られ、応答可能になってから切り替わるので、クライアントの断は再構築全体ではなく 0.5 秒ほどです。',
+      'i.eyebrow':'インストール','i.title':'一行、そして UI',
+      'i.lead':'インストーラーが btrfs プールの置き場所をホストから探して用意し、管理プレーンを起動し、複製対象を選ぶ画面で止まります。',
+      'i.h1':'Linux','i.n1':'Docker が必要です。btrfs-progs、postgresql-client、compose プラグインは無ければ追加されます。',
+      'i.h2':'macOS','i.n2':'btrfs は Linux カーネルのファイルシステムなので、ここには入れる先がありません。snaplicator という OrbStack マシンを作り、その中で続行します。',
+      'i.h3':'つなぐ DB が無い場合','i.n3':'サンプルの publisher を作り、まず全体の動きを見られるようにします。',
+      'i.rerunlabel':'再実行するとき','i.rerun':'再実行がそのままアップグレードです。チェックアウトを更新して再ビルドします。2 回目の実行で壊れるものはありません — 既にあるものを開くか、専用のポート・プール・publication を持つ 2 つ目のインストールを隣に作るかを尋ねます。',
+      'lab.verdict':'<b>{saved}</b> 未割り当て · クローン {n} 個 · ディスク {x} 分の 1',
+      'lab.notesnap':'ベース {base} GB + クローン {n} 個が書いた {w}',
+      'lab.notenaive':'{base} GB × {n}',
+      'foot.tag':'Postgres 論理レプリケーション + btrfs copy-on-write'
+    }
+  };
+
+  var EN = {};
+  var i18nNodes = [];
+  function collect() {
+    i18nNodes = [].slice.call(document.querySelectorAll('[data-i18n]'));
+    i18nNodes.forEach(function (el) { EN[el.getAttribute('data-i18n')] = el.innerHTML; });
+  }
+  function applyLang(lang) {
+    var d = DICT[lang];
+    i18nNodes.forEach(function (el) {
+      var k = el.getAttribute('data-i18n');
+      var v = (d && d[k]) || EN[k];
+      if (v != null) el.innerHTML = v;
+    });
+    document.documentElement.lang = lang;
+    [].forEach.call(document.querySelectorAll('#langs button'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
+    });
+    try { localStorage.setItem('snap.lang', lang); } catch (e) {}
+    render();
+  }
+
+  /* ── views ─────────────────────────────────────────────── */
+  var VIEWS = ['overview', 'concepts', 'guide', 'install'];
+  function show(view, push) {
+    if (VIEWS.indexOf(view) < 0) view = 'overview';
+    VIEWS.forEach(function (v) {
+      document.getElementById(v).classList.toggle('active', v === view);
+    });
+    [].forEach.call(document.querySelectorAll('#nav button'), function (b) {
+      if (b.dataset.view === view) b.setAttribute('aria-current', 'page');
+      else b.removeAttribute('aria-current');
+    });
+    if (push && location.hash !== '#' + view) history.pushState(null, '', '#' + view);
+    window.scrollTo({ top: 0, behavior: 'instant' in document.documentElement.style ? 'instant' : 'auto' });
+  }
+  document.getElementById('nav').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-view]');
+    if (b) show(b.dataset.view, true);
+  });
+  window.addEventListener('popstate', function () { show(location.hash.slice(1), false); });
+
+  /* In-page guide anchors must not be swallowed by the router. */
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest('a[href^="#g"]');
+    if (!a) return;
+    var t = document.getElementById(a.getAttribute('href').slice(1));
+    if (t) { e.preventDefault(); t.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  });
+
+  /* ── concept cards ─────────────────────────────────────── */
+  document.getElementById('spine').addEventListener('click', function (e) {
+    var s = e.target.closest('.stage');
+    if (!s) return;
+    var open = s.getAttribute('aria-expanded') === 'true';
+    [].forEach.call(this.querySelectorAll('.stage'), function (o) {
+      o.setAttribute('aria-expanded', 'false');
+      o.querySelector('.more').hidden = true;
+    });
+    if (!open) { s.setAttribute('aria-expanded', 'true'); s.querySelector('.more').hidden = false; }
+  });
+
+  /* ── copy buttons ──────────────────────────────────────── */
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-copy]');
+    if (!b) return;
+    var txt = document.getElementById(b.dataset.copy).textContent;
+    navigator.clipboard && navigator.clipboard.writeText(txt).then(function () {
+      var was = b.textContent; b.textContent = '✓';
+      setTimeout(function () { b.textContent = was; }, 1200);
+    });
+  });
+
+  /* ── the copy-on-write lab ─────────────────────────────────
+     A model, not a measurement — the numbers are stated as such
+     in the header. What it has to make true is the shape: the
+     Snaplicator bar grows only when something is written, and the
+     full-copy bar grows on every clone. */
+  var BASE = 300, WRITE = 2, CAP = 2400;
+  var clones = [], nextPort = 5455, seq = 0;
+
+  function t(key, fallback) {
+    var lang = document.documentElement.lang;
+    var d = DICT[lang];
+    return (d && d[key]) || fallback;
+  }
+  function gb(n) { return n.toFixed(1) + ' GB'; }
+  /* Word order differs enough between these three that the numbers have to be
+     placed by the translation, not concatenated around it. */
+  function fill(tpl, vals) {
+    return tpl.replace(/\{(\w+)\}/g, function (_, k) { return vals[k]; });
+  }
+
+  function render() {
+    var list = document.getElementById('cloneList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!clones.length) {
+      var e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = t('lab.empty', 'No clones — just the replica');
+      list.appendChild(e);
+    }
+    clones.forEach(function (c) {
+      var row = document.createElement('div');
+      row.className = 'clone-row';
+      row.innerHTML =
+        '<span class="cname">clone-' + c.n + '</span>' +
+        '<span class="cport">:' + c.port + '</span>' +
+        '<span class="cw">+' + gb(c.written) + '</span>';
+      var w = document.createElement('button');
+      w.className = 'btn mini'; w.textContent = '+' + WRITE + ' GB';
+      w.onclick = function () { c.written += WRITE; render(); };
+      var r = document.createElement('button');
+      r.className = 'btn mini'; r.textContent = '⟲';
+      r.title = 'reset to snapshot';
+      r.onclick = function () { c.written = 0; render(); };
+      var d = document.createElement('button');
+      d.className = 'btn mini'; d.textContent = '✕';
+      d.onclick = function () { clones = clones.filter(function (x) { return x !== c; }); render(); };
+      row.appendChild(w); row.appendChild(r); row.appendChild(d);
+      list.appendChild(row);
+    });
+
+    var written = clones.reduce(function (n, c) { return n + c.written; }, 0);
+    var snapTotal = BASE + written;
+    var naiveTotal = BASE * (1 + clones.length);
+
+    document.getElementById('valSnap').textContent = gb(snapTotal);
+    document.getElementById('valNaive').textContent = gb(naiveTotal);
+    document.getElementById('barSnap').style.width = Math.min(100, snapTotal / CAP * 100) + '%';
+    document.getElementById('barNaive').style.width = Math.min(100, naiveTotal / CAP * 100) + '%';
+    document.getElementById('noteSnap').textContent = fill(
+      t('lab.notesnap', '{base} GB base + {w} written across {n} clone(s)'),
+      { base: BASE, w: gb(written), n: clones.length });
+    document.getElementById('noteNaive').textContent = clones.length
+      ? fill(t('lab.notenaive', '{n} × {base} GB'), { n: clones.length + 1, base: BASE })
+      : BASE + ' GB';
+
+    var v = document.getElementById('verdict');
+    if (!clones.length) {
+      v.textContent = t('lab.verdict0', 'Add a clone to see the difference.');
+    } else {
+      v.innerHTML = fill(
+        t('lab.verdict', '<b>{saved}</b> never allocated · {n} clone(s) · {x}× less disk'),
+        { saved: gb(naiveTotal - snapTotal), n: clones.length,
+          x: (naiveTotal / snapTotal).toFixed(1) });
+    }
+    [].forEach.call(document.querySelectorAll('#writeAll,#resetAll,#clearAll'), function (b) {
+      b.disabled = clones.length === 0;
+    });
+  }
+
+  document.getElementById('addClone').onclick = function () {
+    if (clones.length >= 8) return;
+    clones.push({ n: ++seq, port: nextPort++, written: 0 });
+    render();
+  };
+  document.getElementById('writeAll').onclick = function () {
+    clones.forEach(function (c) { c.written += WRITE; }); render();
+  };
+  document.getElementById('resetAll').onclick = function () {
+    clones.forEach(function (c) { c.written = 0; }); render();
+  };
+  document.getElementById('clearAll').onclick = function () { clones = []; render(); };
+
+  /* ── boot ──────────────────────────────────────────────── */
+  collect();
+  var saved = null;
+  try { saved = localStorage.getItem('snap.lang'); } catch (e) {}
+  var nav = (navigator.language || 'en').slice(0, 2);
+  applyLang(saved || (DICT[nav] ? nav : 'en'));
+  document.getElementById('langs').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-lang]');
+    if (b) applyLang(b.dataset.lang);
+  });
+  show(location.hash.slice(1) || 'overview', false);
+})();
+</script>
+</body>
+</html>
