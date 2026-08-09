@@ -82,11 +82,19 @@ def get_lag():
 def get_copy_progress():
     try:
         _require_subscriber_settings()
+        # Built, not read: PUBLISHER_CONNSTR is empty on every install that was
+        # given PRIMARY_* fields instead, which is most of them. Best-effort —
+        # the total is an extra, and a copy in progress is still worth watching
+        # without it.
+        try:
+            pub_connstr = _build_publisher_connstr()
+        except Exception:
+            pub_connstr = None
         return get_initial_copy_progress(
             settings.container_name,
             settings.postgres_user,
             settings.postgres_db,
-            publisher_connstr=settings.publisher_connstr or None,
+            publisher_connstr=pub_connstr,
         )
     except HTTPException:
         raise
