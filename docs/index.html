@@ -271,23 +271,6 @@
   table.cmp tr.ours { background: var(--t-live-bg); }
   table.cmp em { font-style: italic; }
   .alts q { quotes: '“' '”'; font-style: normal; color: var(--ink); }
-  .ddl { margin-top: clamp(2rem, 4vw, 3rem); }
-  .ddl p { font-size: .95rem; }
-  .ddl q { quotes: '“' '”'; color: var(--ink); }
-
-  /* Two paths out of one moment. The contrast is the content, so they sit
-     side by side and the one being argued for is the one with the colour. */
-  .scene { margin-top: clamp(2rem, 4vw, 2.75rem); border-top: 2px solid var(--t-mid);
-           background: var(--paper-2); border-radius: 0 0 10px 10px; padding: 1.15rem 1.25rem 1.3rem; }
-  .scene-when { font-family: var(--display); font-weight: 700; font-size: 1.02rem;
-                color: var(--ink); margin: 0 0 1rem; max-width: 46ch; }
-  .scene-paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
-                 gap: 1rem 1.6rem; }
-  .path-who { font-family: var(--mono); font-size: .72rem; letter-spacing: .04em;
-              color: var(--ink-3); display: block; margin-bottom: .4rem; }
-  .path.hi .path-who { color: var(--t-live-ink); }
-  .path p { margin: 0; font-size: .89rem; }
-  .path.hi p { color: var(--ink); }
 
   .sources { font-family: var(--mono); font-size: .72rem; color: var(--ink-3);
              margin-top: 1.8rem; line-height: 2; }
@@ -658,40 +641,11 @@
       </table>
     </div>
 
-    <div class="ddl">
-      <h2 data-i18n="cmp.ddltitle">The schema column is the interesting one</h2>
-      <p data-i18n="cmp.ddl1">
-        Postgres is blunt about this: <q>The database schema and DDL commands are not replicated.</q>
-        That is why following a managed primary usually means <span class="nb">re-copying</span> it on a schedule — the
-        alternative is a replica whose schema drifts until replication errors out.
-      </p>
-      <p data-i18n="cmp.ddl2">
-        Snaplicator captures DDL on the primary with event triggers, ships it through the same
-        publication, and replays it on the replica. Add a column at 14:02 and the replica has it
-        at 14:02 — no refresh, no <span class="nb">re-dump</span>.
-      </p>
-    </div>
-
-    <div class="scene">
-      <p class="scene-when" data-i18n="cmp.when">Production is on Aurora. Something is wrong with the data, and it is wrong now.</p>
-      <div class="scene-paths">
-        <div class="path">
-          <span class="path-who" data-i18n="cmp.path1w">With a copy that refreshes on a schedule</span>
-          <p data-i18n="cmp.path1">Your copy is as old as the last refresh. To reproduce what is happening you start a full dump and restore, and then you wait — while the incident continues. If a migration shipped this morning, the schema is wrong too.</p>
-        </div>
-        <div class="path hi">
-          <span class="path-who" data-i18n="cmp.path2w">With a replica that never stopped following</span>
-          <p data-i18n="cmp.path2">Already current — rows and schema both. Take a snapshot, make a clone, and you are querying <span class="nb">production-shaped</span> data from moments ago. Nothing you waited for was a dump.</p>
-        </div>
-      </div>
-    </div>
-
-    <h2 class="after-figure" data-i18n="cmp.title">Where the differences actually bite</h2>
 
     <dl class="alts">
       <div>
         <dt data-i18n="cmp.t1">Neon and Supabase branching</dt>
-        <dd data-i18n="cmp.p1">Both are excellent, and if you already run on them, use their branching — a branch there <em>is</em> your data. Neon will also follow an RDS or Cloud SQL primary over logical replication rather than hosting it, and then two things change: the data lands in Neon&rsquo;s cloud, and the schema becomes yours to keep in step — their guide requires that <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> That is the gap the next section is about.</dd>
+        <dd data-i18n="cmp.p1">Both are excellent, and if you already run on them, use their branching — a branch there <em>is</em> your data. Neon will also follow an RDS or Cloud SQL primary over logical replication rather than hosting it, and then two things change: the data lands in Neon&rsquo;s cloud, and the schema becomes yours to keep in step — their guide requires that <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q></dd>
       </div>
       <div>
         <dt data-i18n="cmp.t2">Aurora fast cloning</dt>
@@ -1092,9 +1046,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.aur1':'클론은 뜬 시점에 고정','cmp.aur2':'원본과 같은 스토리지','cmp.aur3':'15개까지, 그 뒤로는 전체 복사',
       'cmp.dbl1':'매니지드는 주기적으로 다시 받음','cmp.dbl2':'다음 전체 갱신 때만','cmp.dbl3':'ZFS 또는 LVM 씬 클론',
       'cmp.sn1':'논리 복제, 매니지드 포함','cmp.sn2':'이벤트 트리거가 DDL을 재실행','cmp.sn3':'btrfs <span class="nb">copy-on-write</span>',
-      'cmp.title':'차이가 실제로 갈리는 지점',
       'cmp.t1':'Neon과 Supabase 브랜칭',
-      'cmp.p1':'둘 다 훌륭하고, 이미 거기서 돌고 있다면 그쪽 브랜칭을 쓰세요. 거기 브랜치는 <em>곧</em> 내 데이터입니다. Neon은 RDS나 Cloud SQL 프라이머리를 호스팅하는 대신 논리 복제로 따라가 주기도 합니다. 그러면 두 가지가 달라집니다. 데이터가 Neon 클라우드에 놓이고, 스키마는 직접 맞춰 둬야 합니다. 자기네 가이드가 이렇게 요구하니까요. <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> 바로 다음 절이 그 빈틈 이야기입니다.',
+      'cmp.p1':'둘 다 훌륭하고, 이미 거기서 돌고 있다면 그쪽 브랜칭을 쓰세요. 거기 브랜치는 <em>곧</em> 내 데이터입니다. Neon은 RDS나 Cloud SQL 프라이머리를 호스팅하는 대신 논리 복제로 따라가 주기도 합니다. 그러면 두 가지가 달라집니다. 데이터가 Neon 클라우드에 놓이고, 스키마는 직접 맞춰 둬야 합니다. 자기네 가이드가 이렇게 요구하니까요. <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q>',
       'cmp.t2':'Aurora 패스트 클로닝',
       'cmp.p2':'스토리지 계층의 <span class="nb">copy-on-write</span>이고 실제로 빠릅니다. 다만 클론 하나가 DB 클러스터고 클러스터에는 인스턴스가 붙어야 해서, 살려 두는 내내 컴퓨트 요금이 나갑니다. 개수 제한도 있습니다. <q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 전용이라 일반 RDS Postgres는 안 됩니다.',
       'cmp.t3':'DBLab (Postgres.ai)',
@@ -1106,14 +1059,6 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.aur4':'AWS Aurora 전용',
       'cmp.dbl4':'내 장비',
       'cmp.sn4':'내가 가진 머신 한 대',
-      'cmp.ddltitle':'스키마 칸이 진짜 볼 곳입니다',
-      'cmp.ddl1':'Postgres 문서가 딱 잘라 말합니다. <q>The database schema and DDL commands are not replicated.</q> 그래서 매니지드 프라이머리를 따라가려면 보통 주기적으로 통째로 다시 받습니다. 안 그러면 스키마가 어긋나다가 복제가 터집니다.',
-      'cmp.ddl2':'Snaplicator는 프라이머리에서 이벤트 트리거로 DDL을 잡아 같은 publication에 실어 보내고, 리플리카에서 다시 실행합니다. 14시 02분에 컬럼을 추가하면 리플리카도 14시 02분에 갖습니다.',
-      'cmp.when':'프로덕션이 Aurora에 있습니다. 데이터가 이상한데, 지금 이상합니다.',
-      'cmp.path1w':'주기적으로 갱신하는 사본이라면',
-      'cmp.path1':'갖고 있는 사본은 마지막 갱신 시점만큼 낡았습니다. 재현하려면 통째로 덤프 떠서 복원하고 기다립니다. 장애는 계속되고요. 오늘 아침에 마이그레이션이 나갔다면 스키마까지 다릅니다.',
-      'cmp.path2w':'따라가기를 멈춘 적 없는 리플리카라면',
-      'cmp.path2':'이미 최신입니다. 행도 스키마도요. 스냅샷 찍고 클론을 만들면 조금 전 프로덕션과 같은 모양의 데이터에 바로 쿼리를 날립니다. 기다린 것 중에 덤프는 없습니다.',
       'cmp.srclabel':'확인한 문서:',
       'foot.tag':'Postgres 논리 복제 + btrfs <span class="nb">copy-on-write</span>'
     },
@@ -1217,9 +1162,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.aur1':'クローンは取った時点で固定','cmp.aur2':'ソースと同じストレージ','cmp.aur3':'15 個まで、その後は完全コピー',
       'cmp.dbl1':'マネージドは定期的に取り直し','cmp.dbl2':'次の完全更新時のみ','cmp.dbl3':'ZFS または LVM のシンクローン',
       'cmp.sn1':'論理レプリケーション、マネージドも','cmp.sn2':'イベントトリガーが DDL を再実行','cmp.sn3':'btrfs <span class="nb">copy-on-write</span>',
-      'cmp.title':'違いが実際に効いてくるところ',
       'cmp.t1':'Neon と Supabase のブランチ',
-      'cmp.p1':'どちらも優秀で、すでにそこで動いているなら、そちらのブランチ機能を使ってください。あちらのブランチは<em>そのまま</em>自分のデータです。Neon は RDS や Cloud SQL のプライマリを、ホストする代わりに論理レプリケーションで追従することもできます。その場合、2 つが変わります。データが Neon のクラウドに置かれること、そしてスキーマは自分で合わせ続ける必要があることです。公式ガイドがこう求めています。<q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> 次の節はまさにその隙間の話です。',
+      'cmp.p1':'どちらも優秀で、すでにそこで動いているなら、そちらのブランチ機能を使ってください。あちらのブランチは<em>そのまま</em>自分のデータです。Neon は RDS や Cloud SQL のプライマリを、ホストする代わりに論理レプリケーションで追従することもできます。その場合、2 つが変わります。データが Neon のクラウドに置かれること、そしてスキーマは自分で合わせ続ける必要があることです。公式ガイドがこう求めています。<q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q>',
       'cmp.t2':'Aurora ファストクローニング',
       'cmp.p2':'ストレージ層の <span class="nb">copy-on-write</span> で、実際に速いです。ただしクローン 1 つが DB クラスターで、クラスターにはインスタンスが要るので、置いておくあいだ課金が続きます。上限もあります。<q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 専用で、通常の RDS Postgres では使えません。',
       'cmp.t3':'DBLab (Postgres.ai)',
@@ -1231,14 +1175,6 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.aur4':'AWS Aurora 専用',
       'cmp.dbl4':'自前の機材',
       'cmp.sn4':'自分の持つマシン 1 台',
-      'cmp.ddltitle':'スキーマの列が本題です',
-      'cmp.ddl1':'Postgres の文書は明快です。<q>The database schema and DDL commands are not replicated.</q> だからマネージドのプライマリに追従するには、たいてい定期的に丸ごと取り直すことになります。さもなければスキーマがずれ、やがてレプリケーションが止まります。',
-      'cmp.ddl2':'Snaplicator はイベントトリガーで DDL を捕まえ、同じ publication に載せて送り、レプリカで実行し直します。14:02 に列を追加すれば、レプリカも 14:02 に持ちます。',
-      'cmp.when':'本番は Aurora。データがおかしい、しかも今おかしい。',
-      'cmp.path1w':'定期的にリフレッシュするコピーなら',
-      'cmp.path1':'手元のコピーは最後のリフレッシュ時点まで古いままです。再現するには丸ごとダンプして復元し、そのあいだ待ちます。障害は続きます。今朝マイグレーションが出ていれば、スキーマまで違います。',
-      'cmp.path2w':'追従をやめていないレプリカなら',
-      'cmp.path2':'すでに最新です。行もスキーマも。スナップショットを取ってクローンを作れば、さっきの本番と同じ形のデータにすぐクエリを投げられます。待ったもののなかにダンプはありません。',
       'cmp.srclabel':'参照した資料:',
       'foot.tag':'Postgres 論理レプリケーション + btrfs <span class="nb">copy-on-write</span>'
     }
