@@ -329,6 +329,18 @@
   .cmd-label { font-family: var(--mono); font-size: .73rem; color: var(--ink-2);
                margin: 1.5rem 0 0; }
   .cmd-label + .cmd { margin-top: .45rem; }
+  /* Linux or macOS is a branch, not a step — the reader picks once and the
+     other one stops being on the page. Both groups move together, so the
+     choice made in the hero still holds in the install view. */
+  .tabs { margin-top: 1.6rem; }
+  .tablist { display: inline-flex; gap: .12rem; border: 1px solid var(--rule);
+             border-radius: 7px; padding: .14rem; }
+  .tablist button { font-family: var(--mono); font-size: .74rem; padding: .3rem .7rem;
+                    border: 0; border-radius: 5px; background: none; color: var(--ink-3);
+                    cursor: pointer; }
+  .tablist button[aria-selected="true"] { background: var(--t-mid); color: var(--paper); }
+  .tabs [role="tabpanel"][hidden] { display: none; }
+  .tabs .cmd-label:first-child { margin-top: 1.1rem; }
 
   pre.term {
     font-family: var(--mono); font-size: .78rem; line-height: 1.7;
@@ -563,26 +575,40 @@
     <h1><span data-i18n="hero.title">A test database cloned straight from your production.</span>
       <span data-i18n="hero.title2">No seeding. No dumps.</span></h1>
 
-    <p class="cmd-label" data-i18n="hero.linux">Linux</p>
-    <div class="cmd">
-      <span class="p">$</span>
-      <span class="l" id="cmd1">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
-      <button class="copy" data-copy="cmd1" data-i18n="common.copy">copy</button>
-    </div>
-
-    <p class="cmd-label" data-i18n="hero.mac">macOS</p>
-    <div class="cmd">
-      <span class="p">$</span>
-      <span class="l" id="cmd2">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</span>
-      <button class="copy" data-copy="cmd2" data-i18n="common.copy">copy</button>
-    </div>
-    <p class="cmd-note" data-i18n="hero.macnote">No sudo — it builds a Linux machine first.</p>
-
-    <p class="cmd-label" data-i18n="hero.demo">No database to hand? Try it on a sample one</p>
-    <div class="cmd">
-      <span class="p">$</span>
-      <span class="l" id="cmd3">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash -s -- --demo</span>
-      <button class="copy" data-copy="cmd3" data-i18n="common.copy">copy</button>
+    <div class="tabs">
+      <div class="tablist" role="tablist">
+        <button role="tab" type="button" data-os="linux" aria-selected="true">Linux</button>
+        <button role="tab" type="button" data-os="mac" aria-selected="false">macOS</button>
+      </div>
+      <div role="tabpanel" data-os="linux">
+        <p class="cmd-label" data-i18n="i.setup">Install</p>
+        <div class="cmd">
+          <span class="p">$</span>
+          <span class="l" id="cmd1">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
+          <button class="copy" data-copy="cmd1" data-i18n="common.copy">copy</button>
+        </div>
+        <p class="cmd-label" data-i18n="i.sample">No database to hand? Start on a sample one</p>
+        <div class="cmd">
+          <span class="p">$</span>
+          <span class="l" id="cmd2">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash -s -- --demo</span>
+          <button class="copy" data-copy="cmd2" data-i18n="common.copy">copy</button>
+        </div>
+      </div>
+      <div role="tabpanel" data-os="mac" hidden>
+        <p class="cmd-label" data-i18n="i.setup">Install</p>
+        <div class="cmd">
+          <span class="p">$</span>
+          <span class="l" id="cmd3">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</span>
+          <button class="copy" data-copy="cmd3" data-i18n="common.copy">copy</button>
+        </div>
+        <p class="cmd-note" data-i18n="hero.macnote">No sudo — it builds a Linux machine first.</p>
+        <p class="cmd-label" data-i18n="i.sample">No database to hand? Start on a sample one</p>
+        <div class="cmd">
+          <span class="p">$</span>
+          <span class="l" id="cmd4">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash -s -- --demo</span>
+          <button class="copy" data-copy="cmd4" data-i18n="common.copy">copy</button>
+        </div>
+      </div>
     </div>
 
     <div style="margin-top:var(--gap)">
@@ -924,26 +950,40 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
   <!-- ═══════════════ INSTALL ═══════════════ -->
   <section id="install">
     <h2 data-i18n="i.title">Install</h2>
-
-    <p class="cmd-label" data-i18n="hero.linux">Linux</p>
-    <div class="cmd">
-      <span class="p">$</span>
-      <span class="l" id="cmdL">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
-      <button class="copy" data-copy="cmdL" data-i18n="common.copy">copy</button>
-    </div>
-
-    <p class="cmd-label" data-i18n="hero.mac">macOS</p>
-    <div class="cmd">
-      <span class="p">$</span>
-      <span class="l" id="cmdM">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</span>
-      <button class="copy" data-copy="cmdM" data-i18n="common.copy">copy</button>
-    </div>
-
-    <p class="cmd-label" data-i18n="hero.demo">No database to hand? Try it on a sample one</p>
-    <div class="cmd">
-      <span class="p">$</span>
-      <span class="l" id="cmdD">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash -s -- --demo</span>
-      <button class="copy" data-copy="cmdD" data-i18n="common.copy">copy</button>
+    <div class="tabs">
+      <div class="tablist" role="tablist">
+        <button role="tab" type="button" data-os="linux" aria-selected="true">Linux</button>
+        <button role="tab" type="button" data-os="mac" aria-selected="false">macOS</button>
+      </div>
+      <div role="tabpanel" data-os="linux">
+        <p class="cmd-label" data-i18n="i.setup">Install</p>
+        <div class="cmd">
+          <span class="p">$</span>
+          <span class="l" id="cmdi1">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
+          <button class="copy" data-copy="cmdi1" data-i18n="common.copy">copy</button>
+        </div>
+        <p class="cmd-label" data-i18n="i.sample">No database to hand? Start on a sample one</p>
+        <div class="cmd">
+          <span class="p">$</span>
+          <span class="l" id="cmdi2">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash -s -- --demo</span>
+          <button class="copy" data-copy="cmdi2" data-i18n="common.copy">copy</button>
+        </div>
+      </div>
+      <div role="tabpanel" data-os="mac" hidden>
+        <p class="cmd-label" data-i18n="i.setup">Install</p>
+        <div class="cmd">
+          <span class="p">$</span>
+          <span class="l" id="cmdi3">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</span>
+          <button class="copy" data-copy="cmdi3" data-i18n="common.copy">copy</button>
+        </div>
+        <p class="cmd-note" data-i18n="hero.macnote">No sudo — it builds a Linux machine first.</p>
+        <p class="cmd-label" data-i18n="i.sample">No database to hand? Start on a sample one</p>
+        <div class="cmd">
+          <span class="p">$</span>
+          <span class="l" id="cmdi4">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash -s -- --demo</span>
+          <button class="copy" data-copy="cmdi4" data-i18n="common.copy">copy</button>
+        </div>
+      </div>
     </div>
   </section>
 </main>
@@ -964,7 +1004,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
      than two that can drift. The other languages are overlays. */
   var DICT = {
     ko: {
-      'hero.linux':'리눅스','hero.mac':'macOS','hero.demo':'붙일 DB가 없다면, 샘플로 먼저',
+      'i.setup':'설치','i.sample':'붙일 DB가 없다면, 샘플로 먼저',
       'g.exlead1':'Postgres 문서가 한계를 그대로 적어 놓았습니다. <q>The database schema and DDL commands are not replicated.</q> 구독이 나르는 건 행 변경뿐입니다. 프라이머리에 컬럼을 하나 추가하면 리플리카에는 그 컬럼이 없고, 그 컬럼이 걸린 첫 변경에서 적용이 실패해 복제가 거기서 멈춥니다. 어긋난 스키마로 계속 가는 대신 멈추는 것입니다.',
       'g.exlead2':'그래서 매니지드 프라이머리의 사본은 보통 주기적으로 다시 뜹니다. 두 스키마를 손으로 맞춰 두는 것보다 덤프 떠서 복원하는 편이 쉬우니까요. 대가는 사본이 마지막 덤프 시점만큼만 최신이라는 것입니다. 스키마까지 포함해서요.',
       'g.exlead3':'Snaplicator는 이걸 <a href="#g4">4번</a>에서 닫습니다. 이벤트 트리거가 CREATE·ALTER·DROP을 전부 아웃박스 테이블에 적고, 그 테이블 자체가 publication의 멤버라서 DDL이 평범한 복제 행으로 실려 와 여기서 다시 실행됩니다. 그러고도 남는 것들이 아래입니다.',
@@ -1080,7 +1120,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'foot.tag':'Postgres 논리 복제 + btrfs <span class="nb">copy-on-write</span>'
     },
     ja: {
-      'hero.linux':'Linux','hero.mac':'macOS','hero.demo':'つなぐ DB が無ければ、サンプルで',
+      'i.setup':'インストール','i.sample':'つなぐ DB が無ければ、サンプルで',
       'g.exlead1':'Postgres の文書は限界をそのまま書いています。<q>The database schema and DDL commands are not replicated.</q> サブスクリプションが運ぶのは行の変更だけです。プライマリに列を 1 つ足すとレプリカにはその列が無く、その列に関わる最初の変更で適用に失敗し、レプリケーションはそこで止まります。ずれたスキーマのまま進む代わりに止まるわけです。',
       'g.exlead2':'だからマネージドのプライマリのコピーは、ふつう定期的に取り直します。2 つのスキーマを手で合わせ続けるより、ダンプして復元するほうが楽だからです。代償は、コピーが最後のダンプの時点までしか新しくないこと。スキーマも含めてです。',
       'g.exlead3':'Snaplicator はこれを <a href="#g4">4 番</a>で塞ぎます。イベントトリガーが CREATE・ALTER・DROP をすべてアウトボックステーブルに書き、そのテーブル自体が publication のメンバーなので、DDL は普通の複製行として届き、ここで実行し直されます。それでも残るものが以下です。',
@@ -1371,6 +1411,32 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
   try { saved = localStorage.getItem('snap.lang'); } catch (e) {}
   var nav = (navigator.language || 'en').slice(0, 2);
   applyLang(saved || (DICT[nav] ? nav : 'en'));
+  /* ── os tabs ───────────────────────────────────────────── */
+  function setOS(os) {
+    [].forEach.call(document.querySelectorAll('.tabs'), function (group) {
+      [].forEach.call(group.querySelectorAll('[role="tab"]'), function (b) {
+        b.setAttribute('aria-selected', String(b.dataset.os === os));
+      });
+      [].forEach.call(group.querySelectorAll('[role="tabpanel"]'), function (panel) {
+        panel.hidden = panel.dataset.os !== os;
+      });
+    });
+    try { localStorage.setItem('snap.os', os); } catch (e) {}
+  }
+  [].forEach.call(document.querySelectorAll('.tablist'), function (list) {
+    list.addEventListener('click', function (e) {
+      var b = e.target.closest('[role="tab"]');
+      if (b) setOS(b.dataset.os);
+    });
+  });
+  var savedOS = null;
+  try { savedOS = localStorage.getItem('snap.os'); } catch (e) {}
+  /* No stored choice: a Mac gets the Mac tab. It is a guess — someone on a
+     Mac may well be installing onto a Linux box — so the other tab is right
+     there rather than hidden behind anything. */
+  setOS(savedOS === 'linux' || savedOS === 'mac' ? savedOS
+        : (/Mac/i.test(navigator.platform || navigator.userAgent) ? 'mac' : 'linux'));
+
   document.getElementById('langs').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-lang]');
     if (b) applyLang(b.dataset.lang);
