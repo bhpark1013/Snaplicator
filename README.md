@@ -16,10 +16,10 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
 curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash
 ```
 
-btrfs is a Linux kernel filesystem, so on macOS the installer creates an
-OrbStack Linux machine named `snaplicator` and continues inside it (offering
-to `brew install --cask orbstack` if it is missing). Everything after that is
-the same, and it tells you where things ended up:
+btrfs is a Linux kernel filesystem, so on macOS the installer needs a Linux
+machine and continues inside it. It offers to create one with OrbStack, named
+`snaplicator`. Everything after that is the same, and it tells you where things
+ended up:
 
 ```
 orb -m snaplicator              # shell into it
@@ -95,8 +95,14 @@ For the one-line install, only the last item is yours to arrange:
 
 - **Linux**: Docker. The installer adds `btrfs-progs`, `postgresql-client` and
   the compose plugin if they are missing.
-- **macOS**: OrbStack — and the installer offers to install it. It creates the
-  Linux machine itself.
+- **macOS**: a Linux machine. The installer offers to create one with OrbStack
+  and will `brew install --cask orbstack` if you say yes.
+
+  > **OrbStack is free for personal, non-commercial use only.** Commercial use
+  > needs a paid licence — see [orbstack.dev/pricing](https://orbstack.dev/pricing).
+  > The installer says so before it offers, and defaults to *no*. Any Linux VM
+  > of your own works instead: run the Linux one-liner inside Colima, Lima, UTM,
+  > or a Linux box, and nothing else changes.
 - A primary Postgres with logical replication available: `wal_level=logical`,
   a role that may replicate, and either `CREATE PUBLICATION` privilege or a
   publication someone made for you (the installer checks all of this before it

@@ -624,16 +624,28 @@ if [ "$(uname -s)" = "Darwin" ]; then
   : "${MACHINE_IMAGE:=ubuntu}"
   : "${INSTALLER_URL:=https://raw.githubusercontent.com/bhpark1013/Snaplicator/${SNAPLICATOR_REF}/deploy/install.sh}"
 
+  # OrbStack is not ours to install on someone's behalf without saying what it
+  # costs them. Its free tier is personal, non-commercial use; a company laptop
+  # needs a paid seat. Offering the install silently put people out of
+  # compliance with a product they had never heard of, so the terms are stated
+  # before the prompt and the default answer is no longer yes.
   if ! command -v orbctl >/dev/null; then
     if command -v brew >/dev/null && { : < /dev/tty; } 2>/dev/null; then
-      info "OrbStack provides the Linux machine this needs (and replaces Docker Desktop)."
-      read -r -p "[snaplicator] install OrbStack with brew? [Y/n] " reply < /dev/tty || reply=""
+      info "This needs a Linux machine (btrfs is a Linux kernel filesystem)."
+      info "OrbStack is the smoothest way to get one, and it replaces Docker Desktop."
+      warn "OrbStack is free for personal, non-commercial use only."
+      warn "Commercial use needs a paid licence — https://orbstack.dev/pricing"
+      info "  If that does not suit you, run this installer inside a Linux VM of" >&2
+      info "  your own (Colima, Lima, UTM, or any Linux box) and it works the same." >&2
+      read -r -p "[snaplicator] install OrbStack with brew? [y/N] " reply < /dev/tty || reply=""
       case "$reply" in
-        ""|y|Y|yes|YES) brew install --cask orbstack || die "brew install failed" ;;
-        *) die "install OrbStack (https://orbstack.dev), or run this inside a Linux VM of your own" ;;
+        y|Y|yes|YES) brew install --cask orbstack || die "brew install failed" ;;
+        *) die "no OrbStack — install it yourself (https://orbstack.dev), or run this inside a Linux VM of your own" ;;
       esac
     else
-      die "OrbStack is required on macOS: brew install --cask orbstack  (or run this inside a Linux VM of your own)"
+      die "a Linux machine is required on macOS. OrbStack is one way: brew install --cask orbstack
+  (free for personal, non-commercial use only — commercial needs a paid licence:
+  https://orbstack.dev/pricing). Any Linux VM of your own works too."
     fi
   fi
 

@@ -1,0 +1,2 @@
+[console_scripts]
+snaplicator = cli.main:cli

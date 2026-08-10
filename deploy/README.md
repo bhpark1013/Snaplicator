@@ -11,7 +11,7 @@ compose deliberately does not own them.
 # Linux
 curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash
 
-# macOS — no sudo; creates an OrbStack Linux machine and continues inside it
+# macOS — no sudo; offers to create an OrbStack Linux machine and continues inside it
 curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash
 ```
 
@@ -154,4 +154,11 @@ bash deploy/test-install.sh
 ```
 
 Linux only for the install itself (btrfs + host networking); macOS reaches it
-through the OrbStack machine.
+through a Linux machine.
+
+**On OrbStack.** It is what the installer offers on macOS, and it is free for
+personal, non-commercial use only — commercial use needs a paid licence
+([pricing](https://orbstack.dev/pricing)). The prompt states this and defaults
+to *no*. Nothing here depends on OrbStack specifically: the Linux one-liner run
+inside Colima, Lima, UTM or any Linux box does the same thing, and `MACHINE=`
+only names the OrbStack machine when that is the path you took.

@@ -761,7 +761,19 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
     <div class="note">
       <span class="label" data-i18n="cmp.notlabel">When Snaplicator is the wrong answer</span>
       <p data-i18n="cmp.not">
-        It needs <code>wal_level=logical</code> and a replication slot on your primary — if you cannot have either, stop here. It replicates what you put in a publication, so anything you left out simply is not there. It is one machine with one pool and no failover; the replica going down costs you clones, not data. And if you already run on Neon or Supabase, use their branching. This exists for the case where production lives somewhere that has no branch button.
+        It needs <code>wal_level=logical</code> and a replication slot on your primary — if you cannot have either, stop here. It replicates what you put in a publication, so anything you left out simply is not there. It is one machine with one pool and no failover; the replica going down costs you clones, not data. And if you already run on Neon, use their branching — a branch there <em>is</em> your data, instantly, and this would be a worse version of something you already have.
+      </p>
+    </div>
+
+    <div class="note">
+      <span class="label" data-i18n="cmp.sblabel">If you run on Supabase</span>
+      <p data-i18n="cmp.sbnote">
+        Supabase branching and this solve different problems, so being on Supabase does not rule
+        it out — it is the case the table makes plainest. Branches there start with no production
+        data by design, and Supabase can act as a logical-replication publisher: <code>CREATE
+        PUBLICATION</code>, <code>pg_create_logical_replication_slot</code>, and <code>wal_level</code>
+        is already <code>logical</code>. Two caveats from their own guide — use the direct connection
+        string rather than the pooler, and the subscriber needs IPv6 or you need their IPv4 add-on.
       </p>
     </div>
 
@@ -771,7 +783,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       <a href="https://supabase.com/docs/guides/deployment/branching">Supabase branching</a> ·
       <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Managing.Clone.html">Aurora cloning</a> ·
       <a href="https://postgres.ai/docs/dblab-howtos/administration/data">DBLab data sources</a> ·
-      <a href="https://www.postgresql.org/docs/current/logical-replication-restrictions.html">Postgres: logical replication restrictions</a>
+      <a href="https://www.postgresql.org/docs/current/logical-replication-restrictions.html">Postgres: logical replication restrictions</a> ·
+      <a href="https://supabase.com/docs/guides/database/postgres/setup-replication-external">Supabase: replicate to another Postgres</a>
     </p>
   </section>
 
@@ -796,7 +809,17 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       <span class="l" id="cmdM">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</span>
       <button class="copy" data-copy="cmdM" data-i18n="common.copy">copy</button>
     </div>
-    <p class="cmd-note" data-i18n="i.n2">btrfs is a Linux kernel filesystem, so there is nothing to install onto here. It creates an OrbStack machine named snaplicator and continues inside it.</p>
+    <p class="cmd-note" data-i18n="i.n2">btrfs is a Linux kernel filesystem, so there is nothing to install onto here. The installer offers to create a Linux machine with OrbStack and continues inside it.</p>
+
+    <div class="note">
+      <span class="label" data-i18n="i.orblabel">Before you say yes to OrbStack</span>
+      <p data-i18n="i.orb">
+        OrbStack is free for <strong>personal, non-commercial use only</strong>; a company laptop
+        needs a paid seat (<a href="https://orbstack.dev/pricing">pricing</a>). The installer says
+        so before it offers, and defaults to no. Nothing here depends on it — run the Linux
+        one-liner inside Colima, Lima, UTM or any Linux box and everything works the same.
+      </p>
+    </div>
 
     <h3 style="margin-top:1.8rem" data-i18n="i.h3">No database to hand?</h3>
     <div class="cmd">
@@ -893,7 +916,10 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'i.title':'한 줄, 그다음은 UI',
       'i.lead':'설치 프로그램이 btrfs 풀을 놓을 자리를 호스트에서 찾아 잡고, 관리 서버를 띄운 다음, 무엇을 복제할지 고르는 화면에서 멈춥니다.',
       'i.n1':'리눅스용입니다. Docker가 있어야 하고 btrfs-progs, postgresql-client, compose 플러그인은 없으면 알아서 깔아 줍니다.',
-      'i.h2':'macOS','i.n2':'btrfs는 리눅스 커널 파일시스템이라 여기에는 깔 데가 없습니다. snaplicator라는 OrbStack 머신을 만들어 그 안에서 이어 갑니다.',
+      'i.h2':'macOS','i.n2':'btrfs는 리눅스 커널 파일시스템이라 여기에는 깔 데가 없습니다. 설치 프로그램이 OrbStack으로 리눅스 머신을 만들자고 제안하고, 그 안에서 이어 갑니다.',
+      'i.orblabel':'OrbStack에 예라고 답하기 전에',
+      'i.orb':'OrbStack 무료 사용은 <strong>개인·비상업적 용도에 한합니다</strong>. 회사 노트북이라면 유료 좌석이 필요합니다(<a href="https://orbstack.dev/pricing">요금</a>). 설치 프로그램이 물어보기 전에 이 사실을 알려 주고, 기본 답은 아니오입니다. 여기서 OrbStack에 묶인 건 아무것도 없습니다. Colima, Lima, UTM, 아무 리눅스 서버에서든 리눅스용 한 줄을 그대로 실행하면 똑같이 동작합니다.',
+
       'i.h3':'붙일 DB가 없다면?','i.n3':'샘플 publisher를 만들어 전체가 어떻게 도는지 먼저 볼 수 있게 합니다.',
       'i.rerunlabel':'다시 실행할 때','i.rerun':'재실행이 곧 업그레이드입니다. 체크아웃을 갱신하고 다시 빌드합니다. 두 번째 실행에서 없어지는 건 없습니다. 이미 있는 걸 열지, 포트와 풀과 publication을 따로 가진 두 번째 설치를 옆에 만들지 물어봅니다.',
       'lab.verdict':'디스크 <b>{saved}</b> 덜 씁니다 · 클론 {n}개 · {x}배 차이',
@@ -919,7 +945,9 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.t3':'DBLab (Postgres.ai)',
       'cmp.p3':'이 중에 가장 가깝고, 더 오래됐고 기능도 더 많습니다. ZFS나 LVM 씬 클론이고 10 TiB를 2초 안에 뜹니다. 갈리는 건 사본을 어떻게 최신으로 유지하느냐입니다. 물리 모드는 프라이머리를 계속 따라가지만 <q>is not available for managed cloud Postgres services such as Amazon RDS</q>이고, 매니지드 상대로는 덤프/복원이라 주기적으로 통째로 다시 받습니다. Snaplicator는 논리 복제로 구독하기 때문에 매니지드 프라이머리도 다시 받는 게 아니라 따라갑니다.',
       'cmp.notlabel':'Snaplicator가 답이 아닌 경우',
-      'cmp.not':'프라이머리에 <code>wal_level=logical</code>과 복제 슬롯이 있어야 합니다. 둘 중 하나라도 안 되면 여기서 접으세요. publication에 넣은 것만 복제하니 빼놓은 건 그냥 없습니다. 머신 하나에 풀 하나뿐이고 페일오버가 없어서, 리플리카가 죽으면 잃는 건 클론이지 데이터가 아닙니다. 그리고 이미 Neon이나 Supabase에서 돌고 있다면 그쪽 브랜칭을 쓰세요. 이건 프로덕션이 브랜치 버튼 없는 곳에 있을 때를 위한 물건입니다.',
+      'cmp.not':'프라이머리에 <code>wal_level=logical</code>과 복제 슬롯이 있어야 합니다. 둘 중 하나라도 안 되면 여기서 접으세요. publication에 넣은 것만 복제하니 빼놓은 건 그냥 없습니다. 머신 하나에 풀 하나뿐이고 페일오버가 없어서, 리플리카가 죽으면 잃는 건 클론이지 데이터가 아닙니다. 그리고 이미 Neon에서 돌고 있다면 그쪽 브랜칭을 쓰세요. 거기서 브랜치는 <em>곧</em> 내 데이터이고 즉시 생기니, 이건 이미 가진 것의 못한 버전이 됩니다.',
+      'cmp.sblabel':'Supabase를 쓰고 있다면',
+      'cmp.sbnote':'Supabase 브랜칭과 이건 서로 다른 문제를 풉니다. 그래서 Supabase를 쓴다고 대상에서 빠지지 않습니다. 오히려 표가 가장 또렷하게 보여 주는 경우죠. 거기 브랜치는 설계상 프로덕션 데이터 없이 시작하고, Supabase는 논리 복제 publisher가 될 수 있습니다. <code>CREATE PUBLICATION</code>, <code>pg_create_logical_replication_slot</code>이 되고 <code>wal_level</code>은 이미 <code>logical</code>입니다. 자기네 가이드가 짚는 주의점 두 가지 — 풀러 말고 직접 연결 문자열을 쓸 것, 그리고 구독하는 쪽에 IPv6가 있거나 IPv4 애드온을 켜야 한다는 것.',
       'cmp.c4':'스키마 변경',
       'cmp.neon4':'브랜치에 딸려 옴 — 같은 스토리지','cmp.sb4':'마이그레이션 파일에서 적용',
       'cmp.aur4':'클론에 딸려 옴 — 같은 스토리지',
@@ -992,7 +1020,10 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'g.tiplabel':'クローンを新しく保つ',
       'g.tip':'クローンは固定点です — プライマリに追従せず、だからこそテストが再現可能です。新しいデータが要るときは新しいスナップショットを取り <code>refresh_clone</code> を使います。置き換えは既存の隣に作られ、応答可能になってから切り替わるので、クライアントの断は再構築全体ではなく 0.5 秒ほどです。','i.title':'一行、そして UI',
       'i.lead':'インストーラーが btrfs プールの置き場所をホストから探して用意し、管理プレーンを起動し、複製対象を選ぶ画面で止まります。','i.n1':'Docker が必要です。btrfs-progs、postgresql-client、compose プラグインは無ければ追加されます。',
-      'i.h2':'macOS','i.n2':'btrfs は Linux カーネルのファイルシステムなので、ここには入れる先がありません。snaplicator という OrbStack マシンを作り、その中で続行します。',
+      'i.h2':'macOS','i.n2':'btrfs は Linux カーネルのファイルシステムなので、ここには入れる先がありません。インストーラーが OrbStack で Linux マシンを作ることを提案し、その中で続行します。',
+      'i.orblabel':'OrbStack に「はい」と答える前に',
+      'i.orb':'OrbStack の無料利用は<strong>個人の非商用に限られます</strong>。会社の端末なら有料ライセンスが必要です(<a href="https://orbstack.dev/pricing">価格</a>)。インストーラーは尋ねる前にこれを伝え、既定の答えは「いいえ」です。ここに OrbStack 依存はありません。Colima、Lima、UTM、任意の Linux マシンで Linux 用の一行をそのまま実行すれば同じように動きます。',
+
       'i.h3':'つなぐ DB が無い場合','i.n3':'サンプルの publisher を作り、まず全体の動きを見られるようにします。',
       'i.rerunlabel':'再実行するとき','i.rerun':'再実行がそのままアップグレードです。チェックアウトを更新して再ビルドします。2 回目の実行で壊れるものはありません — 既にあるものを開くか、専用のポート・プール・publication を持つ 2 つ目のインストールを隣に作るかを尋ねます。',
       'lab.verdict':'<b>{saved}</b> 未割り当て · クローン {n} 個 · ディスク {x} 分の 1',
@@ -1018,7 +1049,9 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.t3':'DBLab (Postgres.ai)',
       'cmp.p3':'この中で最も近く、歴史も長く機能も多いです。ZFS か LVM のシンクローンで、10 TiB でも 2 秒かかりません。分かれるのはコピーの鮮度の保ち方です。物理モードはプライマリに継続追従しますが <q>is not available for managed cloud Postgres services such as Amazon RDS</q>。マネージド相手ではダンプとリストアになり、定期的に丸ごと取り直します。Snaplicator は論理レプリケーションで購読するので、マネージドのプライマリも取り直さず追従します。',
       'cmp.notlabel':'Snaplicator が答えにならない場合',
-      'cmp.not':'プライマリに <code>wal_level=logical</code> とレプリケーションスロットが必要です。どちらかが無理ならここで諦めてください。publication に入れたものだけを複製するので、外したものは単に存在しません。マシン 1 台にプール 1 つ、フェイルオーバーは無く、レプリカが落ちて失うのはクローンでありデータではありません。そして既に Neon や Supabase で動いているなら、そちらのブランチ機能を使ってください。これは本番がブランチボタンの無い場所にある場合のための道具です。',
+      'cmp.not':'プライマリに <code>wal_level=logical</code> とレプリケーションスロットが必要です。どちらかが無理ならここで諦めてください。publication に入れたものだけを複製するので、外したものは単に存在しません。マシン 1 台にプール 1 つ、フェイルオーバーは無く、レプリカが落ちて失うのはクローンでありデータではありません。そしてすでに Neon で動いているなら、そちらのブランチ機能を使ってください。あちらのブランチは<em>そのまま</em>自分のデータで、しかも即時です。これでは既に持っているものの劣化版になります。',
+      'cmp.sblabel':'Supabase を使っている場合',
+      'cmp.sbnote':'Supabase のブランチとこれは別の問題を解きます。だから Supabase だから対象外、とはなりません。むしろ表が最もはっきり示す事例です。あちらのブランチは設計上、本番データを持たずに始まります。そして Supabase は論理レプリケーションの publisher になれます。<code>CREATE PUBLICATION</code> と <code>pg_create_logical_replication_slot</code> が使え、<code>wal_level</code> はすでに <code>logical</code> です。公式ガイドが挙げる注意点が 2 つ — プーラーではなく直接接続の文字列を使うこと、そして購読側に IPv6 が必要か、IPv4 アドオンを有効にすること。',
       'cmp.c4':'スキーマ変更',
       'cmp.neon4':'ブランチに付いてくる — 同じストレージ','cmp.sb4':'マイグレーションファイルから適用',
       'cmp.aur4':'クローンに付いてくる — 同じストレージ',
