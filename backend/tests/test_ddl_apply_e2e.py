@@ -197,6 +197,45 @@ class TestFailureIsolation:
 		)
 		assert _status()["failures"] >= 1
 
+	def test_ownership_ddl_is_skipped_not_failed(self, pg_pair):
+		"""OWNER TO names a role in the publisher's cluster, which the
+		subscriber does not have — the initial clone drops ownership for the
+		same reason (--no-owner). It must be recorded as skipped, never as a
+		failure, since failures are what page someone."""
+		pub, sub = pg_pair["pub"], pg_pair["sub"]
+		psql_conn(pub, "CREATE ROLE owner_only_here;")
+		psql_conn(pub, "CREATE TABLE owned_t (id int);")
+		psql_conn(pub, "ALTER TABLE owned_t OWNER TO owner_only_here;")
+		wait_until(
+			lambda: psql_conn(
+				sub,
+				"SELECT count(*) FROM public._snaplicator_ddl_skipped "
+				"WHERE ddl_text LIKE '%owned_t%OWNER TO%';",
+			) == "1",
+			desc="ownership ddl skipped",
+		)
+		# the table itself still arrived, owned by whoever owns things here
+		assert psql_conn(
+			sub, "SELECT count(*) FROM pg_class WHERE relname = 'owned_t';"
+		) == "1"
+		# and nothing was reported as broken
+		assert psql_conn(
+			sub,
+			"SELECT count(*) FROM public._snaplicator_ddl_failures "
+			"WHERE ddl_text LIKE '%owned_t%';",
+		) == "0"
+
+		# GRANT is the same story: a privilege for a role that is not here
+		psql_conn(pub, "GRANT SELECT ON owned_t TO owner_only_here;")
+		wait_until(
+			lambda: psql_conn(
+				sub,
+				"SELECT count(*) FROM public._snaplicator_ddl_skipped "
+				"WHERE ddl_text ILIKE 'GRANT%owned_t%';",
+			) == "1",
+			desc="grant skipped",
+		)
+
 	def test_concurrently_is_deferred_not_executed(self, pg_pair):
 		"""CREATE INDEX CONCURRENTLY cannot run inside the apply worker's
 		transaction — it must land in the deferred queue (executed later,
