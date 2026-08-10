@@ -514,7 +514,6 @@
         <button data-view="overview" data-i18n="nav.overview">--overview</button>
         <button data-view="concepts" data-i18n="nav.concepts">--concepts</button>
         <button data-view="guide"    data-i18n="nav.guide">--guide</button>
-        <button data-view="compare"  data-i18n="nav.compare">--compare</button>
         <button data-view="install"  data-i18n="nav.install">--install</button>
       </nav>
     </div>
@@ -601,6 +600,137 @@
           <dd data-i18n="why.p3">Fast, clean, and they never reproduce the bug. The unexpected null is in production, not your factory.</dd>
         </div>
       </dl>
+    </div>
+
+    <div style="margin-top:var(--gap)">
+      <h2 data-i18n="cmp.head">How this compares to Neon, Aurora and DBLab</h2>
+    <p class="thesis" data-i18n="cmp.thesis">
+      All of these do <span class="nb">copy-on-write</span>. What differs is where your data has to live for it to work.
+    </p>
+
+    <div class="tablewrap">
+      <table class="cmp">
+        <thead>
+          <tr>
+            <th data-i18n="cmp.c0">&nbsp;</th>
+            <th data-i18n="cmp.c1">Runs where</th>
+            <th data-i18n="cmp.c2">A copy starts with</th>
+            <th data-i18n="cmp.c3">How it stays current</th>
+            <th data-i18n="cmp.c4">Schema changes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">Neon</th>
+            <td data-i18n="cmp.neon1">Neon&rsquo;s cloud</td>
+            <td data-i18n="cmp.neon2">the parent branch, instantly</td>
+            <td data-i18n="cmp.neon3">it <em>is</em> your database — branches are of the real thing</td>
+            <td data-i18n="cmp.neon4">come with the branch — same storage</td>
+          </tr>
+          <tr>
+            <th scope="row">Supabase</th>
+            <td data-i18n="cmp.sb1">Supabase&rsquo;s cloud</td>
+            <td data-i18n="cmp.sb2">nothing — no production data at all</td>
+            <td data-i18n="cmp.sb3">you seed it yourself</td>
+            <td data-i18n="cmp.sb4">applied from your migration files</td>
+          </tr>
+          <tr>
+            <th scope="row">Aurora cloning</th>
+            <td data-i18n="cmp.aur1">AWS, Aurora only</td>
+            <td data-i18n="cmp.aur2">the source cluster&rsquo;s pages</td>
+            <td data-i18n="cmp.aur3">clone again for fresher data</td>
+            <td data-i18n="cmp.aur4">come with the clone — same storage</td>
+          </tr>
+          <tr>
+            <th scope="row">DBLab</th>
+            <td data-i18n="cmp.dbl1">your hardware, any Postgres</td>
+            <td data-i18n="cmp.dbl2">the last retrieved copy</td>
+            <td data-i18n="cmp.dbl3"><span class="nb">self-managed</span>: continuous. Managed (RDS): periodic full refresh</td>
+            <td data-i18n="cmp.dbl4">physical: with the copy. Managed: only at the next full refresh</td>
+          </tr>
+          <tr class="ours">
+            <th scope="row">Snaplicator</th>
+            <td data-i18n="cmp.sn1">your hardware, any Postgres</td>
+            <td data-i18n="cmp.sn2">the snapshot you picked</td>
+            <td data-i18n="cmp.sn3">logical replication, continuously — managed primaries included</td>
+            <td data-i18n="cmp.sn4">captured on the primary and replayed here, continuously</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="ddl">
+      <h2 data-i18n="cmp.ddltitle">The schema column is the interesting one</h2>
+      <p data-i18n="cmp.ddl1">
+        Postgres is blunt about this: <q>The database schema and DDL commands are not replicated.</q>
+        That is why following a managed primary usually means <span class="nb">re-copying</span> it on a schedule — the
+        alternative is a replica whose schema drifts until replication errors out.
+      </p>
+      <p data-i18n="cmp.ddl2">
+        Snaplicator captures DDL on the primary with event triggers, ships it through the same
+        publication, and replays it on the replica. Add a column at 14:02 and the replica has it
+        at 14:02 — no refresh, no <span class="nb">re-dump</span>.
+      </p>
+    </div>
+
+    <div class="scene">
+      <p class="scene-when" data-i18n="cmp.when">Production is on Aurora. Something is wrong with the data, and it is wrong now.</p>
+      <div class="scene-paths">
+        <div class="path">
+          <span class="path-who" data-i18n="cmp.path1w">With a copy that refreshes on a schedule</span>
+          <p data-i18n="cmp.path1">Your copy is as old as the last refresh. To reproduce what is happening you start a full dump and restore, and then you wait — while the incident continues. If a migration shipped this morning, the schema is wrong too.</p>
+        </div>
+        <div class="path hi">
+          <span class="path-who" data-i18n="cmp.path2w">With a replica that never stopped following</span>
+          <p data-i18n="cmp.path2">Already current — rows and schema both. Take a snapshot, make a clone, and you are querying <span class="nb">production-shaped</span> data from moments ago. Nothing you waited for was a dump.</p>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="after-figure" data-i18n="cmp.title">Where the differences actually bite</h2>
+
+    <dl class="alts">
+      <div>
+        <dt data-i18n="cmp.t1">Neon and Supabase branching</dt>
+        <dd data-i18n="cmp.p1">Both are excellent, and if you already run on them, use their branching — a branch there <em>is</em> your data. Neon will also follow an RDS or Cloud SQL primary over logical replication rather than hosting it, and then two things change: the data lands in Neon&rsquo;s cloud, and the schema becomes yours to keep in step — their guide requires that <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> That is the gap the next section is about.</dd>
+      </div>
+      <div>
+        <dt data-i18n="cmp.t2">Aurora fast cloning</dt>
+        <dd data-i18n="cmp.p2"><span class="nb">Copy-on-write</span> at the storage layer, and genuinely fast — but a clone is a DB cluster, and a cluster needs an instance, so every clone bills compute. AWS also caps it: <q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora only, not plain RDS Postgres.</dd>
+      </div>
+      <div>
+        <dt data-i18n="cmp.t3">DBLab (Postgres.ai)</dt>
+        <dd data-i18n="cmp.p3">The closest thing to this, older and more capable — it will clone 10 TiB in under two seconds. The difference is how the copy keeps up. Its physical mode <q>is not available for managed cloud Postgres services such as Amazon RDS</q>; against those it is dump/restore on a schedule. Snaplicator subscribes over logical replication, so a managed primary is followed rather than <span class="nb">re-copied</span>.</dd>
+      </div>
+    </dl>
+
+    <div class="note">
+      <span class="label" data-i18n="cmp.notlabel">When Snaplicator is the wrong answer</span>
+      <p data-i18n="cmp.not">
+        It needs <code>wal_level=logical</code> and a replication slot on your primary. It replicates only what you put in the publication. One machine, one pool, no failover — the replica going down costs you clones, not data. And if you already run on Neon, use their branching: a branch there <em>is</em> your data.
+      </p>
+    </div>
+
+    <div class="note">
+      <span class="label" data-i18n="cmp.sblabel">If you run on Supabase</span>
+      <p data-i18n="cmp.sbnote">
+        Branches there start with no production data by design, and Supabase can act as a
+        <span class="nb">logical-replication</span> publisher — <code>wal_level</code> is already <code>logical</code>.
+        Two caveats from their own guide: use the direct connection string rather than the pooler,
+        and the subscriber needs IPv6 or their IPv4 <span class="nb">add-on</span>.
+      </p>
+    </div>
+
+    <p class="sources">
+      <span data-i18n="cmp.srclabel">Checked against:</span>
+      <a href="https://neon.com/docs/introduction/branching">Neon branching</a> ·
+      <a href="https://neon.com/docs/guides/logical-replication-rds-to-neon">Neon: replicate from RDS</a> ·
+      <a href="https://supabase.com/docs/guides/deployment/branching">Supabase branching</a> ·
+      <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Managing.Clone.html">Aurora cloning</a> ·
+      <a href="https://postgres.ai/docs/dblab-howtos/administration/data">DBLab data sources</a> ·
+      <a href="https://www.postgresql.org/docs/current/logical-replication-restrictions.html">Postgres: logical replication restrictions</a> ·
+      <a href="https://supabase.com/docs/guides/database/postgres/setup-replication-external">Supabase: replicate to another Postgres</a>
+    </p>
     </div>
   </section>
 
@@ -800,137 +930,6 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
     </dl>
   </section>
 
-  <!-- ═══════════════ COMPARE ═══════════════ -->
-  <section id="compare">
-    <p class="thesis" data-i18n="cmp.thesis">
-      All of these do <span class="nb">copy-on-write</span>. What differs is where your data has to live for it to work.
-    </p>
-
-    <div class="tablewrap">
-      <table class="cmp">
-        <thead>
-          <tr>
-            <th data-i18n="cmp.c0">&nbsp;</th>
-            <th data-i18n="cmp.c1">Runs where</th>
-            <th data-i18n="cmp.c2">A copy starts with</th>
-            <th data-i18n="cmp.c3">How it stays current</th>
-            <th data-i18n="cmp.c4">Schema changes</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <th scope="row">Neon</th>
-            <td data-i18n="cmp.neon1">Neon&rsquo;s cloud</td>
-            <td data-i18n="cmp.neon2">the parent branch, instantly</td>
-            <td data-i18n="cmp.neon3">it <em>is</em> your database — branches are of the real thing</td>
-            <td data-i18n="cmp.neon4">come with the branch — same storage</td>
-          </tr>
-          <tr>
-            <th scope="row">Supabase</th>
-            <td data-i18n="cmp.sb1">Supabase&rsquo;s cloud</td>
-            <td data-i18n="cmp.sb2">nothing — no production data at all</td>
-            <td data-i18n="cmp.sb3">you seed it yourself</td>
-            <td data-i18n="cmp.sb4">applied from your migration files</td>
-          </tr>
-          <tr>
-            <th scope="row">Aurora cloning</th>
-            <td data-i18n="cmp.aur1">AWS, Aurora only</td>
-            <td data-i18n="cmp.aur2">the source cluster&rsquo;s pages</td>
-            <td data-i18n="cmp.aur3">clone again for fresher data</td>
-            <td data-i18n="cmp.aur4">come with the clone — same storage</td>
-          </tr>
-          <tr>
-            <th scope="row">DBLab</th>
-            <td data-i18n="cmp.dbl1">your hardware, any Postgres</td>
-            <td data-i18n="cmp.dbl2">the last retrieved copy</td>
-            <td data-i18n="cmp.dbl3"><span class="nb">self-managed</span>: continuous. Managed (RDS): periodic full refresh</td>
-            <td data-i18n="cmp.dbl4">physical: with the copy. Managed: only at the next full refresh</td>
-          </tr>
-          <tr class="ours">
-            <th scope="row">Snaplicator</th>
-            <td data-i18n="cmp.sn1">your hardware, any Postgres</td>
-            <td data-i18n="cmp.sn2">the snapshot you picked</td>
-            <td data-i18n="cmp.sn3">logical replication, continuously — managed primaries included</td>
-            <td data-i18n="cmp.sn4">captured on the primary and replayed here, continuously</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="ddl">
-      <h2 data-i18n="cmp.ddltitle">The schema column is the interesting one</h2>
-      <p data-i18n="cmp.ddl1">
-        Postgres is blunt about this: <q>The database schema and DDL commands are not replicated.</q>
-        That is why following a managed primary usually means <span class="nb">re-copying</span> it on a schedule — the
-        alternative is a replica whose schema drifts until replication errors out.
-      </p>
-      <p data-i18n="cmp.ddl2">
-        Snaplicator captures DDL on the primary with event triggers, ships it through the same
-        publication, and replays it on the replica. Add a column at 14:02 and the replica has it
-        at 14:02 — no refresh, no <span class="nb">re-dump</span>.
-      </p>
-    </div>
-
-    <div class="scene">
-      <p class="scene-when" data-i18n="cmp.when">Production is on Aurora. Something is wrong with the data, and it is wrong now.</p>
-      <div class="scene-paths">
-        <div class="path">
-          <span class="path-who" data-i18n="cmp.path1w">With a copy that refreshes on a schedule</span>
-          <p data-i18n="cmp.path1">Your copy is as old as the last refresh. To reproduce what is happening you start a full dump and restore, and then you wait — while the incident continues. If a migration shipped this morning, the schema is wrong too.</p>
-        </div>
-        <div class="path hi">
-          <span class="path-who" data-i18n="cmp.path2w">With a replica that never stopped following</span>
-          <p data-i18n="cmp.path2">Already current — rows and schema both. Take a snapshot, make a clone, and you are querying <span class="nb">production-shaped</span> data from moments ago. Nothing you waited for was a dump.</p>
-        </div>
-      </div>
-    </div>
-
-    <h2 class="after-figure" data-i18n="cmp.title">Where the differences actually bite</h2>
-
-    <dl class="alts">
-      <div>
-        <dt data-i18n="cmp.t1">Neon and Supabase branching</dt>
-        <dd data-i18n="cmp.p1">Both are excellent, and if you already run on them, use their branching — a branch there <em>is</em> your data. Neon will also follow an RDS or Cloud SQL primary over logical replication rather than hosting it, and then two things change: the data lands in Neon&rsquo;s cloud, and the schema becomes yours to keep in step — their guide requires that <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> That is the gap the next section is about.</dd>
-      </div>
-      <div>
-        <dt data-i18n="cmp.t2">Aurora fast cloning</dt>
-        <dd data-i18n="cmp.p2"><span class="nb">Copy-on-write</span> at the storage layer, and genuinely fast — but a clone is a DB cluster, and a cluster needs an instance, so every clone bills compute. AWS also caps it: <q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora only, not plain RDS Postgres.</dd>
-      </div>
-      <div>
-        <dt data-i18n="cmp.t3">DBLab (Postgres.ai)</dt>
-        <dd data-i18n="cmp.p3">The closest thing to this, older and more capable — it will clone 10 TiB in under two seconds. The difference is how the copy keeps up. Its physical mode <q>is not available for managed cloud Postgres services such as Amazon RDS</q>; against those it is dump/restore on a schedule. Snaplicator subscribes over logical replication, so a managed primary is followed rather than <span class="nb">re-copied</span>.</dd>
-      </div>
-    </dl>
-
-    <div class="note">
-      <span class="label" data-i18n="cmp.notlabel">When Snaplicator is the wrong answer</span>
-      <p data-i18n="cmp.not">
-        It needs <code>wal_level=logical</code> and a replication slot on your primary. It replicates only what you put in the publication. One machine, one pool, no failover — the replica going down costs you clones, not data. And if you already run on Neon, use their branching: a branch there <em>is</em> your data.
-      </p>
-    </div>
-
-    <div class="note">
-      <span class="label" data-i18n="cmp.sblabel">If you run on Supabase</span>
-      <p data-i18n="cmp.sbnote">
-        Branches there start with no production data by design, and Supabase can act as a
-        <span class="nb">logical-replication</span> publisher — <code>wal_level</code> is already <code>logical</code>.
-        Two caveats from their own guide: use the direct connection string rather than the pooler,
-        and the subscriber needs IPv6 or their IPv4 <span class="nb">add-on</span>.
-      </p>
-    </div>
-
-    <p class="sources">
-      <span data-i18n="cmp.srclabel">Checked against:</span>
-      <a href="https://neon.com/docs/introduction/branching">Neon branching</a> ·
-      <a href="https://neon.com/docs/guides/logical-replication-rds-to-neon">Neon: replicate from RDS</a> ·
-      <a href="https://supabase.com/docs/guides/deployment/branching">Supabase branching</a> ·
-      <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Managing.Clone.html">Aurora cloning</a> ·
-      <a href="https://postgres.ai/docs/dblab-howtos/administration/data">DBLab data sources</a> ·
-      <a href="https://www.postgresql.org/docs/current/logical-replication-restrictions.html">Postgres: logical replication restrictions</a> ·
-      <a href="https://supabase.com/docs/guides/database/postgres/setup-replication-external">Supabase: replicate to another Postgres</a>
-    </p>
-  </section>
-
   <!-- ═══════════════ INSTALL ═══════════════ -->
   <section id="install">
     <div class="cmd cmd--lead">
@@ -998,6 +997,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
      than two that can drift. The other languages are overlays. */
   var DICT = {
     ko: {
+      'cmp.head':'Neon · Aurora · DBLab과 비교하면',
       'sc.title':'이럴 때 씁니다',
       'sc.t1':'지금 프로덕션에 버그가 났을 때',
       'sc.p1':'그 버그를 일으키는 행은 프로덕션에만 있습니다. 스냅샷 찍고 클론 하나 만들면 몇 초 뒤에 같은 데이터에 쿼리하고 있습니다. 장애가 아직 진행 중인 동안, 마음대로 부숴도 되는 사본에서요.',
@@ -1130,6 +1130,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'foot.tag':'Postgres 논리 복제 + btrfs <span class="nb">copy-on-write</span>'
     },
     ja: {
+      'cmp.head':'Neon・Aurora・DBLab との比較',
       'sc.title':'こんなときに使います',
       'sc.t1':'いま本番でバグが出ているとき',
       'sc.p1':'それを起こしている行は本番にしかありません。スナップショットを取ってクローンを作れば、数秒後には同じデータにクエリを投げています。障害が続いているあいだ、壊してかまわないコピーの上で。',
@@ -1281,7 +1282,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
   }
 
   /* ── views ─────────────────────────────────────────────── */
-  var VIEWS = ['overview', 'concepts', 'guide', 'compare', 'install'];
+  var VIEWS = ['overview', 'concepts', 'guide', 'install'];
   function show(view, push) {
     if (VIEWS.indexOf(view) < 0) view = 'overview';
     VIEWS.forEach(function (v) {
