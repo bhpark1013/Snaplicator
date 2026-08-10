@@ -32,6 +32,13 @@ _load_dotenv() {
     if [[ "$value" == '"'*'"' || "$value" == "'"*"'" ]]; then
       value="${value:1:${#value}-2}"
     fi
+    # An already-exported value wins. The file is the deployment's defaults;
+    # the environment is what the caller decided for this run — and the
+    # manager has decisions the file cannot carry, PUBLICATION_NAME above
+    # all: the .env names the publication the installer proposed before it
+    # had looked at the primary, and the one actually chosen since is only
+    # known to the process starting this.
+    if [ -n "${!key+set}" ]; then continue; fi
     # literal assign without expansion, then export
     printf -v "$key" '%s' "$value"
     export "$key"
@@ -401,6 +408,11 @@ else
   DOCKER_PORT_ARGS+=( -p "${HOST_PORT}:5432" )
 fi
 DOCKER_ENV_VARS=()
+# --env-file above hands the init scripts the .env verbatim, so the
+# publication they subscribe to would be the name the installer proposed
+# rather than the one chosen since. -e wins over --env-file, which is what
+# makes this the fix and not a second source of truth.
+DOCKER_ENV_VARS+=( -e PUBLICATION_NAME="$PUBLICATION_NAME" )
 if [ -n "${PRIMARY_CONNSTR:-}" ]; then
   DOCKER_ENV_VARS+=( -e PRIMARY_CONNSTR="$PRIMARY_CONNSTR" )
 fi
@@ -411,6 +423,13 @@ if [ "$USE_HOST_NETWORK" = "1" ]; then
   DOCKER_ENV_VARS+=( -e PGPORT="${HOST_PORT}" )
 fi
 
+# The three worker settings move together or not at all. A tablesync worker is
+# drawn from max_logical_replication_workers, which is itself drawn from
+# max_worker_processes, and the apply worker takes one of the first — so
+# max_sync_workers_per_subscription=5 needs at least 6 of the second, and the
+# third has to cover those plus everything else that wants a background worker.
+# Raising only the first is the common mistake: it is accepted, and then four
+# tables copy at a time because that is all the pool had left.
 CONTAINER_ID=$(docker run -d \
   --name "${CONTAINER_NAME}" \
   "${DOCKER_NET_ARGS[@]}" \
@@ -423,6 +442,9 @@ CONTAINER_ID=$(docker run -d \
   -c wal_level=${WAL_LEVEL:-logical} \
   -c max_replication_slots=${MAX_REPLICATION_SLOTS:-10} \
   -c max_wal_senders=${MAX_WAL_SENDERS:-${MAX_REPLICATION_SLOTS:-10}} \
+  -c max_sync_workers_per_subscription=${MAX_SYNC_WORKERS:-5} \
+  -c max_logical_replication_workers=${MAX_LOGICAL_REPLICATION_WORKERS:-8} \
+  -c max_worker_processes=${MAX_WORKER_PROCESSES:-16} \
   $([ "$USE_HOST_NETWORK" = "1" ] && echo "-c port=${HOST_PORT}"))
 echo "$CONTAINER_ID"
 

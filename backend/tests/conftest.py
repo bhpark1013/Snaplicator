@@ -18,7 +18,11 @@ import time
 import pytest
 
 TEST_PG_IMAGE = os.environ.get("TEST_PG_IMAGE", "postgres:15-alpine")
-TEST_PG_PORT = int(os.environ.get("TEST_PG_PORT", "55432"))
+# Below net.ipv4.ip_local_port_range (32768-60999 by default). The old 5543x
+# ports were inside it, so any outbound connection on the host could be
+# holding one when the fixture tried to publish it — `docker run` then failed
+# with "address already in use" against a port nothing was listening on.
+TEST_PG_PORT = int(os.environ.get("TEST_PG_PORT", "25432"))
 TEST_PG_CONTAINER = os.environ.get("TEST_PG_CONTAINER", "snaplicator_capture_test_pg")
 
 PG_USER = "testuser"
@@ -167,8 +171,8 @@ def clean_log(capture_installed):
 E2E_NET = "snap_e2e_net"
 E2E_PUB = "snap_e2e_pub"
 E2E_SUB = "snap_e2e_sub"
-E2E_PUB_PORT = int(os.environ.get("TEST_PG_PUB_PORT", "55434"))
-E2E_SUB_PORT = int(os.environ.get("TEST_PG_SUB_PORT", "55435"))
+E2E_PUB_PORT = int(os.environ.get("TEST_PG_PUB_PORT", "25434"))
+E2E_SUB_PORT = int(os.environ.get("TEST_PG_SUB_PORT", "25435"))
 E2E_SUBSCRIPTION = "e2e_subscription"
 
 
@@ -229,12 +233,12 @@ def pg_pair():
 
 	Mirrors the production shape: table-list publication, capture triggers on
 	the publisher (host-psql path), apply infra on the subscriber (docker-exec
-	path — same as _run_subscriber_sql in production), log table in the
-	publication, watermark initialised to the publisher's max(id) BEFORE the
-	subscription starts so pre-existing log rows are never replayed.
+	path — same as _run_subscriber_sql in production), log table joining that
+	same publication, watermark initialised to the publisher's max(id) BEFORE
+	it joins so pre-existing log rows are never replayed.
 	"""
 	from app.services.replication import (
-		add_log_table_to_publication,
+		ensure_ddl_publication,
 		install_capture_triggers,
 		install_ddl_apply,
 	)
@@ -269,8 +273,9 @@ def pg_pair():
 
 	max_id = int(psql_conn(pub, f"SELECT coalesce(max(id), 0) FROM {LOG_TABLE};"))
 	install_ddl_apply(E2E_SUB, PG_USER, PG_PASSWORD, PG_DB, initial_watermark=max_id)
-	add_log_table_to_publication(pub, PUBLICATION)
+	ensure_ddl_publication(pub, PUBLICATION)
 
+	# One publication, as in production: the log table joined it above.
 	psql_conn(
 		sub,
 		f"CREATE SUBSCRIPTION {E2E_SUBSCRIPTION} "

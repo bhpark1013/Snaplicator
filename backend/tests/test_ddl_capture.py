@@ -378,6 +378,47 @@ class TestPublicationAutoAdd:
 		)
 		assert out == "0"
 
+	def test_following_is_the_default_and_switching_off_is_the_exception(self, clean_log):
+		"""Which half of the pair has to be written down.
+
+		A schema the publication covers follows its new tables without being
+		named anywhere — that is the default, and it is the reason the scope
+		is derived from membership rather than from a stored list: a list is
+		written before the schema exists and is therefore silent about it.
+		Switching one off is the finite, knowable half, so that is what is
+		passed in.
+		"""
+		psql("CREATE SCHEMA optout;")
+		psql("CREATE TABLE optout.member_t (id int);")
+		psql(f"ALTER PUBLICATION {PUBLICATION} ADD TABLE optout.member_t;")
+
+		def joined(table: str) -> str:
+			return psql(
+				f"SELECT count(*) FROM pg_publication_tables "
+				f"WHERE pubname = '{PUBLICATION}' AND tablename = '{table}';"
+			)
+
+		psql("CREATE TABLE optout.follows_t (id int);")
+		assert joined("follows_t") == "1", "covered, so it follows by default"
+
+		try:
+			install_capture_triggers(
+				connstr_for(PG_DB), PUBLICATION, unfollow_schemas=["optout"],
+			)
+			psql("CREATE TABLE optout.stays_out_t (id int);")
+			assert joined("stays_out_t") == "0", "the exception is honoured"
+
+			# ...and confined to the schema it names. A covered schema nobody
+			# mentioned keeps following, which is the whole point of storing
+			# the exceptions instead of the list.
+			psql("CREATE TABLE unmentioned_t (id int);")
+			if joined("unmentioned_t") == "0":  # standalone run: public not covered yet
+				psql(f"ALTER PUBLICATION {PUBLICATION} ADD TABLE unmentioned_t;")
+			psql("CREATE TABLE unmentioned_next_t (id int);")
+			assert joined("unmentioned_next_t") == "1"
+		finally:
+			install_capture_triggers(connstr_for(PG_DB), PUBLICATION)
+
 	def test_for_all_tables_create_table_no_error(self, capture_installed_alltables):
 		"""Dev-shape regression: ALTER PUBLICATION ADD TABLE on a FOR ALL
 		TABLES publication errors — the trigger must skip it, and the CREATE

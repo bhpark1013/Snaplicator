@@ -1,0 +1,9 @@
+.git
+.omc
+.claude
+**/node_modules
+**/__pycache__
+backend/.venv
+frontend/dist
+cli/tests
+*.log

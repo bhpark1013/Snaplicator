@@ -12,11 +12,17 @@ from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
 from .api.routes.notifications import router as notifications_router
 from .services import fdw as fdw_svc
+from .services import fdw_creds
 from .services import sync_log
+from .services import bootstrap as bootstrap_svc
+from .services import policy as policy_svc
+from .services import publication as publication_svc
 from .services.replication import (
     auto_sync_new_tables,
+    compare_published_schemas,
     install_capture_triggers,
     verify_capture_installed,
+    catch_up_unapplied_ddl,
     enable_ddl_apply,
     get_ddl_apply_status,
     run_deferred_ddl,
@@ -39,6 +45,10 @@ _ddl_apply_seen = {"failures": None}
 # alert on the ok→broken transition (one event per outage, not one per cycle);
 # counters alert on any increase. Empty until the first successful check.
 _sub_health_seen: dict = {}
+
+# Last reported schema difference, so a standing drift is said once rather
+# than every 30 seconds.
+_schema_drift_seen: dict = {}
 
 
 def _build_publisher_connstr() -> str | None:
@@ -76,7 +86,7 @@ async def ddl_sync_loop():
         cycle_t0 = time.monotonic()
         try:
             connstr = _build_publisher_connstr()
-            pub_name = settings.publication_name
+            pub_name = publication_svc.active(settings.publication_name)
             sub_name = settings.subscription_name
             container = settings.container_name
             user = settings.postgres_user
@@ -87,10 +97,15 @@ async def ddl_sync_loop():
                 # Safety net: DDL capture triggers must exist on the publisher —
                 # a gap in capture is an unrecoverable hole in the DDL log.
                 try:
-                    trigger_ok = await asyncio.to_thread(verify_capture_installed, connstr)
+                    trigger_ok = await asyncio.to_thread(
+                        verify_capture_installed, connstr, pub_name,
+                    )
                     if not trigger_ok:
                         logger.warning("DDL capture triggers missing on publisher, reinstalling...")
-                        await asyncio.to_thread(install_capture_triggers, connstr, pub_name)
+                        await asyncio.to_thread(
+                            install_capture_triggers, connstr, pub_name,
+                            *policy_svc.capture_scope(pub_name),
+                        )
                         logger.info("DDL capture triggers reinstalled successfully")
                         sync_log.record("capture_reinstalled", {"publication": pub_name})
                 except Exception as e:
@@ -172,10 +187,22 @@ async def ddl_sync_loop():
                         res = await asyncio.to_thread(
                             enable_ddl_apply,
                             connstr, pub_name, container, user, password, db, sub_name,
+                            bootstrap_svc.clone_watermark(),
                         )
-                        if res.get("added") or res.get("refreshed"):
+                        if res.get("created") or res.get("added") or res.get("refreshed"):
                             logger.info(f"DDL apply enabled: {res}")
                             sync_log.record("ddl_apply_enabled", res)
+
+                        # Rows the trigger never saw, because they arrived
+                        # in the table's initial copy rather than one at a
+                        # time. Runs after enable, so the watermark and the
+                        # dedupe set it seeds are already in place.
+                        caught = await asyncio.to_thread(
+                            catch_up_unapplied_ddl, container, user, password, db,
+                        )
+                        if caught.get("applied"):
+                            logger.info(f"DDL catch-up applied {caught['applied']} row(s)")
+                            sync_log.record("ddl_catch_up", caught)
 
                         st = await asyncio.to_thread(
                             get_ddl_apply_status, container, user, password, db,
@@ -206,6 +233,44 @@ async def ddl_sync_loop():
                     except Exception as e:
                         logger.warning(f"DDL apply sync failed: {e}")
 
+                # ── Schema drift watch ──
+                # DDL replication holds the two schemas together from the
+                # moment it is connected. Nothing held them together before
+                # that, and the evidence of what was missed is below the
+                # watermark — so the only way to know is to look.
+                try:
+                    drift = await asyncio.to_thread(
+                        compare_published_schemas,
+                        connstr, pub_name, container, user, password, db,
+                    )
+                    fingerprint = (
+                        tuple(drift["missing_tables"]),
+                        tuple(drift["missing_columns"]),
+                    )
+                    if fingerprint != _schema_drift_seen.get("fingerprint"):
+                        _schema_drift_seen["fingerprint"] = fingerprint
+                        if drift["breaks_replication"]:
+                            sync_log.record("schema_drift", {
+                                # key must contain "error" to reach Slack
+                                "error": (
+                                    f"the replica is missing "
+                                    f"{len(drift['missing_tables'])} table(s) and "
+                                    f"{len(drift['missing_columns'])} column(s) the "
+                                    "primary publishes — writes to those tables will "
+                                    "stop the apply worker"
+                                ),
+                                "missing_tables": drift["missing_tables"][:10],
+                                "missing_columns": drift["missing_columns"][:10],
+                            })
+                            logger.warning(f"Schema drift: {fingerprint}")
+                        elif _schema_drift_seen.get("reported"):
+                            sync_log.record("schema_drift_cleared", {
+                                "tables_compared": drift["tables_compared"],
+                            })
+                        _schema_drift_seen["reported"] = drift["breaks_replication"]
+                except Exception as e:
+                    logger.warning(f"Schema drift check failed: {e}")
+
             # ── FDW remote column-drift auto-sync ──
             # Independent of the publication gate above: FDW can be in use
             # even when logical replication is not fully configured.
@@ -214,11 +279,12 @@ async def ddl_sync_loop():
                     settings.container_name
                     and settings.postgres_user
                     and settings.postgres_db
-                    and settings.fdw_user
-                    and settings.fdw_password
-                    and settings.effective_fdw_host()
-                    and settings.effective_fdw_port()
-                    and settings.effective_fdw_db()
+                    # The login may have arrived through the UI rather than
+                    # .env, and drift sync has to use whichever one is real.
+                    and fdw_creds.configured()
+                    and fdw_creds.host()
+                    and fdw_creds.port()
+                    and fdw_creds.dbname()
                 ):
                     yaml_abs = settings.fdw_yaml_abs()
                     if yaml_abs.exists():
@@ -231,11 +297,11 @@ async def ddl_sync_loop():
                                 "pg_user": settings.postgres_user,
                                 "pg_db": settings.postgres_db,
                                 "pg_password": settings.postgres_password,
-                                "primary_host": settings.effective_fdw_host(),
-                                "primary_port": settings.effective_fdw_port(),
-                                "primary_db": settings.effective_fdw_db(),
-                                "fdw_user": settings.fdw_user,
-                                "fdw_password": settings.fdw_password,
+                                "primary_host": fdw_creds.host(),
+                                "primary_port": fdw_creds.port(),
+                                "primary_db": fdw_creds.dbname(),
+                                "fdw_user": fdw_creds.user(),
+                                "fdw_password": fdw_creds.password(),
                             }
                             fdw_res = await asyncio.to_thread(
                                 fdw_svc.sync_fdw_drift,
@@ -272,9 +338,12 @@ async def lifespan(app: FastAPI):
     # folded into the capture trigger, scoped to schemas the publication covers.
     try:
         connstr = _build_publisher_connstr()
-        pub_name = settings.publication_name
+        pub_name = publication_svc.active(settings.publication_name)
         if connstr and pub_name:
-            await asyncio.to_thread(install_capture_triggers, connstr, pub_name)
+            await asyncio.to_thread(
+                install_capture_triggers, connstr, pub_name,
+                *policy_svc.capture_scope(pub_name),
+            )
             logger.info(f"DDL capture triggers installed on publisher for publication '{pub_name}'")
     except Exception as e:
         logger.warning(f"Could not install capture triggers at startup (will retry in polling loop): {e}")

@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "snaplicator-cli"
 version = "0.1.0"
 description = "Snaplicator CLI - psql-style remote API client for PostgreSQL replica management"
+license = { text = "MIT" }
+classifiers = ["License :: OSI Approved :: MIT License"]
 requires-python = ">=3.10"
 dependencies = [
     "typer>=0.9.0",

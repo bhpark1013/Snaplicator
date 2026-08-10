@@ -1,0 +1,60 @@
+# Snaplicator manager stack.
+#
+#   cp .env.example .env   # fill in publisher + pool settings
+#   docker compose up -d --build
+#
+# The replica postgres and its clones are NOT compose services: the manager
+# creates and manages them as sibling containers through the host docker
+# socket (that is the product). Compose only runs the management plane.
+#
+# Both services use the host network:
+#   - the manager inspects host listeners (`ss -ltn`) and reaches sibling
+#     containers via their host-published ports
+#   - the web proxy reaches the manager on 127.0.0.1:${BACKEND_PORT}
+
+services:
+  manager:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: manager
+    image: snaplicator-manager
+    network_mode: host
+    # privileged: btrfs subvolume/snapshot ioctls on the bind-mounted pool.
+    # The docker socket below is root-equivalent on the host anyway; this
+    # container is the management plane, not a tenant workload.
+    privileged: true
+    restart: unless-stopped
+    environment:
+      BACKEND_PORT: ${BACKEND_PORT:-8888}
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The pool must be visible at the SAME path as on the host: the
+      # manager passes these paths to `docker run -v` for replica/clone
+      # containers, and the host daemon resolves them on the host.
+      - ${ROOT_DATA_DIR}:${ROOT_DATA_DIR}
+      # One .env to rule them all: compose interpolation (this file),
+      # backend Settings (dotenv), and the replica bootstrap script all
+      # read the same values.
+      - ./.env:/app/configs/.env:ro
+      # sync-event history (~/.snaplicator) survives container rebuilds
+      - snaplicator-state:/root/.snaplicator
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: web
+    image: snaplicator-web
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      WEB_PORT: ${WEB_PORT:-8080}
+      BACKEND_PORT: ${BACKEND_PORT:-8888}
+    depends_on:
+      - manager
+
+volumes:
+  snaplicator-state:

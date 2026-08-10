@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import re
 import subprocess
-from typing import Dict, List
+from typing import Dict, Iterable, List, Optional
 from pathlib import Path
 
 
@@ -47,7 +49,12 @@ def get_replication_lag_seconds(container_name: str, postgres_user: str, postgre
 	}
 
 
-def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_db: str) -> Dict:
+def get_initial_copy_progress(
+	container_name: str,
+	postgres_user: str,
+	postgres_db: str,
+	publisher_connstr: str | None = None,
+) -> Dict:
 	"""Report initial logical replication copy progress on the subscriber.
 
 	Heuristic:
@@ -55,6 +62,13 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 	- finished_tables = count rows with srsubstate in ('r','s')
 	- status: 'idle' if total=0; 'copying' if finished<total; 'complete' otherwise
 	- active copy details from pg_subscription_rel (states not 'r') and, if available, pg_stat_progress_copy
+
+	`publisher_connstr` buys the denominator. Everything else here is measured
+	on the subscriber, which can only report what has already landed: a table
+	that has not started copying is zero bytes there, so summing the subscriber
+	gives "how much so far" and can never give "out of how much". The size the
+	copy is heading towards is a fact about the primary, and only the primary
+	can be asked for it.
 	"""
 	# Summary counts
 	summary_sql = (
@@ -81,13 +95,17 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 	# Active details from pg_subscription_rel
 	details: List[Dict] = []
 	try:
+		# Every table, not only the unfinished ones. What is left is only half
+		# the picture — "3 of 8" says nothing about which three, and a copy
+		# that has been running for an hour is judged by what it has got
+		# through, not by what it is holding.
 		detail_sql = (
-			"SELECT r.srsubstate, n.nspname, c.relname "
+			"SELECT r.srsubstate, n.nspname, c.relname, "
+			"       pg_total_relation_size(c.oid) "
 			"FROM pg_subscription_rel r "
 			"JOIN pg_class c ON c.oid = r.srrelid "
 			"JOIN pg_namespace n ON n.oid = c.relnamespace "
-			"WHERE r.srsubstate <> 'r' "
-			"ORDER BY 1,2,3;"
+			"ORDER BY 2,3;"
 		)
 		p2 = subprocess.run(
 			[
@@ -102,10 +120,18 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 				continue
 			parts = ln.split(",")
 			if len(parts) >= 3:
+				try:
+					size = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+				except ValueError:
+					size = 0
 				details.append({
 					"state": parts[0],
 					"schema": parts[1],
 					"table": parts[2],
+					# The subscriber's copy of it: what has landed so far,
+					# which is what makes "how far along" answerable for a
+					# table PostgreSQL reports no byte progress for.
+					"size_bytes": size,
 				})
 	except subprocess.CalledProcessError:
 		pass
@@ -148,6 +174,42 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 	except subprocess.CalledProcessError:
 		pass
 
+	# What the copy is heading towards, asked of the primary.
+	#
+	# Only for the tables actually in the copy set: a publication covering a
+	# tenth of the database would otherwise be measured against the whole of
+	# it, and the bar would crawl to 10% and stop looking like it worked.
+	#
+	# pg_total_relation_size on both sides — heap, TOAST and indexes — because
+	# the numerator is the subscriber's pg_total_relation_size and comparing
+	# two different measures is worse than comparing one imperfectly. It is
+	# imperfect: the subscriber rebuilds indexes rather than copying them and
+	# carries none of the primary's bloat, so the same rows commonly land
+	# smaller. Expect the total to be reached early rather than late.
+	expected_bytes: int | None = None
+	if publisher_connstr and details:
+		# Named explicitly rather than filtered afterwards. This runs every
+		# three seconds for as long as the copy lasts, against a primary that
+		# is usually production and may hold hundreds of relations —
+		# pg_total_relation_size stats every fork of every one of them, and
+		# asking for 587 to keep 3 is a cost paid on someone's live database
+		# once per poll.
+		wanted = sorted({(d["schema"], d["table"]) for d in details})
+		try:
+			pairs = ", ".join(
+				f"({_quote_literal(s)}, {_quote_literal(t)})" for s, t in wanted
+			)
+			rows = _run_publisher_sql(
+				publisher_connstr,
+				"SELECT COALESCE(sum(pg_total_relation_size(c.oid)), 0)::text "
+				"FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+				f"WHERE c.relkind IN ('r','p') AND (n.nspname, c.relname) IN ({pairs});",
+			)
+			acc = int((rows.strip().splitlines() or ["0"])[0] or 0)
+			expected_bytes = acc or None
+		except Exception:
+			expected_bytes = None
+
 	status = "idle" if total == 0 else ("copying" if done < total else "complete")
 	percent = (done / total * 100.0) if total > 0 else 0.0
 	return {
@@ -155,6 +217,7 @@ def get_initial_copy_progress(container_name: str, postgres_user: str, postgres_
 		"total_tables": total,
 		"finished_tables": done,
 		"percent": percent,
+		"expected_bytes": expected_bytes,
 		"active": active if active else None,
 		"details": details if details else None,
 	}
@@ -257,12 +320,25 @@ def list_replication_tables(
 ) -> List[Dict]:
     """List all public tables from publisher with publication/subscriber status and estimated rows."""
 
-    # 1) All public tables + estimated row count from publisher
+    # 1) All public tables + estimated row count and size from publisher
+    #
+    # Rows and bytes answer different questions and neither substitutes for
+    # the other: 40 million narrow rows and 400 thousand rows of JSON are not
+    # comparable by count, and the copy is paid for in bytes while the screen
+    # was only ever showing counts. Both, labelled, or the reader supplies the
+    # missing unit themselves — and reads 2.5M as megabytes.
     all_tables_sql = (
-        "SELECT t.table_schema, t.table_name, COALESCE(s.n_live_tup, 0)::text "
+        "SELECT t.table_schema, t.table_name, COALESCE(s.n_live_tup, 0)::text, "
+        "COALESCE(pg_total_relation_size(c.oid), 0)::text "
         "FROM information_schema.tables t "
+        "LEFT JOIN pg_namespace n ON n.nspname = t.table_schema "
+        "LEFT JOIN pg_class c ON c.relname = t.table_name AND c.relnamespace = n.oid "
         "LEFT JOIN pg_stat_user_tables s ON s.schemaname = t.table_schema AND s.relname = t.table_name "
         "WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema') AND t.table_type = 'BASE TABLE' "
+        # Snaplicator's own outbox rides its own publication; showing it as a
+        # choice here only lets someone stop DDL replicating while every
+        # screen still says it is on.
+        f"AND t.table_name <> '{CAPTURE_LOG_TABLE}' "
         "ORDER BY t.table_name;"
     )
     all_out = _run_publisher_sql(publisher_connstr, all_tables_sql)
@@ -325,6 +401,10 @@ def list_replication_tables(
         schema = parts[0]
         table = parts[1]
         estimated_rows = int(parts[2]) if parts[2] else 0
+        try:
+            size_bytes = int(parts[3]) if len(parts) > 3 and parts[3] else 0
+        except ValueError:
+            size_bytes = 0
         fqn = f"{schema}.{table}"
         in_pub = fqn in pub_set
         result.append({
@@ -334,6 +414,7 @@ def list_replication_tables(
             "pub_via": ("table" if fqn in indiv_set else "schema") if in_pub else None,
             "in_subscriber": fqn in sub_set,
             "estimated_rows": estimated_rows,
+            "size_bytes": size_bytes,
         })
 
     return result
@@ -595,14 +676,87 @@ def auto_sync_new_tables(
 
 
 CAPTURE_LOG_TABLE = "_snaplicator_ddl_log"
+# The log table used to have a publication of its own. It rides the data
+# publication now; the name survives only so the chooser can recognise and
+# hide the leftover on a primary an older install touched.
+CAPTURE_LOG_PUBLICATION = "_snaplicator_ddl"
 
 
-def install_capture_triggers(publisher_connstr: str, publication_name: str) -> Dict:
+AUTO_ADD_PREFIX = "_snaplicator_auto_add_"
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def auto_add_name(publication_name: str) -> str:
+    """The auto-add trigger's name for one publication.
+
+    Per publication rather than one for the server, because this is the only
+    part of capture that differs between installs: it names a publication and
+    is scoped to what that publication covers. A single fixed name meant the
+    last install to start owned it, and the other one's new tables quietly
+    stopped being added — no error, because from PostgreSQL's side nothing is
+    wrong.
+
+    Names are capped at 63 bytes, so a long publication name is truncated and
+    given a digest of the whole thing: two publications that share a prefix
+    must not share a trigger.
+    """
+    room = 63 - len(AUTO_ADD_PREFIX)
+    safe = re.sub(r"[^a-zA-Z0-9_]", "_", publication_name)
+    if len(safe) > room:
+        digest = hashlib.sha1(publication_name.encode()).hexdigest()[:8]
+        safe = safe[: room - 9] + "_" + digest
+    return AUTO_ADD_PREFIX + safe
+
+
+def _quote_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _sql_text_array(values: Optional[Iterable[str]]) -> str:
+    """A text[] literal for embedding in generated PL/pgSQL."""
+    items = ", ".join("'" + str(v).replace("'", "''") + "'" for v in (values or []))
+    return f"ARRAY[{items}]::text[]"
+
+
+def install_capture_triggers(
+    publisher_connstr: str,
+    publication_name: str,
+    follow_schemas: Optional[List[str]] = None,
+    excluded: Optional[List[str]] = None,
+    unfollow_schemas: Optional[List[str]] = None,
+) -> Dict:
     """Install wide DDL capture on the publisher.
 
-    Creates the _snaplicator_ddl_log outbox table plus two event triggers:
-      _snaplicator_capture_ddl   ON ddl_command_end  (CREATE/ALTER, wide)
-      _snaplicator_capture_drop  ON sql_drop         (DROP)
+    `follow_schemas` scopes the auto-add half. Left None it is derived from the
+    publication's own membership, which is what it has always done and what the
+    tests pin. Passed explicitly it is obeyed instead — including when empty,
+    which is how "follow nothing at all" is expressed for a publication this
+    install may not rewrite. Capture keeps running either way: the two halves
+    share a trigger but not a switch.
+
+    `unfollow_schemas` takes schemas back out of whichever scope the above
+    produced. Following is the default for a replicated schema, so a person
+    turning it off for one schema is recorded as the exception it is rather
+    than by replacing the scope with a list — a list would also have to be
+    right about every schema that does not exist yet.
+
+    `excluded` names tables that must not be added back. A table someone took
+    out is not a table to re-add the next time it is recreated.
+
+    Creates the _snaplicator_ddl_log outbox table plus three event triggers,
+    split by whether they depend on a publication:
+      _snaplicator_capture_ddl    ON ddl_command_end  (CREATE/ALTER, wide)
+      _snaplicator_capture_drop   ON sql_drop         (DROP)
+      _snaplicator_auto_add_<pub> ON ddl_command_end  (new tables -> pub)
+
+    The first two log DDL and name no publication, so every install writes
+    the same function and they are shared. The third names one and is scoped
+    to what it covers, so it is per publication — which is what lets a second
+    install attach to the same primary without taking the first one's
+    auto-add away. See auto_add_name().
 
     Capture is intentionally wide — scoping decisions happen at apply time.
     Only three capture-side guards exist:
@@ -614,10 +768,8 @@ def install_capture_triggers(publisher_connstr: str, publication_name: str) -> D
          entries (serial sequences, PK indexes) and double-firing commands
          (ALTER TABLE DROP COLUMN hits both triggers) collapse to one row
 
-    Replaces the legacy _snaplicator_auto_pub_add trigger; its behaviour
-    (auto ALTER PUBLICATION ADD TABLE on CREATE TABLE) is folded into the
-    capture trigger, scoped to schemas the publication already covers, and
-    skipped for FOR ALL TABLES publications.
+    Replaces the legacy _snaplicator_auto_pub_add trigger, which had one fixed
+    name for the whole server.
 
     Idempotent: safe to call repeatedly; existing log rows are preserved.
 
@@ -642,6 +794,31 @@ CREATE TABLE IF NOT EXISTS public.{CAPTURE_LOG_TABLE} (
 """
     _run_publisher_sql(publisher_connstr, log_table_sql)
 
+    # Membership is the scope, and it is what makes following the default: a
+    # schema the publication already covers keeps taking its new tables
+    # without anyone having listed it anywhere. An empty follow_schemas is a
+    # real answer — "follow nothing" — and has to survive as an array that
+    # matches no schema rather than fall back to the derived scope.
+    if follow_schemas is None:
+        scope_clause = (
+            "c.schema_name IN (SELECT pt.schemaname FROM pg_publication_tables pt "
+            f"WHERE pt.pubname = '{publication_name}')"
+        )
+    else:
+        scope_clause = f"c.schema_name = ANY({_sql_text_array(follow_schemas)})"
+
+    # The exceptions, applied to whichever scope that was.
+    if unfollow_schemas:
+        scope_clause = (
+            f"({scope_clause}) AND NOT "
+            f"(c.schema_name = ANY({_sql_text_array(unfollow_schemas)}))"
+        )
+
+    exclude_clause = (
+        f"NOT (c.object_identity = ANY({_sql_text_array(excluded)}))"
+        if excluded else "true"
+    )
+
     capture_fn_sql = f"""
 CREATE OR REPLACE FUNCTION _snaplicator_capture_ddl()
 RETURNS event_trigger
@@ -650,8 +827,6 @@ AS $fn$
 DECLARE
     q text := current_query();
     cmd record;
-    tbl record;
-    allt boolean;
 BEGIN
     -- Never logged: DCL noise, plus publication/subscription DDL —
     -- publisher-only infrastructure that must not replay on a subscriber
@@ -696,42 +871,59 @@ BEGIN
         END;
     END IF;
 
-    -- Legacy behaviour: auto-add new tables to the publication, scoped to
-    -- schemas the publication already covers (legacy hardcoded 'public';
-    -- membership-derived scope needs no config). Deliberately excluded
-    -- schemas stay out — e.g. FDW-managed etl tables, some without PKs:
-    -- publishing one breaks publisher-side UPDATE/DELETE. FOR ALL TABLES
-    -- publications include new tables automatically (and reject ALTER
-    -- PUBLICATION ADD TABLE), so skip in that case.
-    SELECT puballtables INTO allt
-      FROM pg_publication WHERE pubname = '{publication_name}';
-    IF allt IS FALSE THEN
-        FOR tbl IN
-            SELECT c.object_identity
-              FROM pg_event_trigger_ddl_commands() c
-             WHERE c.command_tag IN ('CREATE TABLE', 'CREATE TABLE AS',
-                                     'SELECT INTO')
-               AND c.object_type = 'table'
-               AND c.object_identity !~ '_snaplicator_'
-               AND c.schema_name IN (
-                   SELECT pt.schemaname
-                     FROM pg_publication_tables pt
-                    WHERE pt.pubname = '{publication_name}')
-        LOOP
-            BEGIN
-                EXECUTE format(
-                    'ALTER PUBLICATION {publication_name} ADD TABLE %s',
-                    tbl.object_identity);
-            EXCEPTION WHEN OTHERS THEN
-                RAISE WARNING 'snaplicator: auto pub add failed for %: %',
-                    tbl.object_identity, SQLERRM;
-            END;
-        END LOOP;
-    END IF;
 END;
 $fn$;
 """
     _run_publisher_sql(publisher_connstr, capture_fn_sql)
+
+    # Auto-add: the only part of capture that belongs to one install. It names
+    # a publication, and its scope is that publication's coverage — so it gets
+    # a name derived from the publication, and a second install on the same
+    # primary installs its own beside this one instead of over it.
+    #
+    # FOR ALL TABLES publications include new tables by themselves (and reject
+    # ALTER PUBLICATION ADD TABLE), so the body checks and skips.
+    #
+    # Excluded schemas stay out — e.g. FDW-managed etl tables, some without
+    # PKs: publishing one breaks publisher-side UPDATE/DELETE.
+    auto_add = auto_add_name(publication_name)
+    auto_add_fn_sql = f"""
+CREATE OR REPLACE FUNCTION {auto_add}()
+RETURNS event_trigger
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+    tbl record;
+    allt boolean;
+BEGIN
+    SELECT puballtables INTO allt
+      FROM pg_publication WHERE pubname = {_quote_literal(publication_name)};
+    IF allt IS NOT FALSE THEN
+        RETURN;
+    END IF;
+    FOR tbl IN
+        SELECT c.object_identity
+          FROM pg_event_trigger_ddl_commands() c
+         WHERE c.command_tag IN ('CREATE TABLE', 'CREATE TABLE AS',
+                                 'SELECT INTO')
+           AND c.object_type = 'table'
+           AND c.object_identity !~ '_snaplicator_'
+           AND {scope_clause}
+           AND {exclude_clause}
+    LOOP
+        BEGIN
+            EXECUTE format(
+                'ALTER PUBLICATION {_quote_ident(publication_name)} ADD TABLE %s',
+                tbl.object_identity);
+        EXCEPTION WHEN OTHERS THEN
+            RAISE WARNING 'snaplicator: auto pub add failed for %: %',
+                tbl.object_identity, SQLERRM;
+        END;
+    END LOOP;
+END;
+$fn$;
+"""
+    _run_publisher_sql(publisher_connstr, auto_add_fn_sql)
 
     drop_fn_sql = f"""
 CREATE OR REPLACE FUNCTION _snaplicator_capture_drop()
@@ -782,20 +974,40 @@ $fn$;
 """
     _run_publisher_sql(publisher_connstr, drop_fn_sql)
 
-    # DROP + CREATE so function references stay fresh; DDL on event triggers
-    # does not itself fire event triggers, so this cannot recurse.
-    triggers_sql = """
+    # The functions above are CREATE OR REPLACE, so an existing trigger already
+    # points at the new body and recreating it would buy nothing — while the
+    # gap between DROP and CREATE is a window where DDL goes uncaptured. With
+    # two installs reinstalling on their own schedules that window is somebody
+    # else's data loss, so the triggers are only made when they are missing.
+    # Disabled counts as missing: a trigger that does not fire is not capture.
+    triggers_sql = f"""
 DO $do$
 BEGIN
     DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;
-    DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
-    DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
-    CREATE EVENT TRIGGER _snaplicator_capture_ddl
-        ON ddl_command_end
-        EXECUTE FUNCTION _snaplicator_capture_ddl();
-    CREATE EVENT TRIGGER _snaplicator_capture_drop
-        ON sql_drop
-        EXECUTE FUNCTION _snaplicator_capture_drop();
+
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger
+                    WHERE evtname = '_snaplicator_capture_ddl' AND evtenabled <> 'D') THEN
+        DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
+        CREATE EVENT TRIGGER _snaplicator_capture_ddl
+            ON ddl_command_end
+            EXECUTE FUNCTION _snaplicator_capture_ddl();
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger
+                    WHERE evtname = '_snaplicator_capture_drop' AND evtenabled <> 'D') THEN
+        DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
+        CREATE EVENT TRIGGER _snaplicator_capture_drop
+            ON sql_drop
+            EXECUTE FUNCTION _snaplicator_capture_drop();
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger
+                    WHERE evtname = '{auto_add}' AND evtenabled <> 'D') THEN
+        DROP EVENT TRIGGER IF EXISTS {_quote_ident(auto_add)};
+        CREATE EVENT TRIGGER {_quote_ident(auto_add)}
+            ON ddl_command_end
+            EXECUTE FUNCTION {auto_add}();
+    END IF;
 END;
 $do$;
 """
@@ -805,17 +1017,108 @@ $do$;
         "installed": True,
         "publication": publication_name,
         "log_table": CAPTURE_LOG_TABLE,
+        "auto_add_trigger": auto_add,
     }
 
 
-def verify_capture_installed(publisher_connstr: str) -> bool:
-    """Check that both capture event triggers exist on the publisher."""
-    sql = (
-        "SELECT count(*) FROM pg_event_trigger "
-        "WHERE evtname IN ('_snaplicator_capture_ddl', '_snaplicator_capture_drop');"
+def verify_capture_installed(
+    publisher_connstr: str, publication_name: Optional[str] = None
+) -> bool:
+    """Whether capture is in place — and, if asked, for this publication.
+
+    The two shared triggers say DDL is being logged. They say nothing about
+    whether new tables still join *this* publication, which is what the
+    per-publication trigger is for; naming the publication asks the whole
+    question.
+    """
+    names = ["_snaplicator_capture_ddl", "_snaplicator_capture_drop"]
+    if publication_name:
+        names.append(auto_add_name(publication_name))
+    listed = ", ".join(_quote_literal(n) for n in names)
+    out = _run_publisher_sql(
+        publisher_connstr,
+        f"SELECT count(*) FROM pg_event_trigger WHERE evtname IN ({listed});",
     )
-    out = _run_publisher_sql(publisher_connstr, sql)
-    return out.strip() == "2"
+    return out.strip() == str(len(names))
+
+
+def uninstall_capture_triggers(
+    publisher_connstr: str,
+    publication_name: Optional[str] = None,
+    drop_log: bool = False,
+) -> Dict:
+    """Take the capture triggers back off the publisher.
+
+    The counterpart to install, and the thing a primary is owed: these are
+    event triggers on somebody's production server, and leaving no way to
+    remove them means an install can only ever be added to.
+
+    Naming a publication removes that install's share and leaves the rest: its
+    auto-add trigger goes, and the two shared ones go only once no auto-add
+    trigger is left, because until then another install is still relying on
+    them for its DDL log. Naming nothing means take it all off, which is what
+    a single-install publisher wants and what the legacy call did.
+
+    The log table is data — rows that may not have been applied yet — so it
+    stays unless asked for, and the functions go with the triggers because
+    nothing else calls them.
+    """
+    if publication_name:
+        auto_add = auto_add_name(publication_name)
+        _run_publisher_sql(publisher_connstr, f"""
+DO $do$
+BEGIN
+    DROP EVENT TRIGGER IF EXISTS {_quote_ident(auto_add)};
+
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger
+                    WHERE evtname LIKE '{AUTO_ADD_PREFIX}%') THEN
+        DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;
+        DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
+        DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
+    END IF;
+END;
+$do$;
+DROP FUNCTION IF EXISTS {auto_add}();
+""")
+        # Only orphaned now — dropping a function an event trigger still
+        # executes would fail, which is exactly the guard we want.
+        _run_publisher_sql(publisher_connstr, """
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger
+                    WHERE evtname IN ('_snaplicator_capture_ddl',
+                                      '_snaplicator_capture_drop')) THEN
+        DROP FUNCTION IF EXISTS _snaplicator_capture_ddl();
+        DROP FUNCTION IF EXISTS _snaplicator_capture_drop();
+    END IF;
+END;
+$do$;
+""")
+    else:
+        _run_publisher_sql(publisher_connstr, f"""
+DO $do$
+DECLARE t record;
+BEGIN
+    DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;
+    DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
+    DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
+    FOR t IN SELECT evtname FROM pg_event_trigger
+              WHERE evtname LIKE '{AUTO_ADD_PREFIX}%'
+    LOOP
+        EXECUTE format('DROP EVENT TRIGGER IF EXISTS %I', t.evtname);
+        EXECUTE format('DROP FUNCTION IF EXISTS %I()', t.evtname);
+    END LOOP;
+END;
+$do$;
+DROP FUNCTION IF EXISTS _snaplicator_auto_add_to_pub();
+DROP FUNCTION IF EXISTS _snaplicator_capture_ddl();
+DROP FUNCTION IF EXISTS _snaplicator_capture_drop();
+""")
+    if drop_log:
+        _run_publisher_sql(
+            publisher_connstr, f"DROP TABLE IF EXISTS public.{CAPTURE_LOG_TABLE};"
+        )
+    return {"installed": False, "log_dropped": bool(drop_log)}
 
 
 # ── DDL Apply (subscriber side, Phase 2) ───────────────────────────
@@ -936,6 +1239,22 @@ ALTER TABLE public._snaplicator_ddl_failures
     # work", the other is "this was never going to be applied here". Mixing
     # them is what turned a design decision into a page at 2am.
     _sub_sql("""
+CREATE OR REPLACE FUNCTION public._snaplicator_ddl_is_local_only(cmd_tag text, ddl text)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $localonly$
+    SELECT (cmd_tag IN ('GRANT', 'REVOKE', 'ALTER DEFAULT PRIVILEGES')
+            OR ddl ~* '^\\s*ALTER\\s+.*\\sOWNER\\s+TO\\s'
+            OR ddl ~* '^\\s*(GRANT|REVOKE)\\s')
+       -- ...and only when that is the whole of it. ddl_text is
+       -- current_query(), so a batch sent in one round trip is stored as
+       -- one row: `ALTER TABLE t ADD COLUMN c; ALTER TABLE t OWNER TO r;`
+       -- is a single entry. Skipping that on the strength of the OWNER TO
+       -- would drop the ADD COLUMN with it, into a table nobody alerts on.
+       -- A batch falls through and fails audibly, as it did before.
+       AND btrim(ddl) !~ ';\\s*\\S';
+$localonly$;
+""")
+
+    _sub_sql("""
 CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_skipped (
     id bigserial PRIMARY KEY,
     log_id bigint NOT NULL,
@@ -1002,9 +1321,7 @@ BEGIN
     -- and it failed loudly, into the table that pages someone, for a statement
     -- whose absence is the intended state. Recorded as skipped instead: still
     -- visible, no longer an incident.
-    IF NEW.command_tag IN ('GRANT', 'REVOKE', 'ALTER DEFAULT PRIVILEGES')
-       OR NEW.ddl_text ~* '^\\s*ALTER\\s+.*\\sOWNER\\s+TO\\s'
-       OR NEW.ddl_text ~* '^\\s*(GRANT|REVOKE)\\s' THEN
+    IF public._snaplicator_ddl_is_local_only(NEW.command_tag, NEW.ddl_text) THEN
         INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
         VALUES (NEW.id, NEW.ddl_text, 'ownership/privileges are not replicated', NEW.search_path);
     ELSIF NEW.ddl_text ~* 'CONCURRENTLY' THEN
@@ -1072,36 +1389,39 @@ def verify_ddl_apply_installed(
     return out.strip() == "1"
 
 
-def add_log_table_to_publication(
-    publisher_connstr: str, publication_name: str
-) -> Dict:
-    """Put the DDL log table into the publication so its rows ride the
-    normal replication stream. Idempotent; FOR ALL TABLES publications
-    already include it (and reject ALTER PUBLICATION ADD TABLE)."""
-    allt = _run_publisher_sql(
-        publisher_connstr,
-        f"SELECT puballtables FROM pg_publication WHERE pubname = '{publication_name}';",
-    ).strip()
-    if allt == "":
-        return {"added": False, "reason": "publication_not_found"}
-    if allt == "t":
-        return {"added": False, "reason": "for_all_tables"}
+def ensure_ddl_publication(publisher_connstr: str, publication_name: str) -> Dict:
+    """Put the DDL log table into the publication this replica already reads.
 
+    One publication, not two. The log is Snaplicator's own table travelling to
+    Snaplicator's own replica, and a second publication to carry one table
+    bought nothing the subscription's existing one does not already give.
+
+    A FOR ALL TABLES publication already contains it, and so does one that
+    covers the public schema — pg_publication_tables answers for every form,
+    so membership is asked rather than assumed, and ALTER only runs when the
+    answer is no.
+
+    What this does cost is that the log table is now inside the object the
+    selection screen rewrites. apply_selection has to keep putting it back;
+    see the note there. Losing it is silent — replication carries on, DDL
+    just stops arriving — which is why that is a rule in code and not a
+    convention.
+    """
     member = _run_publisher_sql(
         publisher_connstr,
         "SELECT count(*) FROM pg_publication_tables "
-        f"WHERE pubname = '{publication_name}' "
-        f"AND tablename = '{CAPTURE_LOG_TABLE}';",
+        f"WHERE pubname = {_quote_literal(publication_name)} "
+        f"AND schemaname = 'public' AND tablename = '{CAPTURE_LOG_TABLE}';",
     ).strip()
-    if member == "1":
-        return {"added": False, "reason": "already_member"}
+    if member != "0":
+        return {"publication": publication_name, "added": False}
 
     _run_publisher_sql(
         publisher_connstr,
-        f"ALTER PUBLICATION {publication_name} "
+        f"ALTER PUBLICATION {_quote_ident(publication_name)} "
         f"ADD TABLE public.{CAPTURE_LOG_TABLE};",
     )
-    return {"added": True}
+    return {"publication": publication_name, "added": True}
 
 
 def check_subscription_health(
@@ -1249,6 +1569,115 @@ def get_publisher_max_ddl_log_id(publisher_connstr: str) -> int:
     return int(out or 0)
 
 
+def catch_up_unapplied_ddl(
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> Dict:
+    """Apply log rows that arrived without the trigger seeing them.
+
+    The apply trigger fires on INSERT, and the initial copy of a table is not
+    an INSERT: PostgreSQL fills it with COPY, which row triggers do not see.
+    The log table is a table like any other, so whatever it already held when
+    its copy ran lands on the replica unexecuted — present, above the
+    watermark, and silently skipped.
+
+    Most of that is harmless, because the watermark marks everything the
+    schema clone already carries. The gap is the DDL captured after the clone
+    and before the copy: not in the schema, and never executed. A CREATE
+    TABLE lost there is worse than a missing table — the table joins the
+    publication, the publisher starts sending its rows, and the apply worker
+    jams on a relation that does not exist locally, holding up everything
+    behind it.
+
+    Only once the copy is finished. Half a replica is not a thing to run
+    migrations against, and the same rows are still here a cycle later.
+
+    Idempotent by the same dedupe set the trigger uses, so a row cannot be
+    applied twice however it arrived.
+    """
+    pending = _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+        f"""
+SELECT count(*) FROM public.{CAPTURE_LOG_TABLE} l
+ WHERE l.id > coalesce((SELECT last_applied_id FROM public._snaplicator_ddl_watermark
+                         WHERE id = 1), 0)
+   AND NOT EXISTS (SELECT 1 FROM public._snaplicator_ddl_applied a WHERE a.id = l.id)
+   AND NOT EXISTS (SELECT 1 FROM pg_subscription_rel WHERE srsubstate <> 'r');
+""",
+    ).strip()
+    try:
+        count = int(pending.splitlines()[0])
+    except (IndexError, ValueError):
+        count = 0
+    if count == 0:
+        return {"applied": 0}
+
+    _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+        f"""
+DO $catchup$
+DECLARE
+    r record;
+    wm bigint;
+    saved_sp text;
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_subscription_rel WHERE srsubstate <> 'r') THEN
+        RETURN;
+    END IF;
+    SELECT coalesce(last_applied_id, 0) INTO wm
+      FROM public._snaplicator_ddl_watermark WHERE id = 1;
+
+    FOR r IN SELECT * FROM public.{CAPTURE_LOG_TABLE} l
+              WHERE l.id > coalesce(wm, 0)
+                AND NOT EXISTS (SELECT 1 FROM public._snaplicator_ddl_applied a
+                                 WHERE a.id = l.id)
+              ORDER BY l.id
+    LOOP
+        -- Claimed before it is run, exactly as the trigger does: a statement
+        -- that half-succeeds must not come round again.
+        INSERT INTO public._snaplicator_ddl_applied (id) VALUES (r.id)
+            ON CONFLICT DO NOTHING;
+
+        -- Same rule as the trigger, through the same function. Both paths
+        -- apply the same log to the same database, so a statement the
+        -- trigger skips and catch-up executes would put ownership DDL back
+        -- into the failures table by the other door.
+        IF public._snaplicator_ddl_is_local_only(r.command_tag, r.ddl_text) THEN
+            INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
+            VALUES (r.id, r.ddl_text, 'ownership/privileges are not replicated', r.search_path);
+            CONTINUE;
+        END IF;
+
+        IF r.ddl_text ~* 'CONCURRENTLY' THEN
+            INSERT INTO public._snaplicator_ddl_deferred (log_id, ddl_text, search_path)
+            VALUES (r.id, r.ddl_text, r.search_path);
+            CONTINUE;
+        END IF;
+
+        saved_sp := current_setting('search_path', true);
+        BEGIN
+            IF r.search_path IS NOT NULL AND r.search_path <> '' THEN
+                PERFORM set_config('search_path', r.search_path, true);
+            END IF;
+            EXECUTE r.ddl_text;
+        EXCEPTION WHEN OTHERS THEN
+            INSERT INTO public._snaplicator_ddl_failures
+                (log_id, ddl_text, error, search_path)
+            VALUES (r.id, r.ddl_text, SQLERRM, r.search_path);
+            RAISE WARNING 'snaplicator: ddl catch-up failed for log id %: %',
+                r.id, SQLERRM;
+        END;
+        PERFORM set_config('search_path', coalesce(saved_sp, 'public'), true);
+    END LOOP;
+END;
+$catchup$;
+""",
+    )
+    return {"applied": count}
+
+
 def enable_ddl_apply(
     publisher_connstr: str,
     publication_name: str,
@@ -1257,32 +1686,123 @@ def enable_ddl_apply(
     subscriber_password: str | None,
     subscriber_db: str,
     subscription_name: str,
+    watermark: Optional[int] = None,
 ) -> Dict:
-    """Connect the DDL stream, idempotently. Order matters: the watermark is
-    seeded from the publisher's current max(id) BEFORE the log table joins
-    the publication, so history arriving via the initial COPY is never
-    executed. REFRESH runs only when the subscriber is not yet pulling the
-    log table, so steady-state calls are read-only no-ops."""
-    wm = get_publisher_max_ddl_log_id(publisher_connstr)
+    """Connect the DDL stream, idempotently.
+
+    `watermark` is the log id the replica's schema was taken at. The
+    bootstrap knows it, because it is the one that took the schema; passing
+    it is what makes the DDL between that moment and this one replay instead
+    of counting as history. Without it the line falls here, which skips
+    exactly the DDL the replica is missing.
+
+    Falling back to the publisher's current max(id) is right only when there
+    is no replica schema to be out of step with — a first install, before any
+    bootstrap has run. The subscription is only rewritten when it is not yet reading
+    the log publication, so steady-state calls are read-only no-ops.
+
+    `publication_name` is the data publication, and the log table joins it —
+    the subscription is already reading it, so nothing has to be told about a
+    second name.
+
+    Order is load-bearing: the watermark is written from the publisher's
+    current max(id) BEFORE the table joins, so the history the refresh copies
+    over lands below the line and is skipped instead of replayed.
+    """
+    wm = watermark if watermark is not None else get_publisher_max_ddl_log_id(publisher_connstr)
     install_ddl_apply(
         subscriber_container, subscriber_user, subscriber_password,
         subscriber_db, initial_watermark=wm,
     )
-    added = add_log_table_to_publication(publisher_connstr, publication_name)
-    subscribed = _run_subscriber_sql(
+    added = ensure_ddl_publication(publisher_connstr, publication_name)
+    if not added.get("added"):
+        return {"watermark": wm, "refreshed": False, **added}
+
+    # REFRESH copies only what just joined; the data tables are already in
+    # pg_subscription_rel and are left where they are. copy_data stays on:
+    # turning it off here would also silence the initial copy of any data
+    # table that happened to join in the same edit.
+    _run_subscriber_sql(
         subscriber_container, subscriber_user, subscriber_password,
         subscriber_db,
-        "SELECT count(*) FROM pg_subscription_rel sr "
-        "JOIN pg_class c ON c.oid = sr.srrelid "
-        f"WHERE c.relname = '{CAPTURE_LOG_TABLE}';",
-    ).strip()
-    if subscribed == "0":
-        _run_subscriber_sql(
-            subscriber_container, subscriber_user, subscriber_password,
-            subscriber_db,
-            f"ALTER SUBSCRIPTION {subscription_name} REFRESH PUBLICATION;",
-        )
-    return {"watermark": wm, "refreshed": subscribed == "0", **added}
+        f"ALTER SUBSCRIPTION {_quote_ident(subscription_name)} REFRESH PUBLICATION;",
+    )
+    return {"watermark": wm, "refreshed": True, **added}
+
+
+def compare_published_schemas(
+    publisher_connstr: str,
+    publication_name: str,
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+) -> Dict:
+    """Where the replica's shape no longer matches the primary's.
+
+    DDL replication keeps the two in step from the moment it is connected;
+    nothing keeps them in step for the stretch before that. A replica whose
+    DDL apply was off, or that was bootstrapped while a migration ran, comes
+    out the far side missing a column with no record of it anywhere — and
+    the log rows that would have said so are below the watermark, which is
+    what makes it silent rather than merely broken.
+
+    A column the primary has and the replica does not is the one that stops
+    replication: the publisher sends it and the apply worker has nowhere to
+    put it. The others are reported because a drifted replica is worth
+    knowing about even when it still runs.
+
+    Read-only. Nothing here repairs anything: the DDL that would fix a
+    difference is unknown by the time it is detectable, and guessing it is
+    how a diagnostic turns into an outage.
+    """
+    published = _run_publisher_sql(
+        publisher_connstr,
+        "SELECT c.table_schema || '.' || c.table_name || '.' || c.column_name "
+        "FROM information_schema.columns c "
+        "JOIN pg_publication_tables t ON t.schemaname = c.table_schema "
+        "                            AND t.tablename = c.table_name "
+        f"WHERE t.pubname = '{publication_name}' "
+        f"AND c.table_name <> '{CAPTURE_LOG_TABLE}';",
+    )
+    primary = {l.strip() for l in published.splitlines() if l.strip()}
+
+    local = _run_subscriber_sql(
+        subscriber_container, subscriber_user, subscriber_password, subscriber_db,
+        "SELECT table_schema || '.' || table_name || '.' || column_name "
+        "FROM information_schema.columns "
+        "WHERE table_schema NOT IN ('pg_catalog', 'information_schema');",
+    )
+    replica = {l.strip() for l in local.splitlines() if l.strip()}
+
+    def table_of(col: str) -> str:
+        return col.rsplit(".", 1)[0]
+
+    primary_tables = {table_of(c) for c in primary}
+    replica_tables = {table_of(c) for c in replica}
+
+    missing_tables = sorted(primary_tables - replica_tables)
+    # Columns are only comparable where both sides have the table; listing
+    # every column of a missing table as a missing column would bury the
+    # difference that matters under one line per column.
+    comparable = primary_tables & replica_tables
+    missing_columns = sorted(
+        c for c in primary - replica if table_of(c) in comparable
+    )
+    extra_columns = sorted(
+        c for c in replica - primary if table_of(c) in comparable
+    )
+
+    return {
+        "publication": publication_name,
+        "tables_compared": len(comparable),
+        "missing_tables": missing_tables,
+        "missing_columns": missing_columns,
+        "extra_columns": extra_columns,
+        # Only the first two stop replication. Extra columns on the replica
+        # are ignored by the apply worker.
+        "breaks_replication": bool(missing_tables or missing_columns),
+    }
 
 
 def run_deferred_ddl(

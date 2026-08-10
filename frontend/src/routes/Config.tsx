@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
+import { ChevronDown, ChevronRight, RefreshCw, Upload } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -25,6 +25,9 @@ interface ReplicationCheckSide {
 
 interface ReplicationCheckResult {
     sql?: string | null
+    // False when no check query has been written yet — in which case nothing
+    // ran, and neither side's result means anything.
+    configured?: boolean
     publisher: ReplicationCheckSide
     subscriber: ReplicationCheckSide
 }
@@ -35,7 +38,7 @@ interface FsUsageSummary {
     calculated_at?: string | null
 }
 
-type CheckStatus = 'checking' | 'ok' | 'mismatch' | 'error'
+type CheckStatus = 'checking' | 'unconfigured' | 'ok' | 'mismatch' | 'error'
 
 export function Config() {
     const [copy, setCopy] = useState<CopyProgress | null>(null)
@@ -45,6 +48,25 @@ export function Config() {
     const [checkLoading, setCheckLoading] = useState(false)
     const [checkError, setCheckError] = useState<string | null>(null)
     const [checkExpanded, setCheckExpanded] = useState(false)
+
+    // What the replica could not reproduce. Two questions with one answer:
+    // whether it is a copy of the primary, or only of the parts that worked.
+    const [ext, setExt] = useState<{
+        source: { name: string; version: string }[]
+        missing_not_installed: { name: string; version: string; available_version?: string }[]
+        missing_not_available: { name: string; version: string }[]
+        ok: boolean
+    } | null>(null)
+    const [schemaErrors, setSchemaErrors] = useState<{ recorded: boolean; count: number; errors: string[] } | null>(null)
+    const [fidelityExpanded, setFidelityExpanded] = useState(false)
+
+    const [anon, setAnon] = useState<{ configured: boolean; path: string; sql: string } | null>(null)
+    const [anonExpanded, setAnonExpanded] = useState(false)
+    const [anonPending, setAnonPending] = useState<{ name: string; sql: string; lines: number } | null>(null)
+    const [anonDragging, setAnonDragging] = useState(false)
+    const [anonSaving, setAnonSaving] = useState(false)
+    const [anonError, setAnonError] = useState<string | null>(null)
+    const [anonMsg, setAnonMsg] = useState<string | null>(null)
     const [logsExpanded, setLogsExpanded] = useState(false)
 
     const [editSql, setEditSql] = useState<string>('')
@@ -175,6 +197,69 @@ export function Config() {
             .finally(() => setCheckLoading(false))
     }
 
+    const loadFidelity = () => {
+        fetch(`${base}/replication/extensions`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d) setExt(d) })
+            .catch(() => {})
+        fetch(`${base}/replication/schema-errors`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d) setSchemaErrors(d) })
+            .catch(() => {})
+    }
+
+    const loadAnon = () => {
+        fetch(`${base}/clones/anonymize-sql`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d) setAnon({ configured: !!d.configured, path: d.path || '', sql: d.sql || '' }) })
+            .catch(() => {})
+    }
+
+    const readAnonFile = (f: File) => {
+        setAnonError(null)
+        setAnonMsg(null)
+        if (f.size > 1_000_000) {
+            setAnonError(`${f.name} is ${(f.size / 1_000_000).toFixed(1)} MB — that is not an anonymization script.`)
+            return
+        }
+        const r = new FileReader()
+        r.onerror = () => setAnonError(`Could not read ${f.name}`)
+        r.onload = () => {
+            const text = String(r.result || '')
+            if (!text.trim()) {
+                setAnonError(`${f.name} is empty`)
+                return
+            }
+            setAnonPending({ name: f.name, sql: text, lines: text.trimEnd().split('\n').length })
+        }
+        r.readAsText(f)
+    }
+
+    // Saved only when asked. Replacing this script changes what every future
+    // clone exposes, so dropping a file in cannot be the same gesture as
+    // putting it into effect.
+    const saveAnon = async () => {
+        if (!anonPending) return
+        setAnonSaving(true)
+        setAnonError(null)
+        setAnonMsg(null)
+        try {
+            const r = await fetch(`${base}/clones/anonymize-sql`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sql: anonPending.sql }),
+            })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            setAnonMsg(`Saved from ${anonPending.name} — applies to clones made after this.`)
+            setAnonPending(null)
+            loadAnon()
+        } catch (e: any) {
+            setAnonError(String(e?.message || e))
+        } finally {
+            setAnonSaving(false)
+        }
+    }
+
     const loadCheckSql = () => {
         setSqlLoading(true)
         setSqlErr(null)
@@ -223,6 +308,8 @@ export function Config() {
         loadNotif()
         loadCheckSql()
         runCheck()
+        loadAnon()
+        loadFidelity()
         // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
 
@@ -247,6 +334,9 @@ export function Config() {
         if (checkLoading && !check) return 'checking'
         if (checkError) return 'error'
         if (!check) return 'checking'
+        // Asked before answered: with no query there is nothing to have gone
+        // wrong, and the two sides' fields are empty rather than failing.
+        if (check.configured === false) return 'unconfigured'
         if (!check.publisher.ok || !check.subscriber.ok) return 'error'
         const pub = String(check.publisher.output || '').trim()
         const sub = String(check.subscriber.output || '').trim()
@@ -255,10 +345,17 @@ export function Config() {
 
     const checkBadge = {
         checking: { variant: 'neutral' as const, label: 'Checking…' },
+        unconfigured: { variant: 'neutral' as const, label: 'Not set up' },
         ok: { variant: 'success' as const, label: 'OK · values match' },
         mismatch: { variant: 'destructive' as const, label: 'Mismatch' },
         error: { variant: 'destructive' as const, label: 'Check failed' },
     }[checkStatus]
+
+    const unconfigured = checkStatus === 'unconfigured'
+
+    const missingExt = (ext?.missing_not_installed.length || 0) + (ext?.missing_not_available.length || 0)
+
+    const anonLineCount = anon?.sql ? anon.sql.trimEnd().split('\n').length : 0
 
     const lastSync = subStatus?.subscriptions?.find((s) => s.latest_end_time)?.latest_end_time
     const copyInProgress = !!copy && copy.status !== 'complete' && copy.total_tables > 0
@@ -314,9 +411,18 @@ export function Config() {
                     <div>
                         <Badge variant={checkBadge.variant}>{checkBadge.label}</Badge>
                     </div>
-                    <div className="mt-auto text-xs text-muted-foreground">
-                        publisher vs subscriber, auto-checked
-                    </div>
+                    {unconfigured ? (
+                        <button
+                            onClick={() => { setCheckExpanded(true); setSqlErr(null); setSqlMsg(null); setSqlLocked(false) }}
+                            className="mt-auto text-left text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                        >
+                            no check query yet — write one
+                        </button>
+                    ) : (
+                        <div className="mt-auto text-xs text-muted-foreground">
+                            publisher vs subscriber, auto-checked
+                        </div>
+                    )}
                 </Card>
 
                 <Card className="flex flex-col gap-2">
@@ -371,7 +477,9 @@ export function Config() {
                 >
                     {checkExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
                     <span className="text-[13px] font-semibold tracking-tight">Replication Check</span>
-                    <span className="text-xs text-muted-foreground">— check SQL · publisher/subscriber outputs</span>
+                    <span className="text-xs text-muted-foreground">
+                        {unconfigured ? '— no query written yet' : '— check SQL · publisher/subscriber outputs'}
+                    </span>
                 </button>
 
                 {checkError && <p className="mt-2 text-[13px] text-destructive">{checkError}</p>}
@@ -409,7 +517,15 @@ export function Config() {
                         {sqlErr && <p className="mt-1.5 whitespace-pre-wrap text-[13px] text-destructive">{sqlErr}</p>}
                         {sqlMsg && <p className="mt-1.5 text-[13px] text-success">{sqlMsg}</p>}
 
-                        {check && (
+                        {check && unconfigured && (
+                            <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
+                                Nothing has been run. The check compares one query's result on the primary
+                                against the same query on the replica, and which query that is depends on
+                                what you replicate — so it ships as a template and waits for yours.
+                            </p>
+                        )}
+
+                        {check && !unconfigured && (
                             <div className="mt-3 flex flex-col gap-3">
                                 {typeof check.sql === 'string' && (
                                     <div>
@@ -434,6 +550,200 @@ export function Config() {
                                     </div>
                                 </div>
                             </div>
+                        )}
+                    </div>
+                )}
+            </Card>
+
+            {/* ── Collapsible detail: Replica fidelity ──
+                The schema apply runs with ON_ERROR_STOP=0, so what it could
+                not build is not a failure anyone is shown — it is a line in a
+                log. A replica missing five indexes reads exactly like a
+                complete one until someone measures a query. Both halves of
+                that question live here. */}
+            <Card className="mt-3">
+                <button
+                    onClick={() => setFidelityExpanded((v) => !v)}
+                    className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                    {fidelityExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                    <span className="text-[13px] font-semibold tracking-tight">Replica fidelity</span>
+                    <span className="text-xs text-muted-foreground">
+                        {ext === null && schemaErrors === null
+                            ? ''
+                            : missingExt > 0 || (schemaErrors?.count || 0) > 0
+                                ? `— ${[
+                                    missingExt > 0 && `${missingExt} extension${missingExt === 1 ? '' : 's'} missing`,
+                                    (schemaErrors?.count || 0) > 0 && `${schemaErrors!.count} object${schemaErrors!.count === 1 ? '' : 's'} not created`,
+                                ].filter(Boolean).join(' · ')}`
+                                : '— extensions match, nothing failed to build'}
+                    </span>
+                    {(missingExt > 0 || (schemaErrors?.count || 0) > 0) && (
+                        <Badge variant="warning" className="ml-auto">Incomplete</Badge>
+                    )}
+                </button>
+
+                {fidelityExpanded && (
+                    <div className="mt-3 space-y-4 pl-6">
+                        <div>
+                            <div className="mb-1.5 text-[13px] font-semibold">Extensions</div>
+                            {ext === null ? (
+                                <p className="text-xs text-muted-foreground">Loading…</p>
+                            ) : ext.ok ? (
+                                <p className="text-xs text-success">
+                                    All {ext.source.length} extension{ext.source.length === 1 ? '' : 's'} the primary
+                                    uses are installed here.
+                                </p>
+                            ) : (
+                                <div className="space-y-2">
+                                    {/* Two causes, two fixes. Not installed is
+                                        one SQL statement; not available cannot
+                                        be fixed by SQL at all. */}
+                                    {ext.missing_not_available.length > 0 && (
+                                        <div className="rounded-md border border-destructive/30 bg-destructive/[0.07] p-2.5">
+                                            <div className="mb-1 text-xs font-medium text-destructive">
+                                                Not in this image — no SQL can fix it
+                                            </div>
+                                            <div className="font-mono text-xs">
+                                                {ext.missing_not_available.map((e) => `${e.name} ${e.version}`).join(', ')}
+                                            </div>
+                                            <p className="mt-1.5 text-xs text-muted-foreground">
+                                                Rebuild the replica on a POSTGRES_IMAGE that carries them. Anything
+                                                typed by or indexed with these was skipped when the schema was cloned.
+                                            </p>
+                                        </div>
+                                    )}
+                                    {ext.missing_not_installed.length > 0 && (
+                                        <div className="rounded-md border border-warning/30 bg-warning/[0.07] p-2.5">
+                                            <div className="mb-1 text-xs font-medium text-warning">
+                                                Present in the image, never created
+                                            </div>
+                                            <div className="font-mono text-xs">
+                                                {ext.missing_not_installed.map((e) => `${e.name} ${e.version}`).join(', ')}
+                                            </div>
+                                            <pre className="mt-1.5 overflow-x-auto rounded bg-secondary p-2 font-mono text-[11px]">
+                                                {ext.missing_not_installed.map((e) => `CREATE EXTENSION ${e.name};`).join('\n')}
+                                            </pre>
+                                            <p className="mt-1.5 text-xs text-muted-foreground">
+                                                Indexes and objects that needed them were skipped and must be
+                                                recreated afterwards.
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        <div>
+                            <div className="mb-1.5 text-[13px] font-semibold">Objects the schema clone could not create</div>
+                            {schemaErrors === null ? (
+                                <p className="text-xs text-muted-foreground">Loading…</p>
+                            ) : !schemaErrors.recorded ? (
+                                <p className="text-xs text-muted-foreground">
+                                    Not recorded — this replica was built before failures were kept. Absence of
+                                    evidence, not evidence of a complete clone.
+                                </p>
+                            ) : schemaErrors.count === 0 ? (
+                                <p className="text-xs text-success">Nothing failed.</p>
+                            ) : (
+                                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-secondary p-3 font-mono text-[11px] leading-relaxed text-zinc-300">
+                                    {schemaErrors.errors.join('\n')}
+                                </pre>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </Card>
+
+            {/* ── Collapsible detail: Anonymization ──
+                Reached from the clone dialog when it is missing, and from here
+                the rest of the time: a script that decides what every clone
+                exposes is not something you should have to be about to make a
+                clone in order to see. */}
+            <Card className="mt-3">
+                <button
+                    onClick={() => setAnonExpanded((v) => !v)}
+                    className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                    {anonExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                    <span className="text-[13px] font-semibold tracking-tight">Anonymization</span>
+                    <span className="text-xs text-muted-foreground">
+                        {anon === null
+                            ? ''
+                            : anon.configured
+                                ? `— runs on every new clone · ${anonLineCount} lines`
+                                : '— none, clones expose production data'}
+                    </span>
+                    {anon && !anon.configured && <Badge variant="warning" className="ml-auto">Not set up</Badge>}
+                </button>
+
+                {anonExpanded && (
+                    <div className="mt-3 pl-6">
+                        <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
+                            Run inside each clone before anyone can connect to it. With no script a clone is
+                            production data with a port on it — readable by anyone holding its connection
+                            string, and carried into every snapshot taken from it.
+                        </p>
+                        {anon?.path && (
+                            <p className="mb-2 font-mono text-[11px] text-muted-foreground">{anon.path}</p>
+                        )}
+
+                        <label
+                            onDragOver={(e) => { e.preventDefault(); setAnonDragging(true) }}
+                            onDragLeave={() => setAnonDragging(false)}
+                            onDrop={(e) => {
+                                e.preventDefault()
+                                setAnonDragging(false)
+                                const f = e.dataTransfer.files?.[0]
+                                if (f) readAnonFile(f)
+                            }}
+                            className={`flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed px-4 py-4 text-center text-[13px] transition-colors ${
+                                anonDragging ? 'border-primary bg-primary/[0.06]' : 'border-border-strong hover:bg-white/[0.03]'
+                            }`}
+                        >
+                            <input
+                                type="file"
+                                accept=".sql,text/plain"
+                                className="hidden"
+                                onChange={(e) => {
+                                    const f = e.target.files?.[0]
+                                    if (f) readAnonFile(f)
+                                    e.target.value = ''
+                                }}
+                            />
+                            <Upload className="size-4 text-muted-foreground" />
+                            {anonPending
+                                ? <span className="font-mono">{anonPending.name}</span>
+                                : <span>{anon?.configured ? 'Replace with a .sql file' : 'Choose a .sql file'}, or drop one here</span>}
+                        </label>
+
+                        {anonPending && (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <span className="text-xs text-muted-foreground">
+                                    {anonPending.lines} line{anonPending.lines === 1 ? '' : 's'} — not saved yet
+                                </span>
+                                <Button
+                                    size="sm"
+                                    variant="primary"
+                                    className="ml-auto"
+                                    disabled={anonSaving}
+                                    onClick={saveAnon}
+                                >
+                                    {anonSaving ? 'Saving…' : anon?.configured ? 'Replace script' : 'Save script'}
+                                </Button>
+                                <Button size="sm" disabled={anonSaving} onClick={() => setAnonPending(null)}>
+                                    Discard
+                                </Button>
+                            </div>
+                        )}
+
+                        {anonError && <p className="mt-2 text-xs text-destructive">{anonError}</p>}
+                        {anonMsg && <p className="mt-2 text-xs text-success">{anonMsg}</p>}
+
+                        {(anonPending?.sql || anon?.sql) && (
+                            <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-secondary p-3 font-mono text-xs leading-relaxed text-zinc-300">
+                                {anonPending?.sql || anon?.sql}
+                            </pre>
                         )}
                     </div>
                 )}

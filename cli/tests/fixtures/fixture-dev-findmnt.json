@@ -1,0 +1,317 @@
+{
+   "filesystems": [
+      {
+         "target": "/",
+         "source": "/dev/sdb1",
+         "fstype": "ext4",
+         "size": 30084825088,
+         "avail": 18569314304,
+         "used": 11498733568,
+         "options": "rw,relatime,discard,errors=remount-ro,commit=30",
+         "children": [
+            {
+               "target": "/dev",
+               "source": "devtmpfs",
+               "fstype": "devtmpfs",
+               "size": 8354934784,
+               "avail": 8354934784,
+               "used": 0,
+               "options": "rw,nosuid,noexec,relatime,size=8159116k,nr_inodes=2039779,mode=755,inode64",
+               "children": [
+                  {
+                     "target": "/dev/shm",
+                     "source": "tmpfs",
+                     "fstype": "tmpfs",
+                     "size": 8359518208,
+                     "avail": 8359518208,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,inode64"
+                  },{
+                     "target": "/dev/pts",
+                     "source": "devpts",
+                     "fstype": "devpts",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=000"
+                  },{
+                     "target": "/dev/hugepages",
+                     "source": "hugetlbfs",
+                     "fstype": "hugetlbfs",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,relatime,pagesize=2M"
+                  },{
+                     "target": "/dev/mqueue",
+                     "source": "mqueue",
+                     "fstype": "mqueue",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,noexec,relatime"
+                  }
+               ]
+            },{
+               "target": "/proc",
+               "source": "proc",
+               "fstype": "proc",
+               "size": 0,
+               "avail": 0,
+               "used": 0,
+               "options": "rw,nosuid,nodev,noexec,relatime",
+               "children": [
+                  {
+                     "target": "/proc/sys/fs/binfmt_misc",
+                     "source": "systemd-1",
+                     "fstype": "autofs",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,relatime,fd=32,pgrp=1,timeout=0,minproto=5,maxproto=5,direct,pipe_ino=927",
+                     "children": [
+                        {
+                           "target": "/proc/sys/fs/binfmt_misc",
+                           "source": "binfmt_misc",
+                           "fstype": "binfmt_misc",
+                           "size": 0,
+                           "avail": 0,
+                           "used": 0,
+                           "options": "rw,nosuid,nodev,noexec,relatime"
+                        }
+                     ]
+                  }
+               ]
+            },{
+               "target": "/sys",
+               "source": "sysfs",
+               "fstype": "sysfs",
+               "size": 0,
+               "avail": 0,
+               "used": 0,
+               "options": "rw,nosuid,nodev,noexec,relatime",
+               "children": [
+                  {
+                     "target": "/sys/kernel/security",
+                     "source": "securityfs",
+                     "fstype": "securityfs",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,noexec,relatime"
+                  },{
+                     "target": "/sys/fs/cgroup",
+                     "source": "cgroup2",
+                     "fstype": "cgroup2",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot"
+                  },{
+                     "target": "/sys/fs/pstore",
+                     "source": "pstore",
+                     "fstype": "pstore",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,noexec,relatime"
+                  },{
+                     "target": "/sys/firmware/efi/efivars",
+                     "source": "efivarfs",
+                     "fstype": "efivarfs",
+                     "size": 131072,
+                     "avail": 87804,
+                     "used": 38148,
+                     "options": "rw,nosuid,nodev,noexec,relatime"
+                  },{
+                     "target": "/sys/fs/bpf",
+                     "source": "bpf",
+                     "fstype": "bpf",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,noexec,relatime,mode=700"
+                  },{
+                     "target": "/sys/kernel/debug",
+                     "source": "debugfs",
+                     "fstype": "debugfs",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,noexec,relatime",
+                     "children": [
+                        {
+                           "target": "/sys/kernel/debug/tracing",
+                           "source": "tracefs",
+                           "fstype": "tracefs",
+                           "size": null,
+                           "avail": null,
+                           "used": null,
+                           "options": "rw,nosuid,nodev,noexec,relatime"
+                        }
+                     ]
+                  },{
+                     "target": "/sys/kernel/tracing",
+                     "source": "tracefs",
+                     "fstype": "tracefs",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,noexec,relatime"
+                  },{
+                     "target": "/sys/fs/fuse/connections",
+                     "source": "fusectl",
+                     "fstype": "fusectl",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,noexec,relatime"
+                  },{
+                     "target": "/sys/kernel/config",
+                     "source": "configfs",
+                     "fstype": "configfs",
+                     "size": 0,
+                     "avail": 0,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,noexec,relatime"
+                  }
+               ]
+            },{
+               "target": "/run",
+               "source": "tmpfs",
+               "fstype": "tmpfs",
+               "size": 3343810560,
+               "avail": 3342204928,
+               "used": 1605632,
+               "options": "rw,nosuid,nodev,size=3265440k,nr_inodes=819200,mode=755,inode64",
+               "children": [
+                  {
+                     "target": "/run/lock",
+                     "source": "tmpfs",
+                     "fstype": "tmpfs",
+                     "size": 5242880,
+                     "avail": 5242880,
+                     "used": 0,
+                     "options": "rw,nosuid,nodev,noexec,relatime,size=5120k,inode64"
+                  },{
+                     "target": "/run/user/1000",
+                     "source": "tmpfs",
+                     "fstype": "tmpfs",
+                     "size": 1671901184,
+                     "avail": 1671888896,
+                     "used": 12288,
+                     "options": "rw,nosuid,nodev,relatime,size=1632716k,nr_inodes=408179,mode=700,uid=1000,gid=1000,inode64"
+                  },{
+                     "target": "/run/docker/netns/11da7055b108",
+                     "source": "nsfs[net:[4026532215]]",
+                     "fstype": "nsfs",
+                     "size": null,
+                     "avail": null,
+                     "used": null,
+                     "options": "rw"
+                  },{
+                     "target": "/run/docker/netns/743d464b4e17",
+                     "source": "nsfs[net:[4026532287]]",
+                     "fstype": "nsfs",
+                     "size": null,
+                     "avail": null,
+                     "used": null,
+                     "options": "rw"
+                  },{
+                     "target": "/run/docker/netns/default",
+                     "source": "nsfs[net:[4026531840]]",
+                     "fstype": "nsfs",
+                     "size": null,
+                     "avail": null,
+                     "used": null,
+                     "options": "rw"
+                  },{
+                     "target": "/run/docker/netns/a08454d1fe5d",
+                     "source": "nsfs[net:[4026532353]]",
+                     "fstype": "nsfs",
+                     "size": null,
+                     "avail": null,
+                     "used": null,
+                     "options": "rw"
+                  },{
+                     "target": "/run/docker/netns/d29aa12d4701",
+                     "source": "nsfs[net:[4026532418]]",
+                     "fstype": "nsfs",
+                     "size": null,
+                     "avail": null,
+                     "used": null,
+                     "options": "rw"
+                  }
+               ]
+            },{
+               "target": "/boot",
+               "source": "/dev/sdb16",
+               "fstype": "ext4",
+               "size": 923156480,
+               "avail": 737910784,
+               "used": 120602624,
+               "options": "rw,relatime,discard",
+               "children": [
+                  {
+                     "target": "/boot/efi",
+                     "source": "/dev/sdb15",
+                     "fstype": "vfat",
+                     "size": 109395456,
+                     "avail": 102995968,
+                     "used": 6399488,
+                     "options": "rw,relatime,fmask=0077,dmask=0077,codepage=437,iocharset=iso8859-1,shortname=mixed,errors=remount-ro"
+                  }
+               ]
+            },{
+               "target": "/var/lib/docker/overlay2/12b5359f864d91a4d64f8454ea662dde8de08e253307ef8ee6eee7d24e6f727c/merged",
+               "source": "overlay",
+               "fstype": "overlay",
+               "size": null,
+               "avail": null,
+               "used": null,
+               "options": "rw,relatime,lowerdir=/var/lib/docker/overlay2/l/FTZITI7K7FP2OGU2MQ3N7IFTBI:/var/lib/docker/overlay2/l/645SAM2JJUZNT2HR5TRSIPDVMO:/var/lib/docker/overlay2/l/GWMELDNTHJUBETU4IKGMRHOPRN:/var/lib/docker/overlay2/l/3PBEQKGVRSLJYZLJ64OW4XF3XP:/var/lib/docker/overlay2/l/JD5BQ3TK2BEX3OD4AOAI23J4TC:/var/lib/docker/overlay2/l/B7RES2DK34ALCFIY7ZSTUNDB6L:/var/lib/docker/overlay2/l/CQUYXOANNG2KGDWSVJCA6ZXT6R:/var/lib/docker/overlay2/l/ZWW255YTPCFZZQMVMXR3H5NABQ:/var/lib/docker/overlay2/l/HX47EM4MO32FK3QDF2BYCT5LVY:/var/lib/docker/overlay2/l/FIZLROM3KCE4M7M72ZQPKVUSSE:/var/lib/docker/overlay2/l/3FL7YYHJTJLK5XOS6GLTMKC2T2:/var/lib/docker/overlay2/l/3QUDM4GL2VHK4WWUJV7SKMZHH2,upperdir=/var/lib/docker/overlay2/12b5359f864d91a4d64f8454ea662dde8de08e253307ef8ee6eee7d24e6f727c/diff,workdir=/var/lib/docker/overlay2/12b5359f864d91a4d64f8454ea662dde8de08e253307ef8ee6eee7d24e6f727c/work,nouserxattr"
+            },{
+               "target": "/var/lib/docker/overlay2/4a674bedb5df821020ca51a0a4c26b9c7caffc9bf285045823160dff12d46a74/merged",
+               "source": "overlay",
+               "fstype": "overlay",
+               "size": null,
+               "avail": null,
+               "used": null,
+               "options": "rw,relatime,lowerdir=/var/lib/docker/overlay2/l/CTLEUY447YDN4ZRJHXN32BMNZT:/var/lib/docker/overlay2/l/645SAM2JJUZNT2HR5TRSIPDVMO:/var/lib/docker/overlay2/l/GWMELDNTHJUBETU4IKGMRHOPRN:/var/lib/docker/overlay2/l/3PBEQKGVRSLJYZLJ64OW4XF3XP:/var/lib/docker/overlay2/l/JD5BQ3TK2BEX3OD4AOAI23J4TC:/var/lib/docker/overlay2/l/B7RES2DK34ALCFIY7ZSTUNDB6L:/var/lib/docker/overlay2/l/CQUYXOANNG2KGDWSVJCA6ZXT6R:/var/lib/docker/overlay2/l/ZWW255YTPCFZZQMVMXR3H5NABQ:/var/lib/docker/overlay2/l/HX47EM4MO32FK3QDF2BYCT5LVY:/var/lib/docker/overlay2/l/FIZLROM3KCE4M7M72ZQPKVUSSE:/var/lib/docker/overlay2/l/3FL7YYHJTJLK5XOS6GLTMKC2T2:/var/lib/docker/overlay2/l/3QUDM4GL2VHK4WWUJV7SKMZHH2,upperdir=/var/lib/docker/overlay2/4a674bedb5df821020ca51a0a4c26b9c7caffc9bf285045823160dff12d46a74/diff,workdir=/var/lib/docker/overlay2/4a674bedb5df821020ca51a0a4c26b9c7caffc9bf285045823160dff12d46a74/work,nouserxattr"
+            },{
+               "target": "/data/snaplicator",
+               "source": "/dev/mapper/snaplicator--vg-snapdata",
+               "fstype": "btrfs",
+               "size": 214744170496,
+               "avail": 213586825216,
+               "used": 75313152,
+               "options": "rw,relatime,discard=async,space_cache=v2,subvolid=5,subvol=/"
+            },{
+               "target": "/var/lib/docker/overlay2/e059e7af958a39e6366864a8d529f283cdec654f30ae8cdc00ed7296bff9295e/merged",
+               "source": "overlay",
+               "fstype": "overlay",
+               "size": null,
+               "avail": null,
+               "used": null,
+               "options": "rw,relatime,lowerdir=/var/lib/docker/overlay2/l/OLPXSPTM3ZUBO4SKKA2WFCRM4P:/var/lib/docker/overlay2/l/645SAM2JJUZNT2HR5TRSIPDVMO:/var/lib/docker/overlay2/l/GWMELDNTHJUBETU4IKGMRHOPRN:/var/lib/docker/overlay2/l/3PBEQKGVRSLJYZLJ64OW4XF3XP:/var/lib/docker/overlay2/l/JD5BQ3TK2BEX3OD4AOAI23J4TC:/var/lib/docker/overlay2/l/B7RES2DK34ALCFIY7ZSTUNDB6L:/var/lib/docker/overlay2/l/CQUYXOANNG2KGDWSVJCA6ZXT6R:/var/lib/docker/overlay2/l/ZWW255YTPCFZZQMVMXR3H5NABQ:/var/lib/docker/overlay2/l/HX47EM4MO32FK3QDF2BYCT5LVY:/var/lib/docker/overlay2/l/FIZLROM3KCE4M7M72ZQPKVUSSE:/var/lib/docker/overlay2/l/3FL7YYHJTJLK5XOS6GLTMKC2T2:/var/lib/docker/overlay2/l/3QUDM4GL2VHK4WWUJV7SKMZHH2,upperdir=/var/lib/docker/overlay2/e059e7af958a39e6366864a8d529f283cdec654f30ae8cdc00ed7296bff9295e/diff,workdir=/var/lib/docker/overlay2/e059e7af958a39e6366864a8d529f283cdec654f30ae8cdc00ed7296bff9295e/work,nouserxattr"
+            },{
+               "target": "/var/lib/docker/overlay2/deb724d77ae494d609a7c312feb7848446a73d1da414a4b41eda8bb7b973fc9e/merged",
+               "source": "overlay",
+               "fstype": "overlay",
+               "size": null,
+               "avail": null,
+               "used": null,
+               "options": "rw,relatime,lowerdir=/var/lib/docker/overlay2/l/YRYJZVCY7FTNNKT4X4KXBIGRIH:/var/lib/docker/overlay2/l/645SAM2JJUZNT2HR5TRSIPDVMO:/var/lib/docker/overlay2/l/GWMELDNTHJUBETU4IKGMRHOPRN:/var/lib/docker/overlay2/l/3PBEQKGVRSLJYZLJ64OW4XF3XP:/var/lib/docker/overlay2/l/JD5BQ3TK2BEX3OD4AOAI23J4TC:/var/lib/docker/overlay2/l/B7RES2DK34ALCFIY7ZSTUNDB6L:/var/lib/docker/overlay2/l/CQUYXOANNG2KGDWSVJCA6ZXT6R:/var/lib/docker/overlay2/l/ZWW255YTPCFZZQMVMXR3H5NABQ:/var/lib/docker/overlay2/l/HX47EM4MO32FK3QDF2BYCT5LVY:/var/lib/docker/overlay2/l/FIZLROM3KCE4M7M72ZQPKVUSSE:/var/lib/docker/overlay2/l/3FL7YYHJTJLK5XOS6GLTMKC2T2:/var/lib/docker/overlay2/l/3QUDM4GL2VHK4WWUJV7SKMZHH2,upperdir=/var/lib/docker/overlay2/deb724d77ae494d609a7c312feb7848446a73d1da414a4b41eda8bb7b973fc9e/diff,workdir=/var/lib/docker/overlay2/deb724d77ae494d609a7c312feb7848446a73d1da414a4b41eda8bb7b973fc9e/work,nouserxattr"
+            },{
+               "target": "/var/lib/docker/overlay2/e03ff1d779ff3083d63b7045cf1476e4cd7ddea0be3c328a85eaf0f79d2227fc/merged",
+               "source": "overlay",
+               "fstype": "overlay",
+               "size": null,
+               "avail": null,
+               "used": null,
+               "options": "rw,relatime,lowerdir=/var/lib/docker/overlay2/l/OK46UG36C4L7J3JXC3ANLMERYB:/var/lib/docker/overlay2/l/645SAM2JJUZNT2HR5TRSIPDVMO:/var/lib/docker/overlay2/l/GWMELDNTHJUBETU4IKGMRHOPRN:/var/lib/docker/overlay2/l/3PBEQKGVRSLJYZLJ64OW4XF3XP:/var/lib/docker/overlay2/l/JD5BQ3TK2BEX3OD4AOAI23J4TC:/var/lib/docker/overlay2/l/B7RES2DK34ALCFIY7ZSTUNDB6L:/var/lib/docker/overlay2/l/CQUYXOANNG2KGDWSVJCA6ZXT6R:/var/lib/docker/overlay2/l/ZWW255YTPCFZZQMVMXR3H5NABQ:/var/lib/docker/overlay2/l/HX47EM4MO32FK3QDF2BYCT5LVY:/var/lib/docker/overlay2/l/FIZLROM3KCE4M7M72ZQPKVUSSE:/var/lib/docker/overlay2/l/3FL7YYHJTJLK5XOS6GLTMKC2T2:/var/lib/docker/overlay2/l/3QUDM4GL2VHK4WWUJV7SKMZHH2,upperdir=/var/lib/docker/overlay2/e03ff1d779ff3083d63b7045cf1476e4cd7ddea0be3c328a85eaf0f79d2227fc/diff,workdir=/var/lib/docker/overlay2/e03ff1d779ff3083d63b7045cf1476e4cd7ddea0be3c328a85eaf0f79d2227fc/work,nouserxattr"
+            }
+         ]
+      }
+   ]
+}

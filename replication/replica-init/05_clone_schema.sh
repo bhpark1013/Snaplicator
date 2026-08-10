@@ -204,14 +204,79 @@ if [ $_OLD_E -eq 1 ]; then set -e; fi; if [ -n "$_OLD_ERR_TRAP" ]; then eval "$_
 sed -i -E 's/^(CREATE[[:space:]]+SCHEMA[[:space:]]+)public;$/\1IF NOT EXISTS public;/I' "$TMP_SQL"
 
 log "Applying schema to replica database"
-psql -v ON_ERROR_STOP=0 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$TMP_SQL" 2>>"$TMP_ERR"
+APPLY_ERR=$(mktemp)
+psql -v ON_ERROR_STOP=0 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$TMP_SQL" 2>>"$APPLY_ERR"
 PSQL_APPLY_RC=$?
-if [ $PSQL_APPLY_RC -ne 0 ]; then
-  log "psql apply failed (rc=$PSQL_APPLY_RC)"
-  if [ -s "$TMP_ERR" ] && [ -f "$TMP_ERR" ]; then log "psql stderr (tail): $(tail -n 30 "$TMP_ERR")"; fi
-else
-  log "Schema apply completed successfully"
+cat "$APPLY_ERR" >>"$TMP_ERR" 2>/dev/null || true
+
+# ON_ERROR_STOP=0 is deliberate — one object the replica cannot build must not
+# abort the whole clone — but it turns every failure into a line in a log file
+# that nothing ever reads. A replica missing five indexes then looks exactly
+# like a complete one. Recorded here instead, in the replica itself, where the
+# API can be asked and the answer can reach the UI.
+# grep -c exits 1 when it counts zero, so the count is taken from its output
+# and the status ignored — `|| echo 0` would append a second line and make
+# every later numeric test a syntax error.
+ERR_COUNT=$(grep -c '^psql:.*ERROR:' "$APPLY_ERR" 2>/dev/null | head -1)
+case "$ERR_COUNT" in ''|*[!0-9]*) ERR_COUNT=0 ;; esac
+log "Schema apply finished (rc=$PSQL_APPLY_RC, errors=$ERR_COUNT)"
+psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=0 >/dev/null 2>&1 <<'SQL'
+CREATE TABLE IF NOT EXISTS public._snaplicator_schema_errors (
+    id       bigserial PRIMARY KEY,
+    logged_at timestamptz NOT NULL DEFAULT now(),
+    message  text NOT NULL
+);
+TRUNCATE public._snaplicator_schema_errors;
+SQL
+if [ "${ERR_COUNT:-0}" -gt 0 ]; then
+  # COPY's text format reads backslash as an escape and tab as the column
+  # separator, and error text contains both. Neutralised before it is fed in.
+  grep '^psql:.*ERROR:' "$APPLY_ERR" \
+    | sed -e 's/\\/\\\\/g' -e 's/\t/    /g' \
+    | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=0 \
+        -c "COPY public._snaplicator_schema_errors (message) FROM STDIN" >/dev/null 2>&1 \
+    || log "could not record schema errors (they remain in the log above)"
+  log "psql stderr (tail): $(tail -n 30 "$APPLY_ERR")"
 fi
+rm -f "$APPLY_ERR"
+
+# Publisher-only objects must not survive into the subscriber. `pg_dump -s`
+# carries publications and event triggers along with the tables, and both were
+# written for the primary:
+#
+#   - a publication describes what this database sends; the subscriber is the
+#     side that receives, so it has nothing to publish
+#   - the event trigger that auto-adds new tables to that publication then
+#     fires here, on DDL it was never meant to see — including a tester's
+#     CREATE TABLE inside a clone, which it fails outright when the copied
+#     publication is FOR ALL TABLES ("Tables cannot be added to or dropped
+#     from FOR ALL TABLES publications")
+#
+# Clones inherit the replica's catalog, so leaving these in place makes every
+# clone reject CREATE TABLE — the one thing a test database exists for.
+DROP_LIST=$(psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At 2>/dev/null <<'SQL'
+SELECT coalesce(string_agg(x, ', '), 'none') FROM (
+  SELECT 'event trigger ' || evtname AS x FROM pg_event_trigger
+  UNION ALL
+  SELECT 'publication ' || pubname FROM pg_publication
+) s;
+SQL
+)
+log "Removing publisher-only objects from the subscriber: ${DROP_LIST:-none}"
+psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=0 >/dev/null 2>>"$TMP_ERR" <<'SQL'
+DO $cleanup$
+DECLARE r record;
+BEGIN
+    FOR r IN SELECT evtname FROM pg_event_trigger LOOP
+        EXECUTE format('DROP EVENT TRIGGER IF EXISTS %I', r.evtname);
+    END LOOP;
+    FOR r IN SELECT pubname FROM pg_publication LOOP
+        EXECUTE format('DROP PUBLICATION IF EXISTS %I', r.pubname);
+    END LOOP;
+END;
+$cleanup$;
+SQL
+
 rm -f "$TMP_SQL" "$TMP_ERR" "$TMP_BASE"
 
 :

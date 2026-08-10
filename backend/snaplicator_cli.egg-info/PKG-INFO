@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: snaplicator-cli
+Version: 0.1.0
+Summary: Snaplicator CLI - psql-style remote API client for PostgreSQL replica management
+License: MIT
+Classifier: License :: OSI Approved :: MIT License
+Requires-Python: >=3.10
+Requires-Dist: typer>=0.9.0
+Provides-Extra: cli
+Requires-Dist: httpx>=0.25.0; extra == "cli"

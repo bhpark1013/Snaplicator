@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Check, Copy, Star } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Loader2, Star, Upload, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -16,7 +16,62 @@ import { useToast } from '@/components/ui/toast'
 import { cn, copyText } from '@/lib/utils'
 import { RetentionSelect } from '@/components/RetentionSelect'
 import { LineageGraph, computeInsertParams, type Slot, type SnapshotItem } from '@/components/LineageGraph'
-import { WhatsNew } from '@/components/WhatsNew'
+import { BootstrapGate } from '@/components/BootstrapGate'
+
+type CloneStageStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed'
+
+interface CloneStage {
+    key: string
+    label: string
+    status: CloneStageStatus
+    ms: number | null
+}
+
+interface CloneProgress {
+    active: boolean
+    stage: string | null
+    stage_started_at: number | null
+    error: string | null
+    stages: CloneStage[]
+}
+
+/** The itinerary of a clone build, while it is still being built.
+ *
+ * Every stage is listed from the start, including the ones not reached yet:
+ * the wait is long enough that "what is left" is as much of the answer as
+ * "where are we", and a list that grew a row at a time would keep the end out
+ * of sight. A stage that turned out not to be needed is struck through rather
+ * than removed, so the rows do not move under the reader. */
+function CloneStages({ progress }: { progress: CloneProgress }) {
+    const secs = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`)
+    return (
+        <div className="grid gap-1 rounded-md border border-border bg-secondary/40 px-3 py-2.5">
+            {progress.stages.map((s) => (
+                <div key={s.key} className="flex items-center gap-2 text-[12px]">
+                    <span className="flex size-3.5 flex-none items-center justify-center">
+                        {s.status === 'done' && <Check className="size-3 text-success" />}
+                        {s.status === 'running' && <Loader2 className="size-3 animate-spin text-info" />}
+                        {s.status === 'failed' && <X className="size-3 text-destructive" />}
+                    </span>
+                    <span
+                        className={cn(
+                            s.status === 'running' && 'font-medium text-foreground',
+                            s.status === 'done' && 'text-muted-foreground',
+                            s.status === 'pending' && 'text-muted-foreground/50',
+                            s.status === 'skipped' && 'text-muted-foreground/40 line-through',
+                            s.status === 'failed' && 'text-destructive',
+                        )}
+                    >
+                        {s.label}
+                    </span>
+                    {s.ms != null && (
+                        <span className="ml-auto tabular-nums text-[11px] text-muted-foreground/60">{secs(s.ms)}</span>
+                    )}
+                </div>
+            ))}
+        </div>
+    )
+}
 
 interface CloneItem {
     name: string
@@ -54,6 +109,39 @@ export function Clones() {
     const [deletingBusy, setDeletingBusy] = useState(false)
 
     const [createOpen, setCreateOpen] = useState(false)
+    const [anonOpen, setAnonOpen] = useState(false)
+    const [anonPath, setAnonPath] = useState('')
+    const [anonSql, setAnonSql] = useState('')
+    const [anonFile, setAnonFile] = useState('')
+    const [anonLines, setAnonLines] = useState(0)
+    const [anonDragging, setAnonDragging] = useState(false)
+    const [anonSaving, setAnonSaving] = useState(false)
+    const [anonError, setAnonError] = useState<string | null>(null)
+
+    // Read here rather than posting the file: the script is stored as text and
+    // the endpoint already takes text, so a multipart upload would only add a
+    // second way in. The checks are the ones a wrong file actually fails —
+    // empty, or so large it is not a script.
+    const readAnonFile = (f: File) => {
+        setAnonError(null)
+        if (f.size > 1_000_000) {
+            setAnonError(`${f.name} is ${(f.size / 1_000_000).toFixed(1)} MB — that is not an anonymization script.`)
+            return
+        }
+        const r = new FileReader()
+        r.onerror = () => setAnonError(`Could not read ${f.name}`)
+        r.onload = () => {
+            const text = String(r.result || '')
+            if (!text.trim()) {
+                setAnonError(`${f.name} is empty`)
+                return
+            }
+            setAnonSql(text)
+            setAnonFile(f.name)
+            setAnonLines(text.trimEnd().split('\n').length)
+        }
+        r.readAsText(f)
+    }
     const [createName, setCreateName] = useState('')
     const [createDesc, setCreateDesc] = useState('')
     const [createPort, setCreatePort] = useState('')
@@ -61,6 +149,7 @@ export function Clones() {
     const [createPw, setCreatePw] = useState('')
     const [createError, setCreateError] = useState<string | null>(null)
     const [mainCloning, setMainCloning] = useState(false)
+    const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null)
     const defaultUser = 'snaplicator'
     const [refreshingClone, setRefreshingClone] = useState<string | null>(null)
     const [refreshFor, setRefreshFor] = useState<CloneItem | null>(null)
@@ -183,9 +272,11 @@ export function Clones() {
         // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
 
+    // Asked before the clone exists, not after. A clone made without an
+    // anonymization script is a copy of production with a port on it, and the
+    // moment to say so is while it is still a decision.
     const onCreateClone = async () => {
         const trimmedName = createName.trim()
-        const trimmedDesc = createDesc.trim()
         const user = createUser.trim()
         const pw = createPw
         if (!trimmedName) {
@@ -196,11 +287,57 @@ export function Clones() {
             setCreateError('Username and password must be provided together.')
             return
         }
+        try {
+            const r = await fetch(`${base}/clones/anonymize-sql`)
+            if (r.ok) {
+                const d = await r.json()
+                setAnonPath(d.path || '')
+                if (!d.configured) {
+                    setAnonOpen(true)
+                    return
+                }
+            }
+        } catch {
+            /* unreachable check is not a reason to block a clone */
+        }
+        await doCreateClone()
+    }
+
+    const doCreateClone = async () => {
+        const trimmedName = createName.trim()
+        const trimmedDesc = createDesc.trim()
+        const user = createUser.trim()
+        const pw = createPw
+        setAnonOpen(false)
         setMainCloning(true)
         setCreateError(null)
         setMessage(null)
         setError(null)
         const tid = toast.loading(`Creating clone “${trimmedName}”…`)
+        // The POST below does not return until the clone is built, so where it
+        // has got to has to be asked for separately. Only a record still
+        // marked active is read: the previous build's leftovers describe a
+        // clone that already exists, and this runs for the length of one POST
+        // that nothing else overlaps.
+        setCloneProgress(null)
+        const poll = window.setInterval(async () => {
+            try {
+                const pr = await fetch(`${base}/clones/create-progress`)
+                if (!pr.ok) return
+                const p: CloneProgress = await pr.json()
+                if (!p?.active) return
+                setCloneProgress(p)
+                const at = p.stages.findIndex((s) => s.status === 'running')
+                if (at >= 0) {
+                    toast.update(
+                        tid, 'loading',
+                        `${trimmedName}: ${p.stages[at].label} (${at + 1}/${p.stages.length})`,
+                    )
+                }
+            } catch {
+                /* the progress read is decoration; its failure is not the clone's */
+            }
+        }, 1000)
         try {
             const portNum = createPort.trim() ? parseInt(createPort.trim(), 10) : undefined
             const bodyData: Record<string, unknown> = { name: trimmedName, description: trimmedDesc, port: portNum }
@@ -227,6 +364,8 @@ export function Clones() {
             toast.update(tid, 'error', `Clone failed: ${String(e?.message || e)}`)
             setCreateError(String(e?.message || e))
         } finally {
+            window.clearInterval(poll)
+            setCloneProgress(null)
             setMainCloning(false)
         }
     }
@@ -393,7 +532,123 @@ export function Clones() {
                 </div>
             </div>
 
-            <WhatsNew />
+            <BootstrapGate onDone={loadClones} />
+
+            <Dialog open={anonOpen} onOpenChange={(open) => { if (!mainCloning && !anonSaving) setAnonOpen(open) }}>
+                <DialogContent className="max-w-lg">
+                    <DialogTitle className="flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4 text-warning" />
+                        No anonymization script
+                    </DialogTitle>
+                    <DialogDescription className="leading-relaxed">
+                        Every clone runs this script before anyone can connect to it. There is none, so
+                        this clone would be your production data with a port on it — real names, real
+                        emails, real everything, in whatever it gets used for.
+                    </DialogDescription>
+
+                    <div className="mt-4">
+                        <div className="mb-1.5 flex items-baseline justify-between gap-3">
+                            <span className="text-[13px] font-medium">Upload one</span>
+                            {anonPath && (
+                                <span className="truncate font-mono text-[11px] text-muted-foreground" title={anonPath}>
+                                    {anonPath}
+                                </span>
+                            )}
+                        </div>
+
+                        {/* A file, because that is where this script already
+                            lives: it is written against a schema, reviewed, and
+                            kept in a repository. Retyping it into a box is not
+                            a step anybody takes. */}
+                        <label
+                            onDragOver={(e) => { e.preventDefault(); setAnonDragging(true) }}
+                            onDragLeave={() => setAnonDragging(false)}
+                            onDrop={(e) => {
+                                e.preventDefault()
+                                setAnonDragging(false)
+                                const f = e.dataTransfer.files?.[0]
+                                if (f) readAnonFile(f)
+                            }}
+                            className={cn(
+                                'flex cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed px-4 py-6 text-center transition-colors',
+                                anonDragging ? 'border-primary bg-primary/[0.06]' : 'border-border-strong hover:bg-white/[0.03]',
+                            )}
+                        >
+                            <input
+                                type="file"
+                                accept=".sql,text/plain"
+                                className="hidden"
+                                onChange={(e) => {
+                                    const f = e.target.files?.[0]
+                                    if (f) readAnonFile(f)
+                                    e.target.value = ''
+                                }}
+                            />
+                            <Upload className="h-4 w-4 text-muted-foreground" />
+                            {anonFile ? (
+                                <>
+                                    <span className="font-mono text-[13px]">{anonFile}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                        {anonLines} line{anonLines === 1 ? '' : 's'} · click or drop to replace
+                                    </span>
+                                </>
+                            ) : (
+                                <>
+                                    <span className="text-[13px]">Choose a .sql file, or drop one here</span>
+                                    <span className="text-xs text-muted-foreground">
+                                        Runs inside every clone made after this, not just this one
+                                    </span>
+                                </>
+                            )}
+                        </label>
+
+                        {anonError && <p className="mt-1.5 text-xs text-destructive">{anonError}</p>}
+                    </div>
+
+                    <DialogFooter className="mt-4 flex-col items-stretch gap-2 sm:flex-col">
+                        <Button
+                            variant="primary"
+                            disabled={!anonSql.trim() || anonSaving || mainCloning}
+                            onClick={async () => {
+                                setAnonSaving(true)
+                                setAnonError(null)
+                                try {
+                                    const r = await fetch(`${base}/clones/anonymize-sql`, {
+                                        method: 'PUT',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ sql: anonSql }),
+                                    })
+                                    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+                                    await doCreateClone()
+                                } catch (e: any) {
+                                    setAnonError(String(e?.message || e))
+                                } finally {
+                                    setAnonSaving(false)
+                                }
+                            }}
+                        >
+                            {anonSaving ? 'Saving…' : anonFile ? `Save ${anonFile} and create clone` : 'Save script and create clone'}
+                        </Button>
+
+                        {/* Second, and worded as what it does rather than what
+                            it skips: the risk is the point of the dialog. */}
+                        <div className="rounded-md border border-warning/30 bg-warning/[0.07] p-2.5">
+                            <p className="mb-2 text-xs leading-relaxed">
+                                Creating without one means <span className="font-medium text-warning">production data
+                                will be what people test against</span> — anyone with the clone's connection
+                                string can read it, and copies of it spread with every snapshot taken from it.
+                            </p>
+                            <Button
+                                size="sm"
+                                disabled={mainCloning || anonSaving}
+                                onClick={() => doCreateClone()}
+                            >
+                                {mainCloning ? 'Cloning…' : 'Create anyway, without anonymization'}
+                            </Button>
+                        </div>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <Card className="mt-4">
                 {clonesError && <p className="mb-2 text-[13px] text-destructive">{clonesError}</p>}
@@ -481,6 +736,7 @@ export function Clones() {
                             <code className="rounded bg-secondary px-1 py-0.5 font-mono text-[11px]">{defaultUser}</code>{' '}
                             and its default password. If provided, the account is created in this clone.
                         </DialogDescription>
+                        {mainCloning && cloneProgress && <CloneStages progress={cloneProgress} />}
                         {createError && <p className="whitespace-pre-wrap text-[13px] text-destructive">{createError}</p>}
                     </div>
                     <DialogFooter>
