@@ -4,6 +4,13 @@ Guidance for AI agents working in this repository.
 
 ## Writing copy
 
+**These rules apply to copy you write. They do not apply to copy the user
+hands you.** If the user gives you a sentence, ship it as written — spacing,
+mixed Korean and English, long sentences, Sino-Korean compounds and all. Fix
+only outright typos, and say in one line that you did. Suggest edits beside
+the work if you have them; do not apply them.
+
+
 Applies to everything a person reads: the landing page (`docs/index.html`),
 the admin UI (`frontend/`), CLI output, `README.md`, and error messages.
 
