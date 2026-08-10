@@ -237,7 +237,6 @@
        letter-spacing: -.02em; font-weight: 700; text-wrap: balance; margin: 0 0 .85rem; }
   h3 { font-family: var(--display); font-size: 1rem; font-weight: 700; margin: 0 0 .3rem; letter-spacing: -.01em; }
   p { margin: 0 0 1.05rem; color: var(--ink-2); }
-  .lead { font-size: clamp(1.02rem, 1.9vw, 1.16rem); }
   strong { color: var(--ink); font-weight: 600; }
   code { font-family: var(--mono); font-size: .875em; }
   h2 + .sub { margin-top: -.35rem; }
@@ -506,15 +505,6 @@
   .note p { margin: 0; font-size: .91rem; }
   .note p + p { margin-top: .7rem; }
 
-  .loop { display: grid; margin-top: 1.6rem; }
-  .beat { display: grid; grid-template-columns: 8.5rem 1fr; gap: 1.1rem;
-          padding: .85rem 0; border-top: 1px solid var(--rule-soft); align-items: baseline; }
-  .beat:first-child { border-top: 0; }
-  .beat .who { font-family: var(--mono); font-size: .74rem; letter-spacing: .06em;
-               text-transform: uppercase; color: var(--ink-3); }
-  .beat.hi .who { color: var(--t-live-ink); }
-  .beat p { margin: 0; font-size: .93rem; }
-  @media (max-width: 620px) { .beat { grid-template-columns: 1fr; gap: .2rem; } }
 
   /* Was three equal cards — the same 3-up the concepts diagram already
      uses. Run-in heads in a ruled list instead: same content, and the page
@@ -566,11 +556,6 @@
     <p class="kicker" data-i18n="hero.eyebrow">Test DB for AI</p>
     <h1><span data-i18n="hero.title">A test database cloned straight from your production.</span>
       <span data-i18n="hero.title2">No seeding. No dumps.</span></h1>
-    <p class="lead col" style="margin-top:1.3rem" data-i18n="hero.lead">
-      RDS, Azure Database for PostgreSQL, Cloud SQL or your own machine — production stays
-      exactly where it is. Snaplicator keeps one replica following it and hands out clones that
-      take seconds and almost no disk, and that your agent is free to break.
-    </p>
 
     <div class="cmd">
       <span class="p">$</span>
@@ -620,64 +605,6 @@
           </ul>
         </div>
       </div>
-    </div>
-
-    <div style="margin-top:var(--gap)">
-      <h2 data-i18n="loop.title">What an agent actually does with it</h2>
-      <div class="loop">
-        <div class="beat"><span class="who" data-i18n="loop.w1">Agent</span>
-          <p data-i18n="loop.b1">Takes a clone. Seconds, and nobody else is affected.</p></div>
-        <div class="beat"><span class="who" data-i18n="loop.w2">Agent</span>
-          <p data-i18n="loop.b2">Runs the migration. Drops the wrong column. Deletes without a WHERE.</p></div>
-        <div class="beat hi"><span class="who" data-i18n="loop.w3">Reset</span>
-          <p data-i18n="loop.b3">Back to the snapshot it started from. The damage never left the clone.</p></div>
-        <div class="beat"><span class="who" data-i18n="loop.w4">Agent</span>
-          <p data-i18n="loop.b4">Tries the next version. Being wrong costs seconds.</p></div>
-      </div>
-      <p style="margin-top:1.5rem" data-i18n="loop.mcp">
-        Snaplicator ships an MCP server, so the agent calls all of this itself. You are not
-        in the loop.
-      </p>
-    </div>
-
-    <div style="margin-top:var(--gap)">
-      <h2 data-i18n="sc.title">When you reach for it</h2>
-      <dl class="alts">
-        <div>
-          <dt data-i18n="sc.t1">A bug in production, right now</dt>
-          <dd data-i18n="sc.p1">The row that causes it only exists in production. Take a snapshot, make a clone, and seconds later you are querying the same data — on a copy you are free to break while the incident is still open.</dd>
-        </div>
-        <div>
-          <dt data-i18n="sc.t2">A migration you don&rsquo;t trust</dt>
-          <dd data-i18n="sc.p2">It passed against seed data because seed data has none of the nulls, duplicates and orphaned rows that production accumulates. Run it on a clone; if it breaks, reset and try the next version.</dd>
-        </div>
-        <div>
-          <dt data-i18n="sc.t3">Several agents at once</dt>
-          <dd data-i18n="sc.p3">Each gets its own clone on its own port. One of them dropping a table is not the other one&rsquo;s flaky test.</dd>
-        </div>
-        <div>
-          <dt data-i18n="sc.t4">A query plan you can believe</dt>
-          <dd data-i18n="sc.p4">Same size, same statistics, same indexes as production. A plan that is instant over a small staging table is not instant over the real one.</dd>
-        </div>
-      </dl>
-    </div>
-
-    <div style="margin-top:var(--gap)">
-      <h2 data-i18n="why.title">Why not the alternatives</h2>
-      <dl class="alts">
-        <div>
-          <dt data-i18n="why.t1">A shared staging DB</dt>
-          <dd data-i18n="why.p1">One agent&rsquo;s failed migration is every other agent&rsquo;s flaky test.</dd>
-        </div>
-        <div>
-          <dt data-i18n="why.t2">Restoring a dump</dt>
-          <dd data-i18n="why.p2">Correct, and it scales with the size of the database. A reset the agent waits on is a reset it works around.</dd>
-        </div>
-        <div>
-          <dt data-i18n="why.t3">Seed fixtures</dt>
-          <dd data-i18n="why.p3">Fast, clean, and they never reproduce the bug. The unexpected null is in production, not your factory.</dd>
-        </div>
-      </dl>
     </div>
 
     <div style="margin-top:var(--gap)">
@@ -1088,15 +1015,6 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'fit.n1':'primary에 <code>wal_level=logical</code>을 켜거나 복제 슬롯을 만들 수 없을 때.',
       'fit.n2':'이미 primary db로 Neon을 사용하고 있을 때.',
       'cmp.head':'Neon · Aurora · DBLab과 비교하면',
-      'sc.title':'이럴 때 씁니다',
-      'sc.t1':'지금 프로덕션에 버그가 났을 때',
-      'sc.p1':'그 버그를 일으키는 행은 프로덕션에만 있습니다. 스냅샷 찍고 클론 하나 만들면 몇 초 뒤에 같은 데이터에 쿼리하고 있습니다. 장애가 아직 진행 중인 동안, 마음대로 부숴도 되는 사본에서요.',
-      'sc.t2':'마이그레이션이 미덥지 않을 때',
-      'sc.p2':'시드 데이터에서 통과한 건 시드에 NULL도, 중복도, 부모 없는 행도 없기 때문입니다. 프로덕션에는 쌓여 있고요. 클론에서 돌려 보고, 깨지면 되돌리고 다음 버전을 시도하세요.',
-      'sc.t3':'에이전트를 여러 개 동시에 돌릴 때',
-      'sc.p3':'각자 자기 클론을 자기 포트로 받습니다. 한쪽이 테이블을 지워도 다른 쪽 테스트가 흔들리지 않습니다.',
-      'sc.t4':'쿼리 계획을 믿고 싶을 때',
-      'sc.p4':'크기도 통계도 인덱스도 프로덕션과 같습니다. 작은 스테이징 테이블에서 순식간인 계획이 실제 테이블에서도 순식간이지는 않습니다.',
       'g.title':'아무것도 없는 상태에서 에이전트 전용 DB까지',
       'g.n1':'1. 설치','g.n2':'2. 초기 복제','g.n3':'3. 익명화','g.n4':'4. 스키마',
       'g.n5':'5. 스냅샷','g.n6':'6. 클론','g.n7':'7. 에이전트','g.n8':'예외 케이스',
@@ -1136,18 +1054,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'common.copy':'복사',
       'hero.eyebrow':'AI를 위한 테스트 DB',
       'hero.title':'프로덕션을 즉시 복제한 테스트 DB.',
-      'hero.lead':'RDS든 Azure Database for PostgreSQL이든 Cloud SQL이든 직접 굴리는 서버든, 프로덕션은 있던 자리 그대로입니다. Snaplicator가 거기에 리플리카 하나를 붙여 두고, 몇 초면 만들어지고 디스크는 거의 안 쓰는 클론을 떠 줍니다. 에이전트가 마음껏 부숴도 되는 것으로요.',
       'hero.macnote':'macOS에서는 sudo를 빼세요. 리눅스 머신부터 만듭니다.',
-      'loop.title':'에이전트가 실제로 하는 일',
-      'loop.w1':'에이전트','loop.b1':'클론을 하나 뜹니다. 몇 초면 되고, 남한테 영향 갈 일도 없습니다.',
-      'loop.w2':'에이전트','loop.b2':'마이그레이션을 돌립니다. 엉뚱한 컬럼을 지웁니다. WHERE 없이 DELETE를 날립니다.',
-      'loop.w3':'되돌리기','loop.b3':'시작했던 스냅샷으로 돌아갑니다. 망가진 건 그 클론 밖으로 나간 적이 없습니다.',
-      'loop.w4':'에이전트','loop.b4':'다음 버전을 시도합니다. 틀려도 몇 초면 됩니다.',
-      'loop.mcp':'Snaplicator에 MCP 서버가 같이 들어 있어서 이걸 전부 에이전트가 직접 부릅니다. 사람이 낄 일이 없습니다.',
-      'why.title':'다른 방법이 안 되는 이유',
-      'why.t1':'공용 스테이징 DB','why.p1':'한쪽에서 마이그레이션이 깨지면 나머지 에이전트 테스트가 전부 같이 흔들립니다.',
-      'why.t2':'덤프 복원','why.p2':'정확하지만 DB가 클수록 오래 걸립니다. 기다려야 하는 초기화는 결국 안 쓰게 됩니다.',
-      'why.t3':'시드 픽스처','why.p3':'빠르고 깔끔한데 정작 버그가 재현되지 않습니다. 아무도 예상 못 한 NULL은 팩토리가 아니라 프로덕션에 있으니까요.',
       'con.title':'리플리카, 스냅샷, 클론',
       'con.lead':'셋은 앞의 것에서 차례로 만들어집니다. 클론을 부숴도 위쪽은 아무 영향이 없습니다.',
       'lab.title':'<span class="nb">Copy-on-write</span>, 직접 만져 보기',
@@ -1237,15 +1144,6 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'fit.n1':'primary で <code>wal_level=logical</code> を有効にできない、レプリケーションスロットを作れないとき。',
       'fit.n2':'すでに primary db として Neon を使っているとき。',
       'cmp.head':'Neon・Aurora・DBLab との比較',
-      'sc.title':'こんなときに使います',
-      'sc.t1':'いま本番でバグが出ているとき',
-      'sc.p1':'それを起こしている行は本番にしかありません。スナップショットを取ってクローンを作れば、数秒後には同じデータにクエリを投げています。障害が続いているあいだ、壊してかまわないコピーの上で。',
-      'sc.t2':'マイグレーションが信じきれないとき',
-      'sc.p2':'シードデータで通ったのは、シードに NULL も重複も親のない行も無いからです。本番には溜まっています。クローンで走らせ、壊れたら戻して次の版を試してください。',
-      'sc.t3':'エージェントを同時に何本も回すとき',
-      'sc.p3':'それぞれが自分のクローンを自分のポートで受け取ります。片方がテーブルを消しても、もう片方のテストは揺れません。',
-      'sc.t4':'クエリプランを信じたいとき',
-      'sc.p4':'サイズも統計もインデックスも本番と同じです。小さなステージングのテーブルで一瞬のプランが、本物のテーブルでも一瞬とは限りません。',
       'g.title':'ゼロから、エージェント専用 DB まで',
       'g.n1':'1. インストール','g.n2':'2. 初回コピー','g.n3':'3. 匿名化','g.n4':'4. スキーマ',
       'g.n5':'5. スナップショット','g.n6':'6. クローン','g.n7':'7. エージェント','g.n8':'例外ケース',
@@ -1285,17 +1183,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'common.copy':'コピー',
       'hero.eyebrow':'AI のためのテスト DB',
       'hero.title':'本番をそのまま複製したテスト DB。',
-      'hero.lead':'RDS でも Azure Database for PostgreSQL でも Cloud SQL でも自前のマシンでも、本番は今ある場所のままです。Snaplicator がそこにレプリカ 1 台を追従させ、数秒ででき、ディスクをほぼ使わないクローンを配ります。エージェントが壊してかまわないものを。',
-      'hero.macnote':'macOS では sudo 不要 — まず Linux マシンを作ります。','loop.title':'エージェントが実際にやること',
-      'loop.w1':'エージェント','loop.b1':'クローンを 1 つ取ります。数秒で、誰にも影響しません。',
-      'loop.w2':'エージェント','loop.b2':'マイグレーションを実行。間違った列を削除。WHERE なしで DELETE。',
-      'loop.w3':'リセット','loop.b3':'開始時のスナップショットへ。被害はそのクローンの外に出ていません。',
-      'loop.w4':'エージェント','loop.b4':'次の版を試します。間違えても数秒です。',
-      'loop.mcp':'Snaplicator には MCP サーバーが同梱されており、これらはすべてエージェント自身が呼びます。人が入る余地はありません。',
-      'why.title':'他の手段では足りない理由',
-      'why.t1':'共有ステージング DB','why.p1':'あるエージェントの失敗したマイグレーションが、他の全エージェントの不安定なテストになります。',
-      'why.t2':'ダンプのリストア','why.p2':'正確ですが、データベースが大きいほど時間がかかります。待たされるリセットは、結局使われません。',
-      'why.t3':'シードフィクスチャ','why.p3':'速くて綺麗ですが、バグを再現しません。誰も想定しなかった NULL は、ファクトリではなく本番にあります。','con.title':'レプリカ、スナップショット、クローン',
+      'hero.macnote':'macOS では sudo 不要 — まず Linux マシンを作ります。','con.title':'レプリカ、スナップショット、クローン',
       'con.lead':'それぞれ 1 つ前のものから作られます。クローンを壊しても上流は何も起きません。',
       'lab.title':'<span class="nb">Copy-on-write</span> を手元で',
       'lab.hint':'説明用モデル — ベース 300 GB',
