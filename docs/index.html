@@ -143,7 +143,11 @@
      No blinking caret: it was the only thing on the page that moved without
      explaining anything, and a cursor at the end of a bar says you can type
      into it, which you cannot. The command metaphor survives without it. */
-  .bar { display: flex; align-items: baseline; gap: 1rem; padding: .75rem 0; flex-wrap: wrap; }
+  /* padding-block, not padding: the element is `class="wrap bar"` and a
+     shorthand here zeroed the gutter .wrap sets, so the header sat 48px
+     wider on each side than every other block. Invisible until the GitHub
+     button gave the right edge something to be measured against. */
+  .bar { display: flex; align-items: baseline; gap: 1rem; padding-block: .75rem; flex-wrap: wrap; }
   .cmdline {
     font-family: var(--mono); font-size: .82rem; margin: 0;
     display: flex; align-items: baseline; gap: .1rem; flex-wrap: wrap;
@@ -187,6 +191,21 @@
     border: 0; border-radius: 4px; background: none; color: var(--ink-3); cursor: pointer;
   }
   .langs button[aria-pressed="true"] { background: var(--t-mid); color: var(--paper); }
+  /* Text, not the Octocat: the mark is a trademark and this needs no image. */
+  .gh { align-self: center; font-family: var(--mono); font-size: .72rem;
+        color: var(--ink-3); text-decoration: none; white-space: nowrap;
+        border: 1px solid var(--rule); border-radius: 6px; padding: .32rem .6rem;
+        transition: color .15s var(--ease-out), border-color .15s var(--ease-out); }
+  .gh:hover { color: var(--ink); border-color: var(--ink-3); }
+  /* On a phone the bar wrapped into four rows — the mark alone on one, the
+     flags split across two, then the controls — and a 161px sticky header
+     eats a fifth of the screen. Two rows: identity and controls above, the
+     command below. */
+  @media (max-width: 680px) {
+    .cmdline { order: 3; flex-basis: 100%; }
+    .langs { order: 2; }
+    .gh { order: 2; }
+  }
 
   /* Two-up. Used for the two things this does and for the two sides of
      who it is for — deliberately not the .alts dl the page already uses
@@ -305,6 +324,11 @@
   }
   .cmd button.copy:hover { color: var(--t-mid); background: var(--t-mid-bg); }
   .cmd-note { font-family: var(--mono); font-size: .73rem; color: var(--ink-3); margin-top: .55rem; }
+  /* Three commands now, so each says which one it is. The label sits above
+     its own box rather than after it, because you pick before you copy. */
+  .cmd-label { font-family: var(--mono); font-size: .73rem; color: var(--ink-2);
+               margin: 1.5rem 0 0; }
+  .cmd-label + .cmd { margin-top: .45rem; }
 
   pre.term {
     font-family: var(--mono); font-size: .78rem; line-height: 1.7;
@@ -513,7 +537,7 @@
     <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
       stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 12a9 3 0 0 0 5 2.69"/><path d="M21 9.3V5"/><path d="M3 5v14a9 3 0 0 0 6.47 2.88"/><path d="M12 12v4h4"/><path d="M13 20a5 5 0 0 0 9-3 4.5 4.5 0 0 0-4.5-4.5c-1.33 0-2.54.54-3.41 1.41L12 16"/></svg></span>
     <div class="cmdline">
-      <span class="sigil">$</span><span class="bin">snaplicator</span>
+      <span class="sigil">$</span><span class="bin">Snaplicator</span>
       <nav id="nav">
         <button data-view="overview" data-i18n="nav.overview">--overview</button>
         <button data-view="concepts" data-i18n="nav.concepts">--concepts</button>
@@ -526,6 +550,8 @@
       <button data-lang="ko">KO</button>
       <button data-lang="ja">JA</button>
     </div>
+    <a class="gh" href="https://github.com/bhpark1013/Snaplicator"
+       target="_blank" rel="noopener">GitHub</a>
   </div>
 </header>
 
@@ -537,12 +563,27 @@
     <h1><span data-i18n="hero.title">A test database cloned straight from your production.</span>
       <span data-i18n="hero.title2">No seeding. No dumps.</span></h1>
 
+    <p class="cmd-label" data-i18n="hero.linux">Linux</p>
     <div class="cmd">
       <span class="p">$</span>
       <span class="l" id="cmd1">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
       <button class="copy" data-copy="cmd1" data-i18n="common.copy">copy</button>
     </div>
-    <p class="cmd-note" data-i18n="hero.macnote">macOS: drop the sudo — it builds a Linux machine first.</p>
+
+    <p class="cmd-label" data-i18n="hero.mac">macOS</p>
+    <div class="cmd">
+      <span class="p">$</span>
+      <span class="l" id="cmd2">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</span>
+      <button class="copy" data-copy="cmd2" data-i18n="common.copy">copy</button>
+    </div>
+    <p class="cmd-note" data-i18n="hero.macnote">No sudo — it builds a Linux machine first.</p>
+
+    <p class="cmd-label" data-i18n="hero.demo">No database to hand? Try it on a sample one</p>
+    <div class="cmd">
+      <span class="p">$</span>
+      <span class="l" id="cmd3">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash -s -- --demo</span>
+      <button class="copy" data-copy="cmd3" data-i18n="common.copy">copy</button>
+    </div>
 
     <div style="margin-top:var(--gap)">
       <h2 data-i18n="feat.title">Two core features</h2>
@@ -852,7 +893,10 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       </p>
     </div>
 
-    <h2 id="gx" style="margin-top:var(--gap)" data-i18n="g.extitle">Where it can go sideways</h2>
+    <h2 id="gx" style="margin-top:var(--gap)" data-i18n="g.extitle">Things to know</h2>
+    <p data-i18n="g.exlead1">Postgres states the limit plainly: <q>The database schema and DDL commands are not replicated.</q> A subscription carries row changes and nothing else. Add a column on the primary and the replica does not have it; the first change that mentions that column fails to apply, and replication stops there rather than carrying on with a schema that no longer matches.</p>
+    <p style="margin-top:.8rem" data-i18n="g.exlead2">That is why a copy of a managed primary is normally taken again on a schedule — dumping and restoring is easier than keeping two schemas in step by hand. The price is that the copy is only ever as fresh as the last dump, schema included.</p>
+    <p style="margin-top:.8rem" data-i18n="g.exlead3">Snaplicator closes it in <a href="#g4">step 4</a>: event triggers write every CREATE, ALTER and DROP to an outbox table, that table is itself a member of the publication, and so the DDL arrives as ordinary replicated rows and is replayed here. What is left over is below.</p>
     <dl class="alts">
       <div>
         <dt data-i18n="g.ex1t">A clone made from a snapshot is not anonymized</dt>
@@ -879,51 +923,27 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
 
   <!-- ═══════════════ INSTALL ═══════════════ -->
   <section id="install">
-    <div class="cmd cmd--lead">
+    <h2 data-i18n="i.title">Install</h2>
+
+    <p class="cmd-label" data-i18n="hero.linux">Linux</p>
+    <div class="cmd">
       <span class="p">$</span>
       <span class="l" id="cmdL">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
       <button class="copy" data-copy="cmdL" data-i18n="common.copy">copy</button>
     </div>
-    <p class="cmd-note" data-i18n="i.n1">Linux. Needs Docker; <span class="nb">btrfs-progs</span>, <span class="nb">postgresql-client</span> and the compose plugin are added if missing.</p>
 
-    <h2 class="after-figure" data-i18n="i.title">One line, then a UI</h2>
-    <p class="col sub" data-i18n="i.lead">
-      The installer finds somewhere for the btrfs pool, provisions it, starts the management
-      plane, and stops at the screen where you choose what to replicate.
-    </p>
-
-    <h3 style="margin-top:1.9rem" data-i18n="i.h2">macOS</h3>
+    <p class="cmd-label" data-i18n="hero.mac">macOS</p>
     <div class="cmd">
       <span class="p">$</span>
       <span class="l" id="cmdM">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</span>
       <button class="copy" data-copy="cmdM" data-i18n="common.copy">copy</button>
     </div>
-    <p class="cmd-note" data-i18n="i.n2">btrfs is a Linux kernel filesystem, so there is nothing to install onto here. The installer offers to create a Linux machine with OrbStack.</p>
 
-    <div class="note">
-      <span class="label" data-i18n="i.orblabel">Before you say yes to OrbStack</span>
-      <p data-i18n="i.orb">
-        OrbStack is free for <strong>personal, <span class="nb">non-commercial</span> use only</strong>; a company laptop
-        needs a paid seat (<a href="https://orbstack.dev/pricing">pricing</a>). The installer says
-        so before it offers, and defaults to no. Nothing here depends on it — Colima, Lima, UTM
-        or any Linux box works the same.
-      </p>
-    </div>
-
-    <h3 style="margin-top:1.8rem" data-i18n="i.h3">No database to hand?</h3>
+    <p class="cmd-label" data-i18n="hero.demo">No database to hand? Try it on a sample one</p>
     <div class="cmd">
       <span class="p">$</span>
-      <span class="l" id="cmdD">curl -fsSL …/install.sh | sudo bash -s -- --demo</span>
+      <span class="l" id="cmdD">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash -s -- --demo</span>
       <button class="copy" data-copy="cmdD" data-i18n="common.copy">copy</button>
-    </div>
-    <p class="cmd-note" data-i18n="i.n3">Seeds a sample publisher so you can watch the whole thing work first.</p>
-
-    <div class="note">
-      <span class="label" data-i18n="i.rerunlabel">Running it again</span>
-      <p data-i18n="i.rerun">
-        <span class="nb">Re-running</span> is how you upgrade. Nothing on the second run destroys anything — it offers
-        to open what is already there, or to build a second install beside it.
-      </p>
     </div>
   </section>
 </main>
@@ -944,6 +964,10 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
      than two that can drift. The other languages are overlays. */
   var DICT = {
     ko: {
+      'hero.linux':'리눅스','hero.mac':'macOS','hero.demo':'붙일 DB가 없다면, 샘플로 먼저',
+      'g.exlead1':'Postgres 문서가 한계를 그대로 적어 놓았습니다. <q>The database schema and DDL commands are not replicated.</q> 구독이 나르는 건 행 변경뿐입니다. 프라이머리에 컬럼을 하나 추가하면 리플리카에는 그 컬럼이 없고, 그 컬럼이 걸린 첫 변경에서 적용이 실패해 복제가 거기서 멈춥니다. 어긋난 스키마로 계속 가는 대신 멈추는 것입니다.',
+      'g.exlead2':'그래서 매니지드 프라이머리의 사본은 보통 주기적으로 다시 뜹니다. 두 스키마를 손으로 맞춰 두는 것보다 덤프 떠서 복원하는 편이 쉬우니까요. 대가는 사본이 마지막 덤프 시점만큼만 최신이라는 것입니다. 스키마까지 포함해서요.',
+      'g.exlead3':'Snaplicator는 이걸 <a href="#g4">4번</a>에서 닫습니다. 이벤트 트리거가 CREATE·ALTER·DROP을 전부 아웃박스 테이블에 적고, 그 테이블 자체가 publication의 멤버라서 DDL이 평범한 복제 행으로 실려 와 여기서 다시 실행됩니다. 그러고도 남는 것들이 아래입니다.',
       'origin.label':'만든 이유',
       'origin.p1':'테스트 DB 구성을 위해 매번 데이터를 시딩해야하고, production에 버그 발생하면 test환경에서는 재현이 안되고, QA시 매번 특정 시나리오에서 테스트해야하는 상황이 번거로워서 만들었습니다.',
       'origin.p2':'실시간으로 primary db의 dml 및 ddl을 복제하고, 복제된 DB에 특정 상태에 스냅샷을 찍어 매번 같은 데이터로 테스트할 수 있습니다.',
@@ -986,7 +1010,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'g.p7':'MCP 서버를 등록하면 이 루프가 에이전트 것이 됩니다. <code>clones</code> 파라미터로 건드릴 수 있는 클론을 정해 두면, 헷갈린 에이전트가 남의 클론을 되돌릴 수 없습니다.',
       'g.tiplabel':'클론을 최신으로 유지하기',
       'g.tip':'클론은 한 시점에 멈춰 있고, 그 덕분에 테스트가 매번 같은 결과를 냅니다. 더 최신이 필요하면 스냅샷을 새로 찍고 <code>refresh_clone</code>을 쓰세요. 새것을 옆에 만들어 두고 바꿔치기하기 때문에 끊기는 건 0.5초 남짓입니다.',
-      'g.extitle':'어긋날 수 있는 곳',
+      'g.extitle':'유의할 점',
       'g.ex1t':'스냅샷에서 만든 클론은 익명화되지 않습니다',
       'g.ex1':'스크립트는 살아 있는 리플리카에서 만드는 클론에서만 돕니다. 이미 있는 스냅샷에서 뜬 클론은 건너뛰니, 그 클론이 남의 손에 가기 전에 직접 지우세요.',
       'g.ex2t':'CREATE INDEX CONCURRENTLY',
@@ -1002,7 +1026,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'common.copy':'복사',
       'hero.eyebrow':'AI를 위한 테스트 DB',
       'hero.title':'프로덕션을 즉시 복제한 테스트 DB.',
-      'hero.macnote':'macOS에서는 sudo를 빼세요. 리눅스 머신부터 만듭니다.',
+      'hero.macnote':'sudo 없이 실행하세요. 리눅스 머신부터 만듭니다.',
       'con.title':'리플리카, 스냅샷, 클론',
       'con.lead':'셋은 앞의 것에서 차례로 만들어집니다. 클론을 부숴도 위쪽은 아무 영향이 없습니다.',
       'lab.title':'<span class="nb">Copy-on-write</span>, 직접 만져 보기',
@@ -1023,14 +1047,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
 
 
 
-      'i.title':'한 줄, 그다음은 UI',
-      'i.lead':'설치 프로그램이 btrfs 풀 자리를 찾아 잡고, 관리 서버를 띄운 다음, 무엇을 복제할지 고르는 화면에서 멈춥니다.',
-      'i.n1':'리눅스용입니다. Docker가 있어야 하고 <span class="nb">btrfs-progs</span>, <span class="nb">postgresql-client</span>, compose 플러그인은 없으면 알아서 깔아 줍니다.',
-      'i.h2':'macOS','i.n2':'btrfs는 리눅스 커널 파일시스템이라 여기에는 깔 데가 없습니다. 설치 프로그램이 OrbStack으로 리눅스 머신을 만들자고 제안합니다.',
-      'i.orblabel':'OrbStack에 예라고 답하기 전에',
-      'i.orb':'OrbStack 무료 사용은 <strong>개인·비상업적 용도에 한합니다</strong>. 회사 노트북이라면 유료 좌석이 필요합니다(<a href="https://orbstack.dev/pricing">요금</a>). 설치 프로그램이 먼저 알려 주고, 기본 답은 아니오입니다. OrbStack에 묶인 건 없습니다. Colima, Lima, UTM, 아무 리눅스 서버든 똑같이 됩니다.',
-      'i.h3':'붙일 DB가 없다면?','i.n3':'샘플 publisher를 만들어 전체가 어떻게 도는지 먼저 볼 수 있게 합니다.',
-      'i.rerunlabel':'다시 실행할 때','i.rerun':'재실행이 곧 업그레이드입니다. 두 번째 실행에서 없어지는 건 없습니다. 이미 있는 걸 열지, 두 번째 설치를 옆에 만들지 물어봅니다.',
+      'i.title':'설치',
       'lab.verdict':'디스크 <b>{saved}</b> 덜 씁니다 · 클론 {n}개 · {x}배 차이',
       'lab.notesnap':'기준 {base} GB + 클론 {n}개가 쓴 {w}',
       'lab.notenaive':'{base} GB × {n}',
@@ -1063,6 +1080,10 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'foot.tag':'Postgres 논리 복제 + btrfs <span class="nb">copy-on-write</span>'
     },
     ja: {
+      'hero.linux':'Linux','hero.mac':'macOS','hero.demo':'つなぐ DB が無ければ、サンプルで',
+      'g.exlead1':'Postgres の文書は限界をそのまま書いています。<q>The database schema and DDL commands are not replicated.</q> サブスクリプションが運ぶのは行の変更だけです。プライマリに列を 1 つ足すとレプリカにはその列が無く、その列に関わる最初の変更で適用に失敗し、レプリケーションはそこで止まります。ずれたスキーマのまま進む代わりに止まるわけです。',
+      'g.exlead2':'だからマネージドのプライマリのコピーは、ふつう定期的に取り直します。2 つのスキーマを手で合わせ続けるより、ダンプして復元するほうが楽だからです。代償は、コピーが最後のダンプの時点までしか新しくないこと。スキーマも含めてです。',
+      'g.exlead3':'Snaplicator はこれを <a href="#g4">4 番</a>で塞ぎます。イベントトリガーが CREATE・ALTER・DROP をすべてアウトボックステーブルに書き、そのテーブル自体が publication のメンバーなので、DDL は普通の複製行として届き、ここで実行し直されます。それでも残るものが以下です。',
       'origin.label':'作った理由',
       'origin.p1':'テスト DB を構成するたびにデータをシードしなければならず、production でバグが出ても test 環境では再現できず、QA のたびに特定のシナリオでテストしなければならないのが煩わしくて作りました。',
       'origin.p2':'primary db の DML および DDL をリアルタイムで複製し、複製された DB の特定の状態にスナップショットを取って、毎回同じデータでテストできます。',
@@ -1105,7 +1126,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'g.p7':'MCP サーバーを登録すれば、ループはエージェント自身のものになります。<code>clones</code> パラメータで触れるクローンを限定すれば、混乱したエージェントが他人のクローンを戻すことはありません。',
       'g.tiplabel':'クローンを最新に保つ',
       'g.tip':'クローンは一点に止まり、だからこそテストが再現可能です。新しいデータが要るときは新しいスナップショットを取り <code>refresh_clone</code> を使います。置き換えは隣に作ってから切り替わるので、断は 0.5 秒ほどです。',
-      'g.extitle':'ずれが起きうるところ',
+      'g.extitle':'留意点',
       'g.ex1t':'スナップショットから作ったクローンは匿名化されません',
       'g.ex1':'スクリプトは稼働中のレプリカから作るクローンでのみ走ります。既存のスナップショットから取ったクローンは飛ばすので、人手に渡る前に自分で消してください。',
       'g.ex2t':'CREATE INDEX CONCURRENTLY',
@@ -1121,7 +1142,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'common.copy':'コピー',
       'hero.eyebrow':'AI のためのテスト DB',
       'hero.title':'本番をそのまま複製したテスト DB。',
-      'hero.macnote':'macOS では sudo 不要 — まず Linux マシンを作ります。','con.title':'レプリカ、スナップショット、クローン',
+      'hero.macnote':'sudo なしで実行してください。まず Linux マシンを作ります。','con.title':'レプリカ、スナップショット、クローン',
       'con.lead':'それぞれ 1 つ前のものから作られます。クローンを壊しても上流は何も起きません。',
       'lab.title':'<span class="nb">Copy-on-write</span> を手元で',
       'lab.hint':'説明用モデル — ベース 300 GB',
@@ -1140,13 +1161,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
 
 
 
-      'i.title':'一行、そして UI',
-      'i.lead':'インストーラーが btrfs プールの置き場所を用意し、管理プレーンを起動し、複製対象を選ぶ画面で止まります。','i.n1':'Docker が必要です。<span class="nb">btrfs-progs</span>、<span class="nb">postgresql-client</span>、compose プラグインは無ければ追加されます。',
-      'i.h2':'macOS','i.n2':'btrfs は Linux カーネルのファイルシステムなので、ここには入れる先がありません。インストーラーが OrbStack で Linux マシンを作ることを提案します。',
-      'i.orblabel':'OrbStack に「はい」と答える前に',
-      'i.orb':'OrbStack の無料利用は<strong>個人の非商用に限られます</strong>。会社の端末なら有料ライセンスが必要です(<a href="https://orbstack.dev/pricing">価格</a>)。インストーラーは先にこれを伝え、既定は「いいえ」です。OrbStack 依存はありません。Colima、Lima、UTM、任意の Linux マシンで同じように動きます。',
-      'i.h3':'つなぐ DB が無い場合','i.n3':'サンプルの publisher を作り、まず全体の動きを見られるようにします。',
-      'i.rerunlabel':'再実行するとき','i.rerun':'再実行がそのままアップグレードです。2 回目で壊れるものはありません。既にあるものを開くか、2 つ目のインストールを隣に作るかを尋ねます。',
+      'i.title':'インストール',
       'lab.verdict':'<b>{saved}</b> 未割り当て · クローン {n} 個 · ディスク {x} 分の 1',
       'lab.notesnap':'ベース {base} GB + クローン {n} 個が書いた {w}',
       'lab.notenaive':'{base} GB × {n}',
