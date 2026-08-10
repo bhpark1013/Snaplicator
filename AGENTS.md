@@ -49,6 +49,29 @@ after   A clone shares every block with its snapshot and allocates only what
 The second sentence was an instruction to do something the interactive widget
 right below it already invites. It went.
 
+## Line breaking
+
+No line may end in the middle of a word. Three separate mechanisms are in play
+and they do not overlap, so all three have to hold:
+
+- **Korean** — `:root:lang(ko) body { word-break: keep-all }`. Without it the
+  browser ends a line between any two syllables and the h1 breaks as
+  망가뜨 / 려도. Scoped to Korean deliberately: Japanese is *meant* to wrap
+  between kana, and `keep-all` there makes every paragraph ragged. Do not
+  widen the selector.
+- **Hyphens** — an explicit hyphen is a break opportunity that no CSS property
+  governs. Any hyphenated term in prose (`copy-on-write`, `postgresql-client`,
+  `non-commercial`) must be wrapped in `<span class="nb">`. When you add copy
+  with a hyphen in it, wrap it.
+- **Code and URLs** — `pre.term` opts out with `word-break: normal;
+  overflow-wrap: anywhere`, because a URL is one unbreakable token and has to
+  break somewhere. Leave that exception alone.
+
+Verify by measuring, not by looking. Walk the text nodes with a `Range`, find
+where the rects change line, and assert that no break lands between two
+non-space characters. Run it for `en` and `ko` across every view at 320, 375,
+414, 768 and 1440.
+
 ## Translations
 
 English lives in the markup; `ko` and `ja` are overlays in the `DICT` object.

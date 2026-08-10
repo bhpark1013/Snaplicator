@@ -106,7 +106,23 @@
     background: var(--paper); color: var(--ink);
     font-family: var(--sans); font-size: 16px; line-height: 1.65;
     -webkit-font-smoothing: antialiased;
+    /* A token too long for its own line breaks rather than overflowing.
+       This is the last resort, not the normal case — see keep-all below. */
+    overflow-wrap: break-word;
   }
+  /* Korean has no inter-word break the way Latin does, so the default lets a
+     line end between any two syllables — the h1 was breaking as 망가뜨 / 려도,
+     a word cut in half. keep-all restricts breaks to the spaces between 어절.
+     Scoped to Korean on purpose: Japanese is *meant* to wrap between kana, and
+     keep-all there would make every paragraph ragged. The switcher already
+     writes the language onto <html>. */
+  :root:lang(ko) body { word-break: keep-all; }
+
+  /* An explicit hyphen is a break opportunity that neither keep-all nor
+     overflow-wrap governs, so copy-on-write was landing as copy-on- / write
+     in all three languages. The terms that contain one are held together
+     here rather than being respelled. */
+  .nb { white-space: nowrap; }
   /* One column, one width. The page had six different right edges — prose at
      66ch, the loop at 50rem, commands at 46rem, the run-in list at the measure,
      the h1 at the full wrap, the footer wider still — all sharing a left edge
@@ -194,7 +210,7 @@
 
   h1 { font-family: var(--display); font-size: clamp(2.05rem, 5.2vw, 3.5rem); line-height: 1.04;
        letter-spacing: -.03em; font-weight: 700; text-wrap: balance; margin: 0;
-       overflow-wrap: anywhere; min-width: 0; }
+       min-width: 0; }
   h2 { font-family: var(--display); font-size: clamp(1.35rem, 2.7vw, 1.8rem); line-height: 1.18;
        letter-spacing: -.02em; font-weight: 700; text-wrap: balance; margin: 0 0 .85rem; }
   h3 { font-family: var(--display); font-size: 1rem; font-weight: 700; margin: 0 0 .3rem; letter-spacing: -.01em; }
@@ -289,7 +305,9 @@
        a fade is fine; in the guide it is there to be read, and a line clipped
        mid-URL hides the part someone came for. Continuations are indented so a
        wrap still reads as one command. */
-    white-space: pre-wrap; overflow-wrap: anywhere;
+       The one place that opts out of the page's keep-all: a URL is a single
+       unbreakable token, so here it may break anywhere. */
+    white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere;
     padding-left: 2.4rem; text-indent: -1.3rem;
   }
   pre.term .k { color: var(--t-live-ink); }
@@ -593,7 +611,7 @@
 
     <div class="lab">
       <div class="lab-head">
-        <h3 data-i18n="lab.title">Copy-on-write, at your fingertips</h3>
+        <h3 data-i18n="lab.title"><span class="nb">Copy-on-write</span>, at your fingertips</h3>
         <span class="hint" data-i18n="lab.hint">illustrative model — 300 GB base</span>
       </div>
       <div class="lab-body">
@@ -681,7 +699,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
 
 <span class="k">UPDATE</span> user_account <span class="k">SET</span> email = <span class="s">'dev+'</span> || id || <span class="s">'@example.local'</span>;
 <span class="k">UPDATE</span> device_info  <span class="k">SET</span> push_token = <span class="s">'invalid-dev-token'</span>, is_push_enabled = false;</pre>
-        <p style="margin-top:.75rem" data-i18n="g.p3b">If the script fails, the clone is destroyed rather than served — a half-scrubbed copy is never handed to anyone. A clone with no script at all is production data given to whoever asked for it, so the file&rsquo;s absence is reported, not assumed.</p>
+        <p style="margin-top:.75rem" data-i18n="g.p3b">If the script fails, the clone is destroyed rather than served — a <span class="nb">half-scrubbed</span> copy is never handed to anyone. A clone with no script at all is production data given to whoever asked for it, so the file&rsquo;s absence is reported, not assumed.</p>
       </div></li>
 
       <li id="g4"><div>
@@ -757,7 +775,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       </div>
       <div>
         <dt data-i18n="g.ex5t">Knowing it is actually keeping up</dt>
-        <dd data-i18n="g.ex5"><code>configs/replication_check.sql</code> runs on both the primary and the replica and the two results are compared. It is forced read-only: writes and DDL are rejected on save, and it executes inside a READ ONLY transaction.</dd>
+        <dd data-i18n="g.ex5"><code>configs/replication_check.sql</code> runs on both the primary and the replica and the two results are compared. It is forced <span class="nb">read-only</span>: writes and DDL are rejected on save, and it executes inside a READ ONLY transaction.</dd>
       </div>
     </dl>
   </section>
@@ -765,7 +783,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
   <!-- ═══════════════ COMPARE ═══════════════ -->
   <section id="compare">
     <p class="thesis" data-i18n="cmp.thesis">
-      All of these do copy-on-write. What differs is where your data has to live for it to work.
+      All of these do <span class="nb">copy-on-write</span>. What differs is where your data has to live for it to work.
     </p>
 
     <div class="tablewrap">
@@ -805,7 +823,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
             <th scope="row">DBLab</th>
             <td data-i18n="cmp.dbl1">your hardware, any Postgres</td>
             <td data-i18n="cmp.dbl2">the last retrieved copy</td>
-            <td data-i18n="cmp.dbl3">self-managed: continuous. Managed (RDS): periodic full refresh</td>
+            <td data-i18n="cmp.dbl3"><span class="nb">self-managed</span>: continuous. Managed (RDS): periodic full refresh</td>
             <td data-i18n="cmp.dbl4">physical: with the copy. Managed: only at the next full refresh</td>
           </tr>
           <tr class="ours">
@@ -823,13 +841,13 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       <h2 data-i18n="cmp.ddltitle">The schema column is the interesting one</h2>
       <p data-i18n="cmp.ddl1">
         Postgres is blunt about this: <q>The database schema and DDL commands are not replicated.</q>
-        That is why following a managed primary usually means re-copying it on a schedule — the
+        That is why following a managed primary usually means <span class="nb">re-copying</span> it on a schedule — the
         alternative is a replica whose schema drifts until replication errors out.
       </p>
       <p data-i18n="cmp.ddl2">
         Snaplicator captures DDL on the primary with event triggers, ships it through the same
         publication, and replays it on the replica. Add a column at 14:02 and the replica has it
-        at 14:02 — no refresh, no re-dump.
+        at 14:02 — no refresh, no <span class="nb">re-dump</span>.
       </p>
     </div>
 
@@ -842,7 +860,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
         </div>
         <div class="path hi">
           <span class="path-who" data-i18n="cmp.path2w">With a replica that never stopped following</span>
-          <p data-i18n="cmp.path2">Already current — rows and schema both. Take a snapshot, make a clone, and you are querying production-shaped data from moments ago. Nothing you waited for was a dump.</p>
+          <p data-i18n="cmp.path2">Already current — rows and schema both. Take a snapshot, make a clone, and you are querying <span class="nb">production-shaped</span> data from moments ago. Nothing you waited for was a dump.</p>
         </div>
       </div>
     </div>
@@ -856,11 +874,11 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       </div>
       <div>
         <dt data-i18n="cmp.t2">Aurora fast cloning</dt>
-        <dd data-i18n="cmp.p2">Copy-on-write at the storage layer, and genuinely fast — but a clone is a DB cluster, and a cluster needs an instance, so every clone bills compute. AWS also caps it: <q>You can create up to 15 clones with copy-on-write protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora only, not plain RDS Postgres.</dd>
+        <dd data-i18n="cmp.p2"><span class="nb">Copy-on-write</span> at the storage layer, and genuinely fast — but a clone is a DB cluster, and a cluster needs an instance, so every clone bills compute. AWS also caps it: <q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora only, not plain RDS Postgres.</dd>
       </div>
       <div>
         <dt data-i18n="cmp.t3">DBLab (Postgres.ai)</dt>
-        <dd data-i18n="cmp.p3">The closest thing to this, older and more capable — it will clone 10 TiB in under two seconds. The difference is how the copy keeps up. Its physical mode <q>is not available for managed cloud Postgres services such as Amazon RDS</q>; against those it is dump/restore on a schedule. Snaplicator subscribes over logical replication, so a managed primary is followed rather than re-copied.</dd>
+        <dd data-i18n="cmp.p3">The closest thing to this, older and more capable — it will clone 10 TiB in under two seconds. The difference is how the copy keeps up. Its physical mode <q>is not available for managed cloud Postgres services such as Amazon RDS</q>; against those it is dump/restore on a schedule. Snaplicator subscribes over logical replication, so a managed primary is followed rather than <span class="nb">re-copied</span>.</dd>
       </div>
     </dl>
 
@@ -875,9 +893,9 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       <span class="label" data-i18n="cmp.sblabel">If you run on Supabase</span>
       <p data-i18n="cmp.sbnote">
         Branches there start with no production data by design, and Supabase can act as a
-        logical-replication publisher — <code>wal_level</code> is already <code>logical</code>.
+        <span class="nb">logical-replication</span> publisher — <code>wal_level</code> is already <code>logical</code>.
         Two caveats from their own guide: use the direct connection string rather than the pooler,
-        and the subscriber needs IPv6 or their IPv4 add-on.
+        and the subscriber needs IPv6 or their IPv4 <span class="nb">add-on</span>.
       </p>
     </div>
 
@@ -899,7 +917,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       <span class="l" id="cmdL">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
       <button class="copy" data-copy="cmdL" data-i18n="common.copy">copy</button>
     </div>
-    <p class="cmd-note" data-i18n="i.n1">Linux. Needs Docker; btrfs-progs, postgresql-client and the compose plugin are added if missing.</p>
+    <p class="cmd-note" data-i18n="i.n1">Linux. Needs Docker; <span class="nb">btrfs-progs</span>, <span class="nb">postgresql-client</span> and the compose plugin are added if missing.</p>
 
     <h2 class="after-figure" data-i18n="i.title">One line, then a UI</h2>
     <p class="col sub" data-i18n="i.lead">
@@ -918,7 +936,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
     <div class="note">
       <span class="label" data-i18n="i.orblabel">Before you say yes to OrbStack</span>
       <p data-i18n="i.orb">
-        OrbStack is free for <strong>personal, non-commercial use only</strong>; a company laptop
+        OrbStack is free for <strong>personal, <span class="nb">non-commercial</span> use only</strong>; a company laptop
         needs a paid seat (<a href="https://orbstack.dev/pricing">pricing</a>). The installer says
         so before it offers, and defaults to no. Nothing here depends on it — Colima, Lima, UTM
         or any Linux box works the same.
@@ -936,7 +954,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
     <div class="note">
       <span class="label" data-i18n="i.rerunlabel">Running it again</span>
       <p data-i18n="i.rerun">
-        Re-running is how you upgrade. Nothing on the second run destroys anything — it offers
+        <span class="nb">Re-running</span> is how you upgrade. Nothing on the second run destroys anything — it offers
         to open what is already there, or to build a second install beside it.
       </p>
     </div>
@@ -945,7 +963,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
 
 <footer class="wrap">
   <span>Snaplicator</span>
-  <span data-i18n="foot.tag">Postgres logical replication + btrfs copy-on-write</span>
+  <span data-i18n="foot.tag">Postgres logical replication + btrfs <span class="nb">copy-on-write</span></span>
   <span><a href="https://github.com/bhpark1013/Snaplicator">github.com/bhpark1013/Snaplicator</a></span>
 </footer>
 
@@ -975,7 +993,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'g.p4b':'프라이머리에 테이블을 만들면 publication에 자동으로 들어가서, 손대지 않아도 복제가 시작됩니다. 캡처는 일부러 넓게 잡고, 무엇을 건너뛸지는 다시 실행할 때 정합니다.',
       'g.lead':'여기까지는 한 번만 하면 됩니다. 아래부터는 에이전트가 알아서 반복합니다.',
       'g.h5':'스냅샷 찍기',
-      'g.p5':'리플리카에 이름을 붙여 그 시점을 남깁니다. O(1)이라 순식간입니다. 에이전트가 돌아올 자리이니, 데이터가 밀렸다 싶으면 새로 찍으세요.',
+      'g.p5':'리플리카에 이름을 붙여 그 시점을 남깁니다. <span class="nb">O(1)이라</span> 순식간입니다. 에이전트가 돌아올 자리이니, 데이터가 밀렸다 싶으면 새로 찍으세요.',
       'g.h6':'클론 만들기',
       'g.p6':'그 스냅샷에서 만든, 자기 포트를 가진 쓰기 가능한 Postgres입니다. 응답에 접속 문자열이 오는데, 넘길 건 그거 하나면 됩니다.',
       'g.h7':'에이전트에 물리기',
@@ -1012,7 +1030,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'why.t3':'시드 픽스처','why.p3':'빠르고 깔끔한데 정작 버그가 재현되지 않습니다. 아무도 예상 못 한 NULL은 팩토리가 아니라 프로덕션에 있으니까요.',
       'con.title':'리플리카, 스냅샷, 클론',
       'con.lead':'셋은 앞의 것에서 차례로 만들어집니다. 클론을 부숴도 위쪽은 아무 영향이 없습니다.',
-      'lab.title':'Copy-on-write, 직접 만져 보기',
+      'lab.title':'<span class="nb">Copy-on-write</span>, 직접 만져 보기',
       'lab.hint':'예시 수치입니다 · 기준 300 GB',
       'lab.intro':'클론은 자기가 나온 스냅샷과 블록을 그대로 같이 쓰고, 바뀐 부분만 새로 잡습니다.',
       'lab.add':'+ 클론 추가','lab.write':'각각 2 GB 쓰기','lab.reset':'전부 스냅샷으로 되돌리기','lab.clear':'전부 삭제',
@@ -1032,7 +1050,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
 
       'i.title':'한 줄, 그다음은 UI',
       'i.lead':'설치 프로그램이 btrfs 풀 자리를 찾아 잡고, 관리 서버를 띄운 다음, 무엇을 복제할지 고르는 화면에서 멈춥니다.',
-      'i.n1':'리눅스용입니다. Docker가 있어야 하고 btrfs-progs, postgresql-client, compose 플러그인은 없으면 알아서 깔아 줍니다.',
+      'i.n1':'리눅스용입니다. Docker가 있어야 하고 <span class="nb">btrfs-progs</span>, <span class="nb">postgresql-client</span>, compose 플러그인은 없으면 알아서 깔아 줍니다.',
       'i.h2':'macOS','i.n2':'btrfs는 리눅스 커널 파일시스템이라 여기에는 깔 데가 없습니다. 설치 프로그램이 OrbStack으로 리눅스 머신을 만들자고 제안합니다.',
       'i.orblabel':'OrbStack에 예라고 답하기 전에',
       'i.orb':'OrbStack 무료 사용은 <strong>개인·비상업적 용도에 한합니다</strong>. 회사 노트북이라면 유료 좌석이 필요합니다(<a href="https://orbstack.dev/pricing">요금</a>). 설치 프로그램이 먼저 알려 주고, 기본 답은 아니오입니다. OrbStack에 묶인 건 없습니다. Colima, Lima, UTM, 아무 리눅스 서버든 똑같이 됩니다.',
@@ -1047,7 +1065,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.a11yResetN':'clone-{n}을 스냅샷으로 되돌리기',
       'lab.a11yDelete':'클론 삭제',
       'lab.a11yDeleteN':'clone-{n} 삭제',
-      'cmp.thesis':'여기 있는 것들은 전부 copy-on-write를 씁니다. 다른 건 그게 되려면 데이터가 어디에 있어야 하느냐입니다.',
+      'cmp.thesis':'여기 있는 것들은 전부 <span class="nb">copy-on-write</span>를 씁니다. 다른 건 그게 되려면 데이터가 어디에 있어야 하느냐입니다.',
       'cmp.c0':' ','cmp.c1':'어디서 도나','cmp.c2':'복사본의 시작 상태','cmp.c3':'최신을 어떻게 따라가나',
       'cmp.neon1':'Neon 클라우드','cmp.neon2':'부모 브랜치 그대로, 즉시','cmp.neon3':'그게 곧 내 DB라서, 브랜치가 실물에서 갈라져 나옵니다',
       'cmp.sb1':'Supabase 클라우드','cmp.sb2':'아무것도 없음 — 프로덕션 데이터 0','cmp.sb3':'직접 시드를 넣어야 합니다',
@@ -1058,7 +1076,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.t1':'Neon과 Supabase 브랜칭',
       'cmp.p1':'둘 다 훌륭한데, 둘 다 이미 거기서 돌고 있다는 걸 전제합니다. 프로덕션이 RDS나 Cloud SQL이거나 직접 굴리는 서버에 있으면 이건 테스트 사본을 만드는 길이 아닙니다. Supabase는 못을 박아 뒀습니다. <q>New branches do not start with any data from your main project.</q>',
       'cmp.t2':'Aurora 패스트 클로닝',
-      'cmp.p2':'스토리지 계층의 copy-on-write이고 실제로 빠릅니다. 다만 클론 하나가 DB 클러스터고 클러스터에는 인스턴스가 붙어야 해서, 살려 두는 내내 컴퓨트 요금이 나갑니다. 개수 제한도 있습니다. <q>You can create up to 15 clones with copy-on-write protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 전용이라 일반 RDS Postgres는 안 됩니다.',
+      'cmp.p2':'스토리지 계층의 <span class="nb">copy-on-write</span>이고 실제로 빠릅니다. 다만 클론 하나가 DB 클러스터고 클러스터에는 인스턴스가 붙어야 해서, 살려 두는 내내 컴퓨트 요금이 나갑니다. 개수 제한도 있습니다. <q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 전용이라 일반 RDS Postgres는 안 됩니다.',
       'cmp.t3':'DBLab (Postgres.ai)',
       'cmp.p3':'이 중에 가장 가깝고, 더 오래됐고 기능도 더 많습니다. 10 TiB를 2초 안에 뜹니다. 갈리는 건 사본을 어떻게 최신으로 유지하느냐입니다. 물리 모드는 <q>is not available for managed cloud Postgres services such as Amazon RDS</q>라, 매니지드 상대로는 주기적으로 통째로 다시 받습니다. Snaplicator는 논리 복제로 구독해서 다시 받는 게 아니라 따라갑니다.',
       'cmp.notlabel':'Snaplicator가 답이 아닌 경우',
@@ -1079,7 +1097,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.path2w':'따라가기를 멈춘 적 없는 리플리카라면',
       'cmp.path2':'이미 최신입니다. 행도 스키마도요. 스냅샷 찍고 클론을 만들면 조금 전 프로덕션과 같은 모양의 데이터에 바로 쿼리를 날립니다. 기다린 것 중에 덤프는 없습니다.',
       'cmp.srclabel':'확인한 문서:',
-      'foot.tag':'Postgres 논리 복제 + btrfs copy-on-write'
+      'foot.tag':'Postgres 논리 복제 + btrfs <span class="nb">copy-on-write</span>'
     },
     ja: {
       'g.title':'ゼロから、エージェント専用 DB まで',
@@ -1133,7 +1151,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'why.t2':'ダンプのリストア','why.p2':'正確ですが、データベースが大きいほど時間がかかります。待たされるリセットは、結局使われません。',
       'why.t3':'シードフィクスチャ','why.p3':'速くて綺麗ですが、バグを再現しません。誰も想定しなかった NULL は、ファクトリではなく本番にあります。','con.title':'レプリカ、スナップショット、クローン',
       'con.lead':'それぞれ 1 つ前のものから作られます。クローンを壊しても上流は何も起きません。',
-      'lab.title':'Copy-on-write を手元で',
+      'lab.title':'<span class="nb">Copy-on-write</span> を手元で',
       'lab.hint':'説明用モデル — ベース 300 GB',
       'lab.intro':'クローンは元のスナップショットと全ブロックを共有し、変更した分だけ確保します。',
       'lab.add':'+ クローン追加','lab.write':'各 2 GB 書き込み','lab.reset':'全てスナップショットへ','lab.clear':'全て削除',
@@ -1151,7 +1169,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
 
 
       'i.title':'一行、そして UI',
-      'i.lead':'インストーラーが btrfs プールの置き場所を用意し、管理プレーンを起動し、複製対象を選ぶ画面で止まります。','i.n1':'Docker が必要です。btrfs-progs、postgresql-client、compose プラグインは無ければ追加されます。',
+      'i.lead':'インストーラーが btrfs プールの置き場所を用意し、管理プレーンを起動し、複製対象を選ぶ画面で止まります。','i.n1':'Docker が必要です。<span class="nb">btrfs-progs</span>、<span class="nb">postgresql-client</span>、compose プラグインは無ければ追加されます。',
       'i.h2':'macOS','i.n2':'btrfs は Linux カーネルのファイルシステムなので、ここには入れる先がありません。インストーラーが OrbStack で Linux マシンを作ることを提案します。',
       'i.orblabel':'OrbStack に「はい」と答える前に',
       'i.orb':'OrbStack の無料利用は<strong>個人の非商用に限られます</strong>。会社の端末なら有料ライセンスが必要です(<a href="https://orbstack.dev/pricing">価格</a>)。インストーラーは先にこれを伝え、既定は「いいえ」です。OrbStack 依存はありません。Colima、Lima、UTM、任意の Linux マシンで同じように動きます。',
@@ -1166,7 +1184,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.a11yResetN':'clone-{n} をスナップショットへ戻す',
       'lab.a11yDelete':'クローンを削除',
       'lab.a11yDeleteN':'clone-{n} を削除',
-      'cmp.thesis':'ここに挙げたものはすべて copy-on-write です。違うのは、それが成り立つためにデータがどこになければならないか、です。',
+      'cmp.thesis':'ここに挙げたものはすべて <span class="nb">copy-on-write</span> です。違うのは、それが成り立つためにデータがどこになければならないか、です。',
       'cmp.c0':' ','cmp.c1':'どこで動くか','cmp.c2':'コピーの初期状態','cmp.c3':'新しさをどう保つか',
       'cmp.neon1':'Neon のクラウド','cmp.neon2':'親ブランチそのまま、即時','cmp.neon3':'それ自体が本番なので、ブランチは実物から分かれます',
       'cmp.sb1':'Supabase のクラウド','cmp.sb2':'空 — 本番データは入りません','cmp.sb3':'自分でシードを入れます',
@@ -1177,7 +1195,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.t1':'Neon と Supabase のブランチ',
       'cmp.p1':'どちらも優秀ですが、どちらも「すでにそこで動いている」ことが前提です。本番が RDS や Cloud SQL、あるいは自前のマシンにあるなら、これはテスト用コピーを作る道になりません。Supabase は明言しています。<q>New branches do not start with any data from your main project.</q>',
       'cmp.t2':'Aurora ファストクローニング',
-      'cmp.p2':'ストレージ層の copy-on-write で、実際に速いです。ただしクローン 1 つが DB クラスターで、クラスターにはインスタンスが要るので、置いておくあいだ課金が続きます。上限もあります。<q>You can create up to 15 clones with copy-on-write protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 専用で、通常の RDS Postgres では使えません。',
+      'cmp.p2':'ストレージ層の <span class="nb">copy-on-write</span> で、実際に速いです。ただしクローン 1 つが DB クラスターで、クラスターにはインスタンスが要るので、置いておくあいだ課金が続きます。上限もあります。<q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 専用で、通常の RDS Postgres では使えません。',
       'cmp.t3':'DBLab (Postgres.ai)',
       'cmp.p3':'この中で最も近く、歴史も長く機能も多いです。10 TiB でも 2 秒かかりません。分かれるのはコピーの鮮度の保ち方です。物理モードは <q>is not available for managed cloud Postgres services such as Amazon RDS</q> なので、マネージド相手では定期的に丸ごと取り直します。Snaplicator は論理レプリケーションで購読し、取り直さず追従します。',
       'cmp.notlabel':'Snaplicator が答えにならない場合',
@@ -1198,7 +1216,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.path2w':'追従をやめていないレプリカなら',
       'cmp.path2':'すでに最新です。行もスキーマも。スナップショットを取ってクローンを作れば、さっきの本番と同じ形のデータにすぐクエリを投げられます。待ったもののなかにダンプはありません。',
       'cmp.srclabel':'参照した資料:',
-      'foot.tag':'Postgres 論理レプリケーション + btrfs copy-on-write'
+      'foot.tag':'Postgres 論理レプリケーション + btrfs <span class="nb">copy-on-write</span>'
     }
   };
 
@@ -1271,11 +1289,11 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
     });
   });
 
-  /* ── the copy-on-write lab ─────────────────────────────────
+  /* ── the <span class="nb"><span class="nb">copy-on-write</span></span> lab ─────────────────────────────────
      A model, not a measurement — the numbers are stated as such
      in the header. What it has to make true is the shape: the
      Snaplicator bar grows only when something is written, and the
-     full-copy bar grows on every clone. */
+     <span class="nb">full-copy</span> bar grows on every clone. */
   var BASE = 300, WRITE = 2, CAP = 2400;
   var clones = [], nextPort = 5455, seq = 0;
 
