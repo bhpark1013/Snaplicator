@@ -197,6 +197,8 @@
   @media (max-width: 700px) { .pair { grid-template-columns: 1fr; } }
   .pair h3 { font-family: var(--display); font-size: 1rem; font-weight: 700;
              letter-spacing: -.01em; margin: 0 0 .55rem; }
+  .pair h3 .n { font-family: var(--mono); font-weight: 500; color: var(--ink-3);
+                margin-right: .55ch; }
   .pair p { font-size: .9rem; line-height: 1.6; color: var(--ink-2); margin: 0; }
   .pair ul { margin: 0; padding-left: 1.05rem; font-size: .89rem; line-height: 1.55;
              color: var(--ink-2); }
@@ -552,8 +554,8 @@
   <!-- ═══════════════ OVERVIEW ═══════════════ -->
   <section id="overview">
     <p class="kicker" data-i18n="hero.eyebrow">Test DB for AI</p>
-    <h1><span data-i18n="hero.title">Clone the production you already run, and test on that.</span>
-      <span data-i18n="hero.title2">No seeding, no dumps.</span></h1>
+    <h1><span data-i18n="hero.title">A test database cloned straight from your production.</span>
+      <span data-i18n="hero.title2">No seeding. No dumps.</span></h1>
     <p class="lead col" style="margin-top:1.3rem" data-i18n="hero.lead">
       RDS, Azure Database for PostgreSQL, Cloud SQL or your own machine — production stays
       exactly where it is. Snaplicator keeps one replica following it and hands out clones that
@@ -568,14 +570,14 @@
     <p class="cmd-note" data-i18n="hero.macnote">macOS: drop the sudo — it builds a Linux machine first.</p>
 
     <div style="margin-top:var(--gap)">
-      <h2 data-i18n="feat.title">The two things it does</h2>
+      <h2 data-i18n="feat.title">What it does</h2>
       <div class="pair">
         <div>
-          <h3 data-i18n="feat.h1">Data and schema, replicated live</h3>
+          <h3><span class="n">1.</span><span data-i18n="feat.h1">Data and schema, replicated live</span></h3>
           <p data-i18n="feat.p1">Logical replication carries rows and nothing else, which is why a copy of a managed primary normally has to be taken again on a schedule. Snaplicator catches CREATE, ALTER and DROP on the primary with event triggers and replays them here, so the replica never drifts out of shape.</p>
         </div>
         <div>
-          <h3 data-i18n="feat.h2">Database branching</h3>
+          <h3><span class="n">2.</span><span data-i18n="feat.h2">Database branching</span></h3>
           <p data-i18n="feat.p2">Freeze the replica into a snapshot, then start as many writable clones from it as you like. Seconds each, effectively no disk until something writes, and putting one back is a single call.</p>
         </div>
       </div>
@@ -674,47 +676,47 @@
         <thead>
           <tr>
             <th data-i18n="cmp.c0">&nbsp;</th>
-            <th data-i18n="cmp.c1">Runs where</th>
-            <th data-i18n="cmp.c2">A copy starts with</th>
-            <th data-i18n="cmp.c3">How it stays current</th>
-            <th data-i18n="cmp.c4">Schema changes</th>
+            <th data-i18n="cmp.c1">Rows follow production</th>
+            <th data-i18n="cmp.c2">Schema follows</th>
+            <th data-i18n="cmp.c3">Snapshots / branching</th>
+            <th data-i18n="cmp.c4">Your own infrastructure</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <th scope="row">Neon</th>
-            <td data-i18n="cmp.neon1">Neon&rsquo;s cloud</td>
-            <td data-i18n="cmp.neon2">the parent branch, instantly</td>
-            <td data-i18n="cmp.neon3">it <em>is</em> your database — branches are of the real thing</td>
-            <td data-i18n="cmp.neon4">come with the branch — same storage</td>
+            <td data-i18n="cmp.neon1">yes — logical replication</td>
+            <td data-i18n="cmp.neon2">no — yours to keep in step</td>
+            <td data-i18n="cmp.neon3">yes — <span class="nb">copy-on-write</span> branches</td>
+            <td data-i18n="cmp.neon4"><span class="nb">Apache-2.0</span>, but <span class="nb">self-hosting</span> is scoped to experiments</td>
           </tr>
           <tr>
             <th scope="row">Supabase</th>
-            <td data-i18n="cmp.sb1">Supabase&rsquo;s cloud</td>
-            <td data-i18n="cmp.sb2">nothing — no production data at all</td>
-            <td data-i18n="cmp.sb3">you seed it yourself</td>
-            <td data-i18n="cmp.sb4">applied from your migration files</td>
+            <td data-i18n="cmp.sb1">no — branches start with no production data</td>
+            <td data-i18n="cmp.sb2">yes — from your migration files</td>
+            <td data-i18n="cmp.sb3">yes, on their cloud</td>
+            <td data-i18n="cmp.sb4"><span class="nb">self-hosting</span> is documented, but without branching</td>
           </tr>
           <tr>
             <th scope="row">Aurora cloning</th>
-            <td data-i18n="cmp.aur1">AWS, Aurora only</td>
-            <td data-i18n="cmp.aur2">the source cluster&rsquo;s pages</td>
-            <td data-i18n="cmp.aur3">clone again for fresher data</td>
-            <td data-i18n="cmp.aur4">come with the clone — same storage</td>
+            <td data-i18n="cmp.aur1">no — a clone is fixed at the moment you take it</td>
+            <td data-i18n="cmp.aur2">yes — comes with the clone, same storage</td>
+            <td data-i18n="cmp.aur3">yes — up to 15, then it is a full copy</td>
+            <td data-i18n="cmp.aur4">no — AWS Aurora only</td>
           </tr>
           <tr>
             <th scope="row">DBLab</th>
-            <td data-i18n="cmp.dbl1">your hardware, any Postgres</td>
-            <td data-i18n="cmp.dbl2">the last retrieved copy</td>
-            <td data-i18n="cmp.dbl3"><span class="nb">self-managed</span>: continuous. Managed (RDS): periodic full refresh</td>
-            <td data-i18n="cmp.dbl4">physical: with the copy. Managed: only at the next full refresh</td>
+            <td data-i18n="cmp.dbl1"><span class="nb">self-managed</span> yes; managed primaries are <span class="nb">re-copied</span> on a schedule</td>
+            <td data-i18n="cmp.dbl2">with the copy; on managed, only at the next full refresh</td>
+            <td data-i18n="cmp.dbl3">yes — ZFS or LVM thin clones</td>
+            <td data-i18n="cmp.dbl4">yes</td>
           </tr>
           <tr class="ours">
             <th scope="row">Snaplicator</th>
-            <td data-i18n="cmp.sn1">your hardware, any Postgres</td>
-            <td data-i18n="cmp.sn2">the snapshot you picked</td>
-            <td data-i18n="cmp.sn3">logical replication, continuously — managed primaries included</td>
-            <td data-i18n="cmp.sn4">captured on the primary and replayed here, continuously</td>
+            <td data-i18n="cmp.sn1">yes — logical replication, managed primaries included</td>
+            <td data-i18n="cmp.sn2">yes — event triggers replay DDL here</td>
+            <td data-i18n="cmp.sn3">yes — btrfs <span class="nb">copy-on-write</span></td>
+            <td data-i18n="cmp.sn4">yes — one machine you own</td>
           </tr>
         </tbody>
       </table>
@@ -1052,8 +1054,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
      than two that can drift. The other languages are overlays. */
   var DICT = {
     ko: {
-      'hero.title2':'시드도, 덤프도 필요 없습니다.',
-      'feat.title':'핵심은 두 가지입니다',
+      'hero.title2':'시드도, 덤프도 없습니다.',
+      'feat.title':'주요 기능',
       'feat.h1':'데이터와 스키마, 실시간 복제',
       'feat.p1':'논리 복제는 행만 나릅니다. 그래서 매니지드 프라이머리의 사본은 보통 주기적으로 통째로 다시 떠야 합니다. Snaplicator는 프라이머리의 CREATE·ALTER·DROP까지 이벤트 트리거로 잡아 여기서 다시 실행하므로, 리플리카의 모양이 어긋나지 않습니다.',
       'feat.h2':'데이터베이스 브랜칭',
@@ -1117,7 +1119,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'gr.e1':'논리 복제','gr.e2':'얼리기','gr.e3':'띄우기',
       'common.copy':'복사',
       'hero.eyebrow':'AI를 위한 테스트 DB',
-      'hero.title':'지금 쓰는 프로덕션을 즉시 복제해 테스트하세요.',
+      'hero.title':'프로덕션을 즉시 복제한 테스트 DB.',
       'hero.lead':'RDS든 Azure Database for PostgreSQL이든 Cloud SQL이든 직접 굴리는 서버든, 프로덕션은 있던 자리 그대로입니다. Snaplicator가 거기에 리플리카 하나를 붙여 두고, 몇 초면 만들어지고 디스크는 거의 안 쓰는 클론을 떠 줍니다. 에이전트가 마음껏 부숴도 되는 것으로요.',
       'hero.macnote':'macOS에서는 sudo를 빼세요. 리눅스 머신부터 만듭니다.',
       'loop.title':'에이전트가 실제로 하는 일',
@@ -1168,12 +1170,12 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.a11yDelete':'클론 삭제',
       'lab.a11yDeleteN':'clone-{n} 삭제',
       'cmp.thesis':'여기 있는 것들은 전부 <span class="nb">copy-on-write</span>를 씁니다. 다른 건 그게 되려면 데이터가 어디에 있어야 하느냐입니다.',
-      'cmp.c0':' ','cmp.c1':'어디서 도나','cmp.c2':'복사본의 시작 상태','cmp.c3':'최신을 어떻게 따라가나',
-      'cmp.neon1':'Neon 클라우드','cmp.neon2':'부모 브랜치 그대로, 즉시','cmp.neon3':'그게 곧 내 DB라서, 브랜치가 실물에서 갈라져 나옵니다',
-      'cmp.sb1':'Supabase 클라우드','cmp.sb2':'아무것도 없음 — 프로덕션 데이터 0','cmp.sb3':'직접 시드를 넣어야 합니다',
-      'cmp.aur1':'AWS, Aurora만','cmp.aur2':'원본 클러스터의 페이지','cmp.aur3':'더 최신이 필요하면 다시 클론',
-      'cmp.dbl1':'내 서버, 아무 Postgres나','cmp.dbl2':'마지막으로 받아 둔 사본','cmp.dbl3':'직접 운영 중이면 계속 따라감. 매니지드(RDS)는 주기적 전체 갱신',
-      'cmp.sn1':'내 서버, 아무 Postgres나','cmp.sn2':'내가 고른 스냅샷','cmp.sn3':'논리 복제로 계속 따라감 — 매니지드 프라이머리 포함',
+      'cmp.c0':' ','cmp.c1':'프로덕션 행을 따라감','cmp.c2':'스키마도 따라감','cmp.c3':'스냅샷 · 브랜칭',
+      'cmp.neon1':'예 — 논리 복제','cmp.neon2':'아니오 — 직접 맞춰야 함','cmp.neon3':'예 — <span class="nb">copy-on-write</span> 브랜치',
+      'cmp.sb1':'아니오 — 브랜치는 프로덕션 데이터 없이 시작','cmp.sb2':'예 — 마이그레이션 파일에서','cmp.sb3':'예, 자기네 클라우드에서',
+      'cmp.aur1':'아니오 — 클론은 뜬 시점에 고정','cmp.aur2':'예 — 클론에 딸려 옴, 같은 스토리지','cmp.aur3':'예 — 15개까지, 그 뒤로는 전체 복사',
+      'cmp.dbl1':'직접 운영이면 예; 매니지드는 주기적으로 다시 받음','cmp.dbl2':'사본과 함께; 매니지드는 다음 전체 갱신 때','cmp.dbl3':'예 — ZFS 또는 LVM 씬 클론',
+      'cmp.sn1':'예 — 논리 복제, 매니지드 프라이머리 포함','cmp.sn2':'예 — 이벤트 트리거가 DDL을 여기서 재실행','cmp.sn3':'예 — btrfs <span class="nb">copy-on-write</span>',
       'cmp.title':'차이가 실제로 갈리는 지점',
       'cmp.t1':'Neon과 Supabase 브랜칭',
       'cmp.p1':'둘 다 훌륭하고, 이미 거기서 돌고 있다면 그쪽 브랜칭을 쓰세요. 거기 브랜치는 <em>곧</em> 내 데이터입니다. Neon은 RDS나 Cloud SQL 프라이머리를 호스팅하는 대신 논리 복제로 따라가 주기도 합니다. 그러면 두 가지가 달라집니다. 데이터가 Neon 클라우드에 놓이고, 스키마는 직접 맞춰 둬야 합니다. 자기네 가이드가 이렇게 요구하니까요. <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> 바로 다음 절이 그 빈틈 이야기입니다.',
@@ -1183,11 +1185,11 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.p3':'이 중에 가장 가깝고, 더 오래됐고 기능도 더 많습니다. 10 TiB를 2초 안에 뜹니다. 갈리는 건 사본을 어떻게 최신으로 유지하느냐입니다. 물리 모드는 <q>is not available for managed cloud Postgres services such as Amazon RDS</q>라, 매니지드 상대로는 주기적으로 통째로 다시 받습니다. Snaplicator는 논리 복제로 구독해서 다시 받는 게 아니라 따라갑니다.',
       'cmp.sblabel':'Supabase를 쓰고 있다면',
       'cmp.sbnote':'거기 브랜치는 설계상 프로덕션 데이터 없이 시작하고, Supabase는 논리 복제 publisher가 될 수 있습니다. <code>wal_level</code>은 이미 <code>logical</code>입니다. 자기네 가이드가 짚는 주의점 둘 — 풀러 말고 직접 연결 문자열을 쓸 것, 구독하는 쪽에 IPv6나 IPv4 애드온이 필요하다는 것.',
-      'cmp.c4':'스키마 변경',
-      'cmp.neon4':'브랜치에 딸려 옴 — 같은 스토리지','cmp.sb4':'마이그레이션 파일에서 적용',
-      'cmp.aur4':'클론에 딸려 옴 — 같은 스토리지',
-      'cmp.dbl4':'물리 모드는 사본과 함께. 매니지드는 다음 전체 갱신 때나',
-      'cmp.sn4':'프라이머리에서 잡아서 여기에 계속 다시 실행',
+      'cmp.c4':'우리 인프라에서',
+      'cmp.neon4':'<span class="nb">Apache-2.0</span>이지만 자체 호스팅 범위는 실험용','cmp.sb4':'자체 호스팅은 문서화돼 있지만 브랜칭이 빠짐',
+      'cmp.aur4':'아니오 — AWS Aurora 전용',
+      'cmp.dbl4':'예',
+      'cmp.sn4':'예 — 내가 가진 머신 한 대',
       'cmp.ddltitle':'스키마 칸이 진짜 볼 곳입니다',
       'cmp.ddl1':'Postgres 문서가 딱 잘라 말합니다. <q>The database schema and DDL commands are not replicated.</q> 그래서 매니지드 프라이머리를 따라가려면 보통 주기적으로 통째로 다시 받습니다. 안 그러면 스키마가 어긋나다가 복제가 터집니다.',
       'cmp.ddl2':'Snaplicator는 프라이머리에서 이벤트 트리거로 DDL을 잡아 같은 publication에 실어 보내고, 리플리카에서 다시 실행합니다. 14시 02분에 컬럼을 추가하면 리플리카도 14시 02분에 갖습니다.',
@@ -1200,8 +1202,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'foot.tag':'Postgres 논리 복제 + btrfs <span class="nb">copy-on-write</span>'
     },
     ja: {
-      'hero.title2':'シードもダンプも要りません。',
-      'feat.title':'やることは 2 つです',
+      'hero.title2':'シードもダンプも不要。',
+      'feat.title':'主な機能',
       'feat.h1':'データとスキーマを、そのまま追従',
       'feat.p1':'論理レプリケーションが運ぶのは行だけです。だからマネージドのプライマリのコピーは、ふつう定期的に丸ごと取り直すことになります。Snaplicator はプライマリの CREATE・ALTER・DROP までイベントトリガーで捕まえ、ここで実行し直すので、レプリカの形がずれません。',
       'feat.h2':'データベースのブランチ',
@@ -1265,7 +1267,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'gr.e1':'論理レプリケーション','gr.e2':'凍結','gr.e3':'起動',
       'common.copy':'コピー',
       'hero.eyebrow':'AI のためのテスト DB',
-      'hero.title':'いま使っている本番をそのまま複製してテストしてください。',
+      'hero.title':'本番をそのまま複製したテスト DB。',
       'hero.lead':'RDS でも Azure Database for PostgreSQL でも Cloud SQL でも自前のマシンでも、本番は今ある場所のままです。Snaplicator がそこにレプリカ 1 台を追従させ、数秒ででき、ディスクをほぼ使わないクローンを配ります。エージェントが壊してかまわないものを。',
       'hero.macnote':'macOS では sudo 不要 — まず Linux マシンを作ります。','loop.title':'エージェントが実際にやること',
       'loop.w1':'エージェント','loop.b1':'クローンを 1 つ取ります。数秒で、誰にも影響しません。',
@@ -1312,12 +1314,12 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.a11yDelete':'クローンを削除',
       'lab.a11yDeleteN':'clone-{n} を削除',
       'cmp.thesis':'ここに挙げたものはすべて <span class="nb">copy-on-write</span> です。違うのは、それが成り立つためにデータがどこになければならないか、です。',
-      'cmp.c0':' ','cmp.c1':'どこで動くか','cmp.c2':'コピーの初期状態','cmp.c3':'新しさをどう保つか',
-      'cmp.neon1':'Neon のクラウド','cmp.neon2':'親ブランチそのまま、即時','cmp.neon3':'それ自体が本番なので、ブランチは実物から分かれます',
-      'cmp.sb1':'Supabase のクラウド','cmp.sb2':'空 — 本番データは入りません','cmp.sb3':'自分でシードを入れます',
-      'cmp.aur1':'AWS、Aurora のみ','cmp.aur2':'元クラスターのページ','cmp.aur3':'新しくしたいならクローンし直し',
-      'cmp.dbl1':'自前のサーバー、任意の Postgres','cmp.dbl2':'最後に取得したコピー','cmp.dbl3':'自前運用なら継続追従。マネージド (RDS) は定期的な全体リフレッシュ',
-      'cmp.sn1':'自前のサーバー、任意の Postgres','cmp.sn2':'選んだスナップショット','cmp.sn3':'論理レプリケーションで継続追従 — マネージドのプライマリも含めて',
+      'cmp.c0':' ','cmp.c1':'本番の行に追従','cmp.c2':'スキーマも追従','cmp.c3':'スナップショット・ブランチ',
+      'cmp.neon1':'はい — 論理レプリケーション','cmp.neon2':'いいえ — 自分で合わせ続ける','cmp.neon3':'はい — <span class="nb">copy-on-write</span> ブランチ',
+      'cmp.sb1':'いいえ — ブランチは本番データ無しで始まる','cmp.sb2':'はい — マイグレーションファイルから','cmp.sb3':'はい、自社クラウドで',
+      'cmp.aur1':'いいえ — クローンは取った時点で固定','cmp.aur2':'はい — クローンに付いてくる、同じストレージ','cmp.aur3':'はい — 15 個まで、その後は完全コピー',
+      'cmp.dbl1':'自己運用なら はい; マネージドは定期的に取り直し','cmp.dbl2':'コピーと一緒に; マネージドは次の完全更新時','cmp.dbl3':'はい — ZFS または LVM のシンクローン',
+      'cmp.sn1':'はい — 論理レプリケーション、マネージドも含む','cmp.sn2':'はい — イベントトリガーが DDL をここで再実行','cmp.sn3':'はい — btrfs <span class="nb">copy-on-write</span>',
       'cmp.title':'違いが実際に効いてくるところ',
       'cmp.t1':'Neon と Supabase のブランチ',
       'cmp.p1':'どちらも優秀で、すでにそこで動いているなら、そちらのブランチ機能を使ってください。あちらのブランチは<em>そのまま</em>自分のデータです。Neon は RDS や Cloud SQL のプライマリを、ホストする代わりに論理レプリケーションで追従することもできます。その場合、2 つが変わります。データが Neon のクラウドに置かれること、そしてスキーマは自分で合わせ続ける必要があることです。公式ガイドがこう求めています。<q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> 次の節はまさにその隙間の話です。',
@@ -1327,11 +1329,11 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.p3':'この中で最も近く、歴史も長く機能も多いです。10 TiB でも 2 秒かかりません。分かれるのはコピーの鮮度の保ち方です。物理モードは <q>is not available for managed cloud Postgres services such as Amazon RDS</q> なので、マネージド相手では定期的に丸ごと取り直します。Snaplicator は論理レプリケーションで購読し、取り直さず追従します。',
       'cmp.sblabel':'Supabase を使っている場合',
       'cmp.sbnote':'あちらのブランチは設計上、本番データを持たずに始まります。そして Supabase は論理レプリケーションの publisher になれます。<code>wal_level</code> はすでに <code>logical</code> です。公式ガイドの注意点が 2 つ — プーラーではなく直接接続の文字列を使うこと、購読側に IPv6 か IPv4 アドオンが要ること。',
-      'cmp.c4':'スキーマ変更',
-      'cmp.neon4':'ブランチに付いてくる — 同じストレージ','cmp.sb4':'マイグレーションファイルから適用',
-      'cmp.aur4':'クローンに付いてくる — 同じストレージ',
-      'cmp.dbl4':'物理モードはコピーと一緒に。マネージドは次の全体リフレッシュまで来ません',
-      'cmp.sn4':'プライマリで捕まえて、こちらで実行し続けます',
+      'cmp.c4':'自社インフラで',
+      'cmp.neon4':'<span class="nb">Apache-2.0</span> だが自己ホストの範囲は実験用','cmp.sb4':'自己ホストは文書化されているがブランチは非対応',
+      'cmp.aur4':'いいえ — AWS Aurora 専用',
+      'cmp.dbl4':'はい',
+      'cmp.sn4':'はい — 自分の持つマシン 1 台',
       'cmp.ddltitle':'スキーマの列が本題です',
       'cmp.ddl1':'Postgres の文書は明快です。<q>The database schema and DDL commands are not replicated.</q> だからマネージドのプライマリに追従するには、たいてい定期的に丸ごと取り直すことになります。さもなければスキーマがずれ、やがてレプリケーションが止まります。',
       'cmp.ddl2':'Snaplicator はイベントトリガーで DDL を捕まえ、同じ publication に載せて送り、レプリカで実行し直します。14:02 に列を追加すれば、レプリカも 14:02 に持ちます。',
