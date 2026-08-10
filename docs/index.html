@@ -180,7 +180,7 @@
             font-weight: 500; color: var(--ink); max-width: 44ch; margin: 0 0 1.5rem;
             text-wrap: balance; }
   .tablewrap { overflow-x: auto; border-top: 1px solid var(--rule); }
-  table.cmp { border-collapse: collapse; width: 100%; min-width: 40rem; font-size: .86rem; }
+  table.cmp { border-collapse: collapse; width: 100%; min-width: 52rem; font-size: .86rem; }
   table.cmp th, table.cmp td { text-align: left; vertical-align: top;
                                padding: .7rem .9rem .7rem 0; border-bottom: 1px solid var(--rule-soft); }
   table.cmp thead th { font-family: var(--mono); font-size: .7rem; letter-spacing: .08em;
@@ -194,6 +194,24 @@
   table.cmp tr.ours { background: var(--t-live-bg); }
   table.cmp em { font-style: italic; }
   .alts q { quotes: '“' '”'; font-style: normal; color: var(--ink); }
+  .ddl { margin-top: clamp(2rem, 4vw, 3rem); max-width: var(--measure); }
+  .ddl p { font-size: .95rem; }
+  .ddl q { quotes: '“' '”'; color: var(--ink); }
+
+  /* Two paths out of one moment. The contrast is the content, so they sit
+     side by side and the one being argued for is the one with the colour. */
+  .scene { margin-top: clamp(2rem, 4vw, 2.75rem); border-top: 2px solid var(--t-mid);
+           background: var(--paper-2); border-radius: 0 0 10px 10px; padding: 1.15rem 1.25rem 1.3rem; }
+  .scene-when { font-family: var(--display); font-weight: 700; font-size: 1.02rem;
+                color: var(--ink); margin: 0 0 1rem; max-width: 46ch; }
+  .scene-paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+                 gap: 1rem 1.6rem; }
+  .path-who { font-family: var(--mono); font-size: .72rem; letter-spacing: .04em;
+              color: var(--ink-3); display: block; margin-bottom: .4rem; }
+  .path.hi .path-who { color: var(--t-live-ink); }
+  .path p { margin: 0; font-size: .89rem; }
+  .path.hi p { color: var(--ink); }
+
   .sources { font-family: var(--mono); font-size: .72rem; color: var(--ink-3);
              margin-top: 1.8rem; line-height: 2; }
   .sources a { color: var(--ink-3); }
@@ -647,6 +665,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
             <th data-i18n="cmp.c1">Runs where</th>
             <th data-i18n="cmp.c2">A copy starts with</th>
             <th data-i18n="cmp.c3">How it stays current</th>
+            <th data-i18n="cmp.c4">Schema changes</th>
           </tr>
         </thead>
         <tbody>
@@ -655,33 +674,68 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
             <td data-i18n="cmp.neon1">Neon&rsquo;s cloud</td>
             <td data-i18n="cmp.neon2">the parent branch, instantly</td>
             <td data-i18n="cmp.neon3">it <em>is</em> your database — branches are of the real thing</td>
+            <td data-i18n="cmp.neon4">come with the branch — same storage</td>
           </tr>
           <tr>
             <th scope="row">Supabase</th>
             <td data-i18n="cmp.sb1">Supabase&rsquo;s cloud</td>
             <td data-i18n="cmp.sb2">nothing — no production data at all</td>
             <td data-i18n="cmp.sb3">you seed it yourself</td>
+            <td data-i18n="cmp.sb4">applied from your migration files</td>
           </tr>
           <tr>
             <th scope="row">Aurora cloning</th>
             <td data-i18n="cmp.aur1">AWS, Aurora only</td>
             <td data-i18n="cmp.aur2">the source cluster&rsquo;s pages</td>
             <td data-i18n="cmp.aur3">clone again for fresher data</td>
+            <td data-i18n="cmp.aur4">come with the clone — same storage</td>
           </tr>
           <tr>
             <th scope="row">DBLab</th>
             <td data-i18n="cmp.dbl1">your hardware, any Postgres</td>
             <td data-i18n="cmp.dbl2">the last retrieved copy</td>
             <td data-i18n="cmp.dbl3">self-managed: continuous. Managed (RDS): periodic full refresh</td>
+            <td data-i18n="cmp.dbl4">physical: with the copy. Managed: only at the next full refresh</td>
           </tr>
           <tr class="ours">
             <th scope="row">Snaplicator</th>
             <td data-i18n="cmp.sn1">your hardware, any Postgres</td>
             <td data-i18n="cmp.sn2">the snapshot you picked</td>
             <td data-i18n="cmp.sn3">logical replication, continuously — managed primaries included</td>
+            <td data-i18n="cmp.sn4">captured on the primary and replayed here, continuously</td>
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <div class="ddl">
+      <h2 data-i18n="cmp.ddltitle">The schema column is the interesting one</h2>
+      <p data-i18n="cmp.ddl1">
+        Postgres is blunt about this: <q>The database schema and DDL commands are not replicated.</q>
+        Logical replication carries rows and nothing else. That is why following a managed primary
+        usually means re-copying it on a schedule — the alternative is a replica whose schema drifts
+        a migration at a time until replication errors out.
+      </p>
+      <p data-i18n="cmp.ddl2">
+        Snaplicator captures DDL on the primary with event triggers, ships it through the same
+        publication as an ordinary table, and replays it on the replica. Add a column at 14:02 and
+        the replica has it at 14:02 — no refresh, no re-dump, no window where the copy has yesterday&rsquo;s
+        schema and today&rsquo;s rows.
+      </p>
+    </div>
+
+    <div class="scene">
+      <p class="scene-when" data-i18n="cmp.when">Production is on Aurora. Something is wrong with the data, and it is wrong now.</p>
+      <div class="scene-paths">
+        <div class="path">
+          <span class="path-who" data-i18n="cmp.path1w">With a copy that refreshes on a schedule</span>
+          <p data-i18n="cmp.path1">The copy you have is as old as the last refresh. To reproduce what is happening you start a fresh dump and restore of a production-sized database, and then you wait — while the incident continues. If a migration shipped this morning, the stale copy has the wrong schema too, so even the reproduction is wrong.</p>
+        </div>
+        <div class="path hi">
+          <span class="path-who" data-i18n="cmp.path2w">With a replica that never stopped following</span>
+          <p data-i18n="cmp.path2">It is already current — rows and schema both. Take a snapshot, make a clone, and you are querying production-shaped data from moments ago. Break it, reset it, break it differently. Nothing you do reaches the primary, and nothing you waited for was a dump.</p>
+        </div>
+      </div>
     </div>
 
     <h2 class="after-figure" data-i18n="cmp.title">Where the differences actually bite</h2>
@@ -713,7 +767,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       <a href="https://neon.com/docs/introduction/branching">Neon branching</a> ·
       <a href="https://supabase.com/docs/guides/deployment/branching">Supabase branching</a> ·
       <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Managing.Clone.html">Aurora cloning</a> ·
-      <a href="https://postgres.ai/docs/dblab-howtos/administration/data">DBLab data sources</a>
+      <a href="https://postgres.ai/docs/dblab-howtos/administration/data">DBLab data sources</a> ·
+      <a href="https://www.postgresql.org/docs/current/logical-replication-restrictions.html">Postgres: logical replication restrictions</a>
     </p>
   </section>
 
@@ -862,6 +917,19 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.p3':'이 중에 가장 가깝고, 더 오래됐고 기능도 더 많습니다. ZFS나 LVM 씬 클론이고 10 TiB를 2초 안에 뜹니다. 갈리는 건 사본을 어떻게 최신으로 유지하느냐입니다. 물리 모드는 프라이머리를 계속 따라가지만 <q>is not available for managed cloud Postgres services such as Amazon RDS</q>이고, 매니지드 상대로는 덤프/복원이라 주기적으로 통째로 다시 받습니다. Snaplicator는 논리 복제로 구독하기 때문에 매니지드 프라이머리도 다시 받는 게 아니라 따라갑니다.',
       'cmp.notlabel':'Snaplicator가 답이 아닌 경우',
       'cmp.not':'프라이머리에 <code>wal_level=logical</code>과 복제 슬롯이 있어야 합니다. 둘 중 하나라도 안 되면 여기서 접으세요. publication에 넣은 것만 복제하니 빼놓은 건 그냥 없습니다. 머신 하나에 풀 하나뿐이고 페일오버가 없어서, 리플리카가 죽으면 잃는 건 클론이지 데이터가 아닙니다. 그리고 이미 Neon이나 Supabase에서 돌고 있다면 그쪽 브랜칭을 쓰세요. 이건 프로덕션이 브랜치 버튼 없는 곳에 있을 때를 위한 물건입니다.',
+      'cmp.c4':'스키마 변경',
+      'cmp.neon4':'브랜치에 딸려 옴 — 같은 스토리지','cmp.sb4':'마이그레이션 파일에서 적용',
+      'cmp.aur4':'클론에 딸려 옴 — 같은 스토리지',
+      'cmp.dbl4':'물리 모드는 사본과 함께. 매니지드는 다음 전체 갱신 때나',
+      'cmp.sn4':'프라이머리에서 잡아서 여기에 계속 다시 실행',
+      'cmp.ddltitle':'스키마 칸이 진짜 볼 곳입니다',
+      'cmp.ddl1':'Postgres 문서가 딱 잘라 말합니다. <q>The database schema and DDL commands are not replicated.</q> 논리 복제는 행만 나릅니다. 그래서 매니지드 프라이머리를 따라가려면 보통 주기적으로 통째로 다시 받는 수밖에 없습니다. 안 그러면 마이그레이션이 하나씩 쌓이면서 리플리카 스키마가 어긋나다가 결국 복제가 터집니다.',
+      'cmp.ddl2':'Snaplicator는 프라이머리에서 이벤트 트리거로 DDL을 잡아, 데이터와 같은 publication에 평범한 테이블 하나로 실어 보내고, 리플리카에서 다시 실행합니다. 14시 02분에 컬럼을 추가하면 리플리카도 14시 02분에 갖습니다. 갱신도, 재덤프도, 어제 스키마에 오늘 행이 얹히는 구간도 없습니다.',
+      'cmp.when':'프로덕션이 Aurora에 있습니다. 데이터가 이상한데, 지금 이상합니다.',
+      'cmp.path1w':'주기적으로 갱신하는 사본이라면',
+      'cmp.path1':'갖고 있는 사본은 마지막 갱신 시점만큼 낡았습니다. 지금 벌어지는 걸 재현하려면 프로덕션 크기 DB를 새로 덤프 떠서 복원하고, 그동안 기다립니다. 장애는 계속되고요. 오늘 아침에 마이그레이션이 나갔다면 그 낡은 사본은 스키마까지 다르니, 재현한 것마저 틀립니다.',
+      'cmp.path2w':'따라가기를 멈춘 적 없는 리플리카라면',
+      'cmp.path2':'이미 최신입니다. 행도 스키마도요. 스냅샷 하나 찍고 클론을 만들면 조금 전 프로덕션과 같은 모양의 데이터에 바로 쿼리를 날립니다. 부수고, 되돌리고, 다르게 또 부수면 됩니다. 무엇을 하든 프라이머리에는 닿지 않고, 기다린 것 중에 덤프는 없습니다.',
       'cmp.srclabel':'확인한 문서:',
       'foot.tag':'Postgres 논리 복제 + btrfs copy-on-write'
     },
@@ -948,6 +1016,19 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.p3':'この中で最も近く、歴史も長く機能も多いです。ZFS か LVM のシンクローンで、10 TiB でも 2 秒かかりません。分かれるのはコピーの鮮度の保ち方です。物理モードはプライマリに継続追従しますが <q>is not available for managed cloud Postgres services such as Amazon RDS</q>。マネージド相手ではダンプとリストアになり、定期的に丸ごと取り直します。Snaplicator は論理レプリケーションで購読するので、マネージドのプライマリも取り直さず追従します。',
       'cmp.notlabel':'Snaplicator が答えにならない場合',
       'cmp.not':'プライマリに <code>wal_level=logical</code> とレプリケーションスロットが必要です。どちらかが無理ならここで諦めてください。publication に入れたものだけを複製するので、外したものは単に存在しません。マシン 1 台にプール 1 つ、フェイルオーバーは無く、レプリカが落ちて失うのはクローンでありデータではありません。そして既に Neon や Supabase で動いているなら、そちらのブランチ機能を使ってください。これは本番がブランチボタンの無い場所にある場合のための道具です。',
+      'cmp.c4':'スキーマ変更',
+      'cmp.neon4':'ブランチに付いてくる — 同じストレージ','cmp.sb4':'マイグレーションファイルから適用',
+      'cmp.aur4':'クローンに付いてくる — 同じストレージ',
+      'cmp.dbl4':'物理モードはコピーと一緒に。マネージドは次の全体リフレッシュまで来ません',
+      'cmp.sn4':'プライマリで捕まえて、こちらで実行し続けます',
+      'cmp.ddltitle':'スキーマの列が本題です',
+      'cmp.ddl1':'Postgres の文書は明快です。<q>The database schema and DDL commands are not replicated.</q> 論理レプリケーションが運ぶのは行だけです。だからマネージドのプライマリに追従するには、たいてい定期的に丸ごと取り直すことになります。さもなければマイグレーションが一つずつ積もってレプリカのスキーマがずれ、やがてレプリケーションが止まります。',
+      'cmp.ddl2':'Snaplicator はプライマリ側でイベントトリガーを使って DDL を捕まえ、データと同じ publication に普通のテーブルとして載せて送り、レプリカで実行し直します。14:02 に列を追加すれば、レプリカも 14:02 に持ちます。リフレッシュも再ダンプも、昨日のスキーマに今日の行が載る区間もありません。',
+      'cmp.when':'本番は Aurora。データがおかしい、しかも今おかしい。',
+      'cmp.path1w':'定期的にリフレッシュするコピーなら',
+      'cmp.path1':'手元のコピーは最後のリフレッシュ時点まで古いままです。今起きていることを再現するには、本番サイズの DB を新たにダンプして復元し、そのあいだ待ちます。障害は続いています。今朝マイグレーションが出ていれば、その古いコピーはスキーマまで違うので、再現したものすら間違っています。',
+      'cmp.path2w':'追従をやめていないレプリカなら',
+      'cmp.path2':'すでに最新です。行もスキーマも。スナップショットを 1 つ取ってクローンを作れば、さっきの本番と同じ形のデータにすぐクエリを投げられます。壊して、戻して、別の壊し方を試す。何をしてもプライマリには届かず、待ったもののなかにダンプはありません。',
       'cmp.srclabel':'参照した資料:',
       'foot.tag':'Postgres 論理レプリケーション + btrfs copy-on-write'
     }
