@@ -206,7 +206,7 @@
 
   /* A figure that opened the view needs air before the prose that explains it. */
   .after-figure { margin-top: clamp(2rem, 4vw, 3rem); }
-  .spine--lead, .cmd--lead { margin-top: 0; }
+  .cmd--lead { margin-top: 0; }
   /* A comparison is genuinely tabular, so it is a table — and it is the one
      shape this page does not already use. Scrolls inside its own box; the
      body never moves sideways. */
@@ -296,120 +296,81 @@
   pre.term .c { color: var(--ink-3); }
   pre.term .s { color: var(--t-mid); }
 
-  /* ── spine ───────────────────────────────────────────────── */
-  /* Not three equal columns — a sequence. Each step is made from the one
-     before it and the last one is the thing you actually use, so the last
-     one is wider. Equal thirds said they were peers; they are not. */
-  .spine { display: grid; grid-template-rows: auto auto 1fr auto auto;
-           grid-template-columns: minmax(0,.9fr) minmax(0,.9fr) minmax(0,1.2fr);
-           border: 1px solid var(--rule); border-radius: 10px; background: var(--paper-2);
-           overflow: hidden; margin-top: 2rem; }
-  .stage { display: grid; grid-row: 1 / span 4; grid-template-rows: subgrid; row-gap: 0;
-           padding: 1.3rem 1.25rem 1.4rem; border-left: 1px solid var(--rule);
-           background: none; text-align: left; font: inherit; color: inherit; cursor: pointer;
-           transition: background .15s; }
-  .stage:first-child { border-left: 0; }
-  .stage:hover { background: var(--paper-3); }
-  .stage[aria-expanded="true"] { background: var(--paper-3); }
-  .tag { font-family: var(--mono); font-size: .68rem; letter-spacing: .12em; text-transform: uppercase;
-         display: inline-flex; align-items: flex-start; gap: .4rem; padding: .18rem .45rem;
-         border-radius: 4px; margin-bottom: .75rem; align-self: start; }
-  .tag .dot { margin-top: .38rem; flex: none; }
-  .tag .dot { width: 7px; height: 7px; border-radius: 50%; }
-  .stage p { font-size: .87rem; margin: 0; line-height: 1.55; align-self: start; }
-  @supports not (grid-template-rows: subgrid) {
-    .stage { display: block; }
-  }
-  .cost { font-family: var(--mono); font-size: .72rem; color: var(--ink-3);
-          margin-top: .85rem; padding-top: .7rem; border-top: 1px dashed var(--rule); }
-  .more { font-size: .87rem; margin-top: .85rem; padding-top: .8rem;
-          border-top: 1px solid var(--rule); color: var(--ink-2); grid-column: 1; }
-  .more[hidden] { display: none; }
-  .s1 .tag { color: var(--t-deep); background: var(--t-deep-bg); } .s1 .dot { background: var(--t-deep); }
-  .s2 .tag { color: var(--t-mid);  background: var(--t-mid-bg); }  .s2 .dot { background: var(--t-mid); }
-  .s3 .tag { color: var(--t-live-ink); background: var(--t-live-bg); } .s3 .dot { background: var(--t-live); }
-  /* ── graph ───────────────────────────────────────────────
-     This row used to be a text line — primary → replica → snapshot
-     → clone — and four words joined by three identical arrows say
-     the four are the same kind of thing, joined the same way. They
-     are not. The first hop is a subscription running continuously
-     over the network; the rest are local and instant. So the first
-     wire is long and moving and the others are short, and the
-     snapshot is drawn as sheets stacked behind each other, because
-     that is what it is: a copy of the replica with nothing running
-     on it. The shape now carries the model the words were left to
-     carry alone. */
-  .graph { grid-row: 5; grid-column: 1/-1; display: flex; align-items: center;
-           margin: 0; padding: 1.6rem 1.25rem 1.15rem; border-top: 1px solid var(--rule); }
-  .g-node { position: relative; flex: 0 1 auto; min-width: 0; text-align: center;
-            border: 1px solid var(--rule); border-radius: 8px; background: var(--paper);
-            padding: .5rem .6rem; }
-  .g-node b { display: block; font-family: var(--mono); font-size: .74rem; font-weight: 600;
-              color: var(--ink); }
-  .g-node em { display: block; font-style: normal; font-size: .62rem; line-height: 1.35;
-               color: var(--ink-3); margin-top: .12rem; }
-  .g-t1 { border-color: color-mix(in srgb, var(--t-deep) 45%, var(--rule)); }
-  .g-t1 b { color: var(--t-deep); }
-  .g-t2 b { color: var(--t-mid); }
-  .g-t3 { border-color: color-mix(in srgb, var(--t-live) 45%, var(--rule)); }
-  .g-t3 b { color: var(--t-live-ink); }
+  /* ── tree ────────────────────────────────────────────────
+     One figure, read top to bottom on a single left-hand spine:
+     primary, then the replica that follows it, then the snapshot
+     drawn as sheets stacked behind each other because that is what
+     it is — a copy with nothing running on it — and then the fan of
+     clones. The three cards that used to sit above this said in
+     prose what the shape says on its own.
 
-  /* the snapshot is the same box, drawn twice more behind itself */
-  .g-stack { border: 0; background: none; padding: 0; margin-right: 9px; }
-  /* --rule-soft on the back sheet vanished on the dark ground; both
-     outlines are --rule, and the offset alone carries the depth. */
-  .g-stack .sheet { position: absolute; inset: 0; border-radius: 8px;
+     The first link is long and its dashes move: it is the only one
+     that never stops. The rest are short, because they are local
+     and instant. --trunk is the x of the whole spine, so every
+     link, the fan trunk and its stubs line up on one axis. */
+  .tree { --trunk: 28px; --stub: 34px; --row: 34px;
+          display: flex; flex-direction: column; align-items: flex-start;
+          margin: 0; padding: 1.5rem 1.35rem 1.4rem;
+          border: 1px solid var(--rule); border-radius: 10px; background: var(--paper-2); }
+
+  .t-node { position: relative; min-width: 15rem;
+            border: 1px solid var(--rule); border-radius: 8px; background: var(--paper);
+            padding: .5rem .7rem; }
+  .t-node b { display: block; font-family: var(--mono); font-size: .76rem; font-weight: 600;
+              color: var(--ink); }
+  .t-node em { display: block; font-style: normal; font-size: .64rem; line-height: 1.4;
+               color: var(--ink-3); margin-top: .1rem; }
+  .t1 { border-color: color-mix(in srgb, var(--t-deep) 45%, var(--rule)); }
+  .t1 b { color: var(--t-deep); }
+  .t2 b { color: var(--t-mid); }
+  .t3 { border-color: color-mix(in srgb, var(--t-live) 45%, var(--rule)); }
+  .t3 b { color: var(--t-live-ink); }
+
+  /* the snapshot: the same box, drawn twice more behind itself.
+     Both outlines are --rule — --rule-soft vanished on the dark ground. */
+  .t-stack { border: 0; background: none; padding: 0; }
+  .t-stack .sheet { position: absolute; inset: 0; border-radius: 8px;
                     border: 1px solid var(--rule); background: var(--paper); }
-  .g-stack .sheet:nth-child(1) { transform: translate(9px, -9px); }
-  .g-stack .sheet:nth-child(2) { transform: translate(4.5px, -4.5px); }
-  .g-face { position: relative; display: block; border-radius: 8px; padding: .5rem .6rem;
+  .t-stack .sheet:nth-child(1) { transform: translate(9px, -9px); }
+  .t-stack .sheet:nth-child(2) { transform: translate(4.5px, -4.5px); }
+  .t-face { position: relative; display: block; border-radius: 8px; padding: .5rem .7rem;
             border: 1px solid color-mix(in srgb, var(--t-mid) 45%, var(--rule));
             background: var(--paper); }
 
-  .g-wire { position: relative; align-self: center; flex: 1 1 auto; min-width: 24px;
-            height: 1px; background: var(--rule); }
-  .g-wire::after { content: ''; position: absolute; right: 0; top: -3px;
-                   border-left: 5px solid var(--rule);
-                   border-top: 3px solid transparent; border-bottom: 3px solid transparent; }
-  .g-wire i { position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%);
-              font-family: var(--mono); font-style: normal; font-size: .58rem;
-              color: var(--ink-3); white-space: nowrap; }
-  /* long, and moving, because it is the only link that never stops */
-  .g-wire--long { flex-grow: 2.6; background-size: 10px 1px; background-repeat: repeat-x;
-                  background-image: repeating-linear-gradient(90deg,
+  .t-link { position: relative; flex: none; width: 1px; height: 30px;
+            margin-left: var(--trunk); background: var(--rule); }
+  .t-link::after { content: ''; position: absolute; left: -3px; bottom: 0;
+                   border-left: 3px solid transparent; border-right: 3px solid transparent;
+                   border-top: 5px solid var(--rule); }
+  .t-link i, .t-fan-label { font-family: var(--mono); font-style: normal; font-size: .6rem;
+                            color: var(--ink-3); white-space: nowrap; }
+  .t-link i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); }
+  .t-link--long { height: 46px;
+                  background-image: repeating-linear-gradient(180deg,
                     var(--t-deep) 0 5px, transparent 5px 10px);
-                  animation: march 1.15s linear infinite; }
-  .g-wire--long::after { border-left-color: var(--t-deep); }
-  @keyframes march { to { background-position: 10px 0; } }
-  @media (prefers-reduced-motion: reduce) { .g-wire--long { animation: none; } }
-  @media (max-width: 760px) {
-    /* The row assignment has to be undone as well as the columns. Left in
-       place, all three cards still claim row 1, and a grid asked for three
-       things in one row invents the columns to hold them — so the stack that
-       was supposed to happen here did not, and three cards shared 375px. */
-    .spine { grid-template-columns: 1fr; grid-template-rows: none; }
-    .stage { display: block; grid-row: auto; grid-template-rows: none;
-             border-left: 0; border-top: 1px solid var(--rule); }
-    .stage:first-child { border-top: 0; }
-    .graph { grid-row: auto; flex-direction: column; align-items: stretch;
-             padding: 1.5rem 1.25rem 1.1rem; }
-    .g-node { text-align: left; }
-    .g-stack { margin-right: 10px; }   /* room for the sheets, which .spine would clip */
-    /* min-width: 24px from the horizontal rule beats width: 1px, which drew
-       the vertical wires as 24px slabs. It has to be reset, not just overridden. */
-    .g-wire { align-self: flex-start; margin-left: 1.4rem;
-              width: 1px; min-width: 0; height: auto; min-height: 32px; flex: none; }
-    .g-wire::after { right: auto; left: -3px; top: auto; bottom: 0;
-                     border-left: 3px solid transparent; border-right: 3px solid transparent;
-                     border-top: 5px solid var(--rule); border-bottom: 0; }
-    .g-wire i { left: 13px; bottom: auto; top: 50%; transform: translateY(-50%); }
-    .g-wire--long { background-size: 1px 10px; background-repeat: repeat-y;
-                    background-image: repeating-linear-gradient(180deg,
-                      var(--t-deep) 0 5px, transparent 5px 10px);
-                    animation-name: march-v; }
-    .g-wire--long::after { border-top-color: var(--t-deep); border-left-color: transparent; }
-    @keyframes march-v { to { background-position: 0 10px; } }
-  }
+                  background-size: 1px 10px; background-repeat: repeat-y;
+                  animation: march-down 1.15s linear infinite; }
+  .t-link--long::after { border-top-color: var(--t-deep); }
+  @keyframes march-down { to { background-position: 0 10px; } }
+  @media (prefers-reduced-motion: reduce) { .t-link--long { animation: none; } }
+
+  /* the fan. The trunk stops at the centre of the last row, which is
+     why the rows have a fixed height: it is the one measurement the
+     trunk cannot read off the content. */
+  .t-fan { position: relative; align-self: stretch;
+           padding-left: calc(var(--trunk) + var(--stub));
+           padding-top: 16px; display: flex; flex-direction: column; gap: 7px; }
+  .t-fan::before { content: ''; position: absolute; left: var(--trunk); top: 0;
+                   bottom: calc(var(--row) / 2); width: 1px; background: var(--rule); }
+  .t-fan-label { position: absolute; left: calc(var(--trunk) + 12px); top: 1px; }
+  .t-fan > .t-node { min-width: 0; width: fit-content; height: var(--row);
+                     display: flex; align-items: center; gap: .6ch; padding: 0 .7rem; }
+  .t-fan > .t-node::before { content: ''; position: absolute; top: 50%;
+                             left: calc(-1 * var(--stub)); width: var(--stub); height: 1px;
+                             background: var(--rule); }
+  .t-fan .port { font-family: var(--mono); font-size: .68rem; color: var(--ink-3); }
+  .t-note { margin: .8rem 0 0 calc(var(--trunk) + var(--stub));
+            font-size: .68rem; color: var(--ink-3); }
 
   /* ── the lab ─────────────────────────────────────────────── */
   /* One containment layer. The outer border used to wrap rows and a verdict
@@ -555,11 +516,10 @@
   <!-- ═══════════════ OVERVIEW ═══════════════ -->
   <section id="overview">
     <p class="kicker" data-i18n="hero.eyebrow">Test DB for AI</p>
-    <h1 data-i18n="hero.title">Give your agent a database it is allowed to break.</h1>
+    <h1 data-i18n="hero.title">Test on production data, as freely as your agent likes.</h1>
     <p class="lead col" style="margin-top:1.3rem" data-i18n="hero.lead">
-      The rows that break a migration only exist in production, and you cannot test there.
-      Snaplicator keeps a replica following your primary and hands out disposable copies of
-      it — seconds to make, almost no disk.
+      On a disposable copy of it — never on the primary itself. Snaplicator keeps a replica
+      following your primary and hands out clones of it: seconds to make, almost no disk.
     </p>
 
     <div class="cmd">
@@ -608,45 +568,27 @@
 
   <!-- ═══════════════ CONCEPTS ═══════════════ -->
   <section id="concepts">
-    <div class="spine spine--lead" id="spine">
-      <button class="stage s1" aria-expanded="false">
-        <span class="tag"><span class="dot"></span><span data-i18n="con.k1">one, always on</span></span>
-        <h3 data-i18n="con.h1">Replica</h3>
-        <p data-i18n="con.p1">A Postgres that subscribes to your primary and keeps following it. You never query it — it exists to be current.</p>
-        <div class="cost" data-i18n="con.c1">costs: one replication slot on the primary</div>
-        <div class="more" hidden data-i18n="con.m1">One per install. Not what you hand an agent — what everything else is cut from. Schema changes replicate here too, so it never drifts out of shape.</div>
-      </button>
-      <button class="stage s2" aria-expanded="false">
-        <span class="tag"><span class="dot"></span><span data-i18n="con.k2">an instant, not a server</span></span>
-        <h3 data-i18n="con.h2">Snapshot</h3>
-        <p data-i18n="con.p2">The replica’s files frozen at an instant. Nothing runs on it, so you cannot connect to a snapshot.</p>
-        <div class="cost" data-i18n="con.c2">costs: O(1) to take · only what later diverges</div>
-        <div class="more" hidden data-i18n="con.m2">The one thing here that is not a database. Its whole value is that a clone can be put back to it.</div>
-      </button>
-      <button class="stage s3" aria-expanded="false">
-        <span class="tag"><span class="dot"></span><span data-i18n="con.k3">as many as you like</span></span>
-        <h3 data-i18n="con.h3">Clone</h3>
-        <p data-i18n="con.p3">A snapshot with Postgres started on top, on its own port. Writable, disposable, and nothing upstream notices.</p>
-        <div class="cost" data-i18n="con.c3">costs: seconds to build · ~0 GB until you write</div>
-        <div class="more" hidden data-i18n="con.m3">This is the connection string your agent gets. It does not follow the primary — a fixed point is what makes a test repeatable.</div>
-      </button>
-      <figure class="graph">
-        <div class="g-node"><b>primary</b><em data-i18n="gr.primary">yours, untouched</em></div>
-        <div class="g-wire g-wire--long"><i data-i18n="gr.e1">logical replication</i></div>
-        <div class="g-node g-t1"><b>replica</b><em data-i18n="gr.replica">always following</em></div>
-        <div class="g-wire"><i data-i18n="gr.e2">freeze</i></div>
-        <div class="g-node g-t2 g-stack">
-          <span class="sheet"></span><span class="sheet"></span>
-          <span class="g-face"><b>snapshot</b><em data-i18n="gr.snapshot">a frozen copy</em></span>
-        </div>
-        <div class="g-wire"><i data-i18n="gr.e3">start</i></div>
-        <div class="g-node g-t3"><b>clone &times;N</b><em data-i18n="gr.clone">writable, disposable</em></div>
-      </figure>
-    </div>
+    <figure class="tree">
+      <div class="t-node"><b>primary</b><em data-i18n="gr.primary">yours, untouched</em></div>
+      <div class="t-link t-link--long"><i data-i18n="gr.e1">logical replication</i></div>
+      <div class="t-node t1"><b>replica</b><em data-i18n="gr.replica">costs one slot on the primary</em></div>
+      <div class="t-link"><i data-i18n="gr.e2">freeze</i></div>
+      <div class="t-node t2 t-stack">
+        <span class="sheet"></span><span class="sheet"></span>
+        <span class="t-face"><b>snapshot</b><em data-i18n="gr.snapshot">O(1), then only what diverges</em></span>
+      </div>
+      <div class="t-fan">
+        <i class="t-fan-label" data-i18n="gr.e3">start</i>
+        <div class="t-node t3"><b>clone</b><span class="port">:5433</span></div>
+        <div class="t-node t3"><b>clone</b><span class="port">:5434</span></div>
+        <div class="t-node t3"><b>clone</b><span class="port">:5435</span></div>
+      </div>
+      <figcaption class="t-note" data-i18n="gr.clone">seconds each, and ~0 GB until you write</figcaption>
+    </figure>
 
     <h2 class="after-figure" data-i18n="con.title">Replica, snapshot, clone</h2>
     <p class="col sub" data-i18n="con.lead">
-      Each is made from the one before it. Select a card for what it costs.
+      Each is made from the one before it, and nothing upstream notices when a clone is destroyed.
     </p>
 
     <div class="lab">
@@ -706,11 +648,13 @@
 
     <div class="subnav">
       <a href="#g1" data-i18n="g.n1">1. Install</a>
-      <a href="#g2" data-i18n="g.n2">2. Choose tables</a>
-      <a href="#g3" data-i18n="g.n3">3. First copy</a>
-      <a href="#g4" data-i18n="g.n4">4. Snapshot</a>
-      <a href="#g5" data-i18n="g.n5">5. Clone</a>
-      <a href="#g6" data-i18n="g.n6">6. Wire up the agent</a>
+      <a href="#g2" data-i18n="g.n2">2. First copy</a>
+      <a href="#g3" data-i18n="g.n3">3. Anonymization</a>
+      <a href="#g4" data-i18n="g.n4">4. Schema</a>
+      <a href="#g5" data-i18n="g.n5">5. Snapshot</a>
+      <a href="#g6" data-i18n="g.n6">6. Clone</a>
+      <a href="#g7" data-i18n="g.n7">7. The agent</a>
+      <a href="#gx" data-i18n="g.n8">Edge cases</a>
     </div>
 
     <ol class="steps">
@@ -725,35 +669,48 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       </div></li>
 
       <li id="g2"><div>
-        <h3 data-i18n="g.h2">Choose what to replicate</h3>
-        <p data-i18n="g.p2">In the UI, with size and row count beside every table. Search narrows the list; the toolbar sets everything matching in one go. Nothing is copied until you say so — pick what your agent actually touches, and add more later.</p>
+        <h3 data-i18n="g.h2">Choose tables, then run the first copy</h3>
+        <p data-i18n="g.p2">In the UI, with size and row count beside every table. Nothing is copied until you say so — pick what your agent actually touches, and add more later.</p>
+        <p style="margin-top:.6rem" data-i18n="g.p2b">The schema is cloned, a subscription is created, and Postgres copies those tables. This is the one slow step and it happens once. After it, the replica streams changes continuously.</p>
       </div></li>
 
       <li id="g3"><div>
-        <h3 data-i18n="g.h3">Run the first copy</h3>
-        <p data-i18n="g.p3">The schema is cloned, a subscription is created, and Postgres copies the selected tables. This is the one slow step and it happens once. After it, the replica streams changes continuously — schema included.</p>
+        <h3 data-i18n="g.h3">Decide what gets scrubbed</h3>
+        <p data-i18n="g.p3">Copy the example to <code>configs/anonymize.sql</code>, or edit it from the UI. It runs inside every clone built from the live replica, before the port is handed out.</p>
+        <pre class="term"><span class="c">cp configs/anonymize-example.sql configs/anonymize.sql</span>
+
+<span class="k">UPDATE</span> user_account <span class="k">SET</span> email = <span class="s">'dev+'</span> || id || <span class="s">'@example.local'</span>;
+<span class="k">UPDATE</span> device_info  <span class="k">SET</span> push_token = <span class="s">'invalid-dev-token'</span>, is_push_enabled = false;</pre>
+        <p style="margin-top:.75rem" data-i18n="g.p3b">If the script fails, the clone is destroyed rather than served — a half-scrubbed copy is never handed to anyone. A clone with no script at all is production data given to whoever asked for it, so the file&rsquo;s absence is reported, not assumed.</p>
+      </div></li>
+
+      <li id="g4"><div>
+        <h3 data-i18n="g.h4">Let the schema follow too</h3>
+        <p data-i18n="g.p4">Logical replication carries rows only. Snaplicator puts event triggers on the primary that write every CREATE, ALTER and DROP into an outbox table — and that table is itself in the publication, so the DDL arrives as ordinary replicated rows and is replayed here.</p>
+        <pre class="term"><span class="k">install_trigger</span>()
+<span class="k">get_trigger_status</span>()</pre>
+        <p style="margin-top:.75rem" data-i18n="g.p4b">A table created on the primary is added to the publication automatically, so it starts replicating without you touching anything. Capture is deliberately wide; what to skip is decided when it is replayed.</p>
       </div></li>
 
       <li class="turn"><p data-i18n="g.lead">Everything above happens once. Everything below, the agent repeats on its own.</p></li>
 
-      <li id="g4"><div>
-        <h3 data-i18n="g.h4">Take a snapshot</h3>
-        <p data-i18n="g.p4">A named instant of the replica, taken in O(1). This is what your agents reset to, so take a fresh one whenever ‘current’ has moved on.</p>
+      <li id="g5"><div>
+        <h3 data-i18n="g.h5">Take a snapshot</h3>
+        <p data-i18n="g.p5">A named instant of the replica, taken in O(1). This is what your agents reset to, so take a fresh one whenever &lsquo;current&rsquo; has moved on.</p>
         <pre class="term"><span class="k">create_snapshot</span>(name: <span class="s">"before-migration-42"</span>)
 <span class="k">list_snapshots</span>()</pre>
       </div></li>
 
-      <li id="g5"><div>
-        <h3 data-i18n="g.h5">Create a clone</h3>
-        <p data-i18n="g.p5">A writable Postgres on its own port, built from that snapshot. The reply carries the connection string — that string is the whole handoff.</p>
+      <li id="g6"><div>
+        <h3 data-i18n="g.h6">Create a clone</h3>
+        <p data-i18n="g.p6">A writable Postgres on its own port, built from that snapshot. The reply carries the connection string — that string is the whole handoff.</p>
         <pre class="term"><span class="k">create_clone</span>(description: <span class="s">"agent-a / migration-42"</span>)
 <span class="c">→ postgres://snaplicator:…@host:5455/appdb</span></pre>
-        <p style="margin-top:.75rem" data-i18n="g.p5b">If the data is sensitive, <code>configs/anonymize.sql</code> runs while the clone is built.</p>
       </div></li>
 
-      <li id="g6"><div>
-        <h3 data-i18n="g.h6">Wire it into the agent</h3>
-        <p data-i18n="g.p6">Register the MCP server and the loop becomes the agent’s own. The <code>clones</code> query parameter scopes which clones it may touch, so a confused agent cannot reset someone else’s.</p>
+      <li id="g7"><div>
+        <h3 data-i18n="g.h7">Wire it into the agent</h3>
+        <p data-i18n="g.p7">Register the MCP server and the loop becomes the agent&rsquo;s own. The <code>clones</code> query parameter scopes which clones it may touch, so a confused agent cannot reset someone else&rsquo;s.</p>
         <pre class="term"><span class="c">// .mcp.json</span>
 {
   <span class="s">"mcpServers"</span>: {
@@ -779,6 +736,30 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
         and swapped in once it is serving, so clients see about half a second.
       </p>
     </div>
+
+    <h2 id="gx" style="margin-top:var(--gap)" data-i18n="g.extitle">Where it can go sideways</h2>
+    <dl class="alts">
+      <div>
+        <dt data-i18n="g.ex1t">A clone made from a snapshot is not anonymized</dt>
+        <dd data-i18n="g.ex1">The script runs only on clones spawned from the live replica. One taken from an existing snapshot skips it — scrub that clone yourself before it leaves your hands.</dd>
+      </div>
+      <div>
+        <dt data-i18n="g.ex2t">CREATE INDEX CONCURRENTLY</dt>
+        <dd data-i18n="g.ex2">It cannot run inside the apply worker&rsquo;s transaction, so it is queued to <code>_snaplicator_ddl_deferred</code> and run outside it rather than failing.</dd>
+      </div>
+      <div>
+        <dt data-i18n="g.ex3t">A DDL statement that fails here</dt>
+        <dd data-i18n="g.ex3">It is written to <code>_snaplicator_ddl_failures</code> and left there — not retried, not patched over. A schema you can see is wrong beats one that looks right and is not.</dd>
+      </div>
+      <div>
+        <dt data-i18n="g.ex4t">Schema changes made before you installed</dt>
+        <dd data-i18n="g.ex4">A watermark stops anything older than the trigger install from being replayed. The schema is cloned once at setup and the triggers take it from there.</dd>
+      </div>
+      <div>
+        <dt data-i18n="g.ex5t">Knowing it is actually keeping up</dt>
+        <dd data-i18n="g.ex5"><code>configs/replication_check.sql</code> runs on both the primary and the replica and the two results are compared. It is forced read-only: writes and DDL are rejected on save, and it executes inside a READ ONLY transaction.</dd>
+      </div>
+    </dl>
   </section>
 
   <!-- ═══════════════ COMPARE ═══════════════ -->
@@ -978,12 +959,46 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
      than two that can drift. The other languages are overlays. */
   var DICT = {
     ko: {
-      'gr.primary':'원본, 그대로','gr.replica':'계속 따라감','gr.snapshot':'얼려 둔 사본','gr.clone':'쓰기 가능, 버려도 됨',
+      'g.title':'아무것도 없는 상태에서 에이전트 전용 DB까지',
+      'g.n1':'1. 설치','g.n2':'2. 초기 복제','g.n3':'3. 익명화','g.n4':'4. 스키마',
+      'g.n5':'5. 스냅샷','g.n6':'6. 클론','g.n7':'7. 에이전트','g.n8':'예외 케이스',
+      'g.h1':'설치하고 프라이머리 지정하기',
+      'g.p1':'btrfs 풀을 잡고 관리 서버를 띄운 다음 UI를 엽니다. 프롬프트에는 접속 URI를 넣으면 되고, 그 DB에서는 읽기만 합니다. 붙일 DB가 없으면 <code>demo</code>라고 답하세요.',
+      'g.h2':'테이블 고르고 첫 복사 돌리기',
+      'g.p2':'UI에서 테이블마다 용량과 행 수를 보면서 고릅니다. 고르기 전까지는 아무것도 복사하지 않습니다. 에이전트가 실제로 건드리는 것만 고르고, 나중에 더 넣으세요.',
+      'g.p2b':'스키마를 복제하고 구독을 만든 다음, 고른 테이블을 복사합니다. 오래 걸리는 단계는 여기 하나뿐이고 처음 한 번만 겪습니다. 끝나면 그때부터는 변경분이 계속 흘러들어옵니다.',
+      'g.h3':'무엇을 지울지 정하기',
+      'g.p3':'예제를 <code>configs/anonymize.sql</code>로 복사하거나 UI에서 편집하세요. 살아 있는 리플리카에서 만드는 모든 클론 안에서, 포트를 넘겨주기 전에 돌아갑니다.',
+      'g.p3b':'스크립트가 실패하면 클론을 넘기지 않고 없애 버립니다. 반만 지워진 사본이 누구 손에도 가지 않게요. 스크립트가 아예 없는 클론은 프로덕션 데이터를 그대로 건네는 것이라, 파일이 없다는 사실을 넘겨짚지 않고 알려 줍니다.',
+      'g.h4':'스키마도 따라오게 하기',
+      'g.p4':'논리 복제는 행만 나릅니다. Snaplicator는 프라이머리에 이벤트 트리거를 걸어 CREATE·ALTER·DROP을 전부 아웃박스 테이블에 적고, 그 테이블 자체를 publication에 넣습니다. 그래서 DDL이 평범한 복제 행으로 도착해 여기서 다시 실행됩니다.',
+      'g.p4b':'프라이머리에 테이블을 만들면 publication에 자동으로 들어가서, 손대지 않아도 복제가 시작됩니다. 캡처는 일부러 넓게 잡고, 무엇을 건너뛸지는 다시 실행할 때 정합니다.',
+      'g.lead':'여기까지는 한 번만 하면 됩니다. 아래부터는 에이전트가 알아서 반복합니다.',
+      'g.h5':'스냅샷 찍기',
+      'g.p5':'리플리카에 이름을 붙여 그 시점을 남깁니다. O(1)이라 순식간입니다. 에이전트가 돌아올 자리이니, 데이터가 밀렸다 싶으면 새로 찍으세요.',
+      'g.h6':'클론 만들기',
+      'g.p6':'그 스냅샷에서 만든, 자기 포트를 가진 쓰기 가능한 Postgres입니다. 응답에 접속 문자열이 오는데, 넘길 건 그거 하나면 됩니다.',
+      'g.h7':'에이전트에 물리기',
+      'g.p7':'MCP 서버를 등록하면 이 루프가 에이전트 것이 됩니다. <code>clones</code> 파라미터로 건드릴 수 있는 클론을 정해 두면, 헷갈린 에이전트가 남의 클론을 되돌릴 수 없습니다.',
+      'g.tiplabel':'클론을 최신으로 유지하기',
+      'g.tip':'클론은 한 시점에 멈춰 있고, 그 덕분에 테스트가 매번 같은 결과를 냅니다. 더 최신이 필요하면 스냅샷을 새로 찍고 <code>refresh_clone</code>을 쓰세요. 새것을 옆에 만들어 두고 바꿔치기하기 때문에 끊기는 건 0.5초 남짓입니다.',
+      'g.extitle':'어긋날 수 있는 곳',
+      'g.ex1t':'스냅샷에서 만든 클론은 익명화되지 않습니다',
+      'g.ex1':'스크립트는 살아 있는 리플리카에서 만드는 클론에서만 돕니다. 이미 있는 스냅샷에서 뜬 클론은 건너뛰니, 그 클론이 남의 손에 가기 전에 직접 지우세요.',
+      'g.ex2t':'CREATE INDEX CONCURRENTLY',
+      'g.ex2':'적용 워커의 트랜잭션 안에서는 실행할 수 없습니다. 그래서 실패하는 대신 <code>_snaplicator_ddl_deferred</code>에 넣어 두고 트랜잭션 밖에서 돌립니다.',
+      'g.ex3t':'여기서 실패한 DDL',
+      'g.ex3':'<code>_snaplicator_ddl_failures</code>에 적어 두고 그대로 둡니다. 다시 시도하지도, 몰래 메우지도 않습니다. 틀린 게 보이는 스키마가, 맞아 보이는데 아닌 스키마보다 낫습니다.',
+      'g.ex4t':'설치 전에 있었던 스키마 변경',
+      'g.ex4':'워터마크가 트리거 설치보다 오래된 것은 다시 실행하지 않게 막습니다. 스키마는 설치할 때 한 번 통째로 복제하고, 그 뒤는 트리거가 이어받습니다.',
+      'g.ex5t':'정말 따라오고 있는지 확인하기',
+      'g.ex5':'<code>configs/replication_check.sql</code>을 프라이머리와 리플리카 양쪽에서 돌려 결과를 맞춰 봅니다. 읽기 전용이 강제됩니다. 저장할 때 쓰기와 DDL은 거부되고, 실행도 READ ONLY 트랜잭션 안에서 됩니다.',
+      'gr.primary':'원본, 그대로','gr.replica':'프라이머리의 복제 슬롯 하나','gr.snapshot':'O(1) · 그 뒤로 달라진 만큼만','gr.clone':'하나에 몇 초 · 쓰기 전까지 약 0 GB',
       'gr.e1':'논리 복제','gr.e2':'얼리기','gr.e3':'띄우기',
       'common.copy':'복사',
       'hero.eyebrow':'AI를 위한 테스트 DB',
-      'hero.title':'에이전트가 마음껏 망가뜨려도 되는 데이터베이스.',
-      'hero.lead':'마이그레이션을 깨뜨리는 행은 프로덕션에만 있는데, 거기서 테스트할 수는 없습니다. Snaplicator는 리플리카 한 대를 프라이머리에 붙여 두고, 거기서 버려도 되는 복사본을 떠 줍니다. 만드는 데 몇 초, 디스크는 거의 안 씁니다.',
+      'hero.title':'에이전트와 함께, 프로덕션 데이터로 마음껏 테스트하세요.',
+      'hero.lead':'프로덕션 자체가 아니라 버려도 되는 사본에서요. Snaplicator는 리플리카 한 대를 프라이머리에 붙여 두고, 거기서 클론을 떠 줍니다. 만드는 데 몇 초, 디스크는 거의 안 씁니다.',
       'hero.macnote':'macOS에서는 sudo를 빼세요. 리눅스 머신부터 만듭니다.',
       'loop.title':'에이전트가 실제로 하는 일',
       'loop.w1':'에이전트','loop.b1':'클론을 하나 뜹니다. 몇 초면 되고, 남한테 영향 갈 일도 없습니다.',
@@ -996,19 +1011,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'why.t2':'덤프 복원','why.p2':'정확하지만 DB가 클수록 오래 걸립니다. 기다려야 하는 초기화는 결국 안 쓰게 됩니다.',
       'why.t3':'시드 픽스처','why.p3':'빠르고 깔끔한데 정작 버그가 재현되지 않습니다. 아무도 예상 못 한 NULL은 팩토리가 아니라 프로덕션에 있으니까요.',
       'con.title':'리플리카, 스냅샷, 클론',
-      'con.lead':'셋은 앞의 것에서 차례로 만들어집니다. 카드를 누르면 각각 뭐가 드는지 나옵니다.',
-      'con.k1':'하나, 항상 켜짐','con.h1':'리플리카',
-      'con.p1':'프라이머리를 구독해서 계속 따라가는 Postgres입니다. 여기에 직접 쿼리하지 않습니다. 늘 최신이기만 하면 되는 자리입니다.',
-      'con.c1':'드는 것: 프라이머리의 복제 슬롯 하나',
-      'con.m1':'설치 하나에 딱 하나. 에이전트한테 건네는 게 아니라 나머지를 전부 여기서 떠 갑니다. 스키마 변경도 같이 따라오니 모양이 어긋날 일이 없습니다.',
-      'con.k2':'서버가 아니라 한 시점','con.h2':'스냅샷',
-      'con.p2':'리플리카의 파일을 그 시점 그대로 얼려 둔 것입니다. 떠 있는 프로세스가 없어서 접속할 수 없습니다.',
-      'con.c2':'드는 것: 뜨는 데 O(1) · 그 뒤로 달라진 만큼만',
-      'con.m2':'셋 중에 데이터베이스가 아닌 건 이것뿐입니다. 클론을 이 시점으로 되돌릴 수 있다는 게 전부입니다.',
-      'con.k3':'원하는 만큼','con.h3':'클론',
-      'con.p3':'스냅샷 위에 Postgres를 띄운 것으로, 자기 포트를 가집니다. 쓰기가 되고, 버려도 되고, 원본은 아무 영향 없습니다.',
-      'con.c3':'드는 것: 만드는 데 몇 초 · 쓰기 전까지 약 0 GB',
-      'con.m3':'에이전트한테 넘기는 접속 문자열이 이겁니다. 프라이머리를 따라가지 않고 한 시점에 멈춰 있어서 테스트 결과가 매번 같습니다.',
+      'con.lead':'셋은 앞의 것에서 차례로 만들어집니다. 클론을 부숴도 위쪽은 아무 영향이 없습니다.',
       'lab.title':'Copy-on-write, 직접 만져 보기',
       'lab.hint':'예시 수치입니다 · 기준 300 GB',
       'lab.intro':'클론은 자기가 나온 스냅샷과 블록을 그대로 같이 쓰고, 바뀐 부분만 새로 잡습니다.',
@@ -1018,32 +1021,21 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.verdict0':'클론을 만들어서 차이를 보세요.',
       'con.notelabel':'이게 되는 이유',
       'con.note':'풀이 btrfs라서 그렇습니다. Snaplicator가 부리는 재주가 아닙니다. 300 GB 리플리카에서 클론 10개를 떠도 300 GB에 그 10개가 쓴 만큼만 더해집니다.',
-      'g.title':'아무것도 없는 상태에서 에이전트 전용 DB까지',
-      'g.lead':'여기까지는 한 번만 하면 됩니다. 아래부터는 에이전트가 알아서 반복합니다.',
-      'g.n1':'1. 설치','g.n2':'2. 테이블 고르기','g.n3':'3. 초기 복제','g.n4':'4. 스냅샷','g.n5':'5. 클론','g.n6':'6. 에이전트 연결',
-      'g.h1':'설치하고 프라이머리 지정하기',
-      'g.p1':'btrfs 풀을 잡고 관리 서버를 띄운 다음 UI를 엽니다. 프롬프트에는 접속 URI를 넣으면 되고, 그 DB에서는 읽기만 합니다. 붙일 DB가 없으면 <code>demo</code>라고 답하세요.',
-      'g.h2':'무엇을 복제할지 고르기',
-      'g.p2':'UI에서 테이블마다 용량과 행 수를 보면서 고릅니다. 검색으로 좁힌 다음 툴바를 누르면 걸린 것 전부가 한 번에 설정됩니다. 고르기 전까지는 아무것도 복사하지 않습니다. 에이전트가 실제로 건드리는 것만 고르고, 나중에 더 넣으세요.',
-      
-      'g.h3':'초기 복제 돌리기',
-      'g.p3':'스키마를 복제하고 구독을 만든 다음, 고른 테이블을 복사합니다. 오래 걸리는 단계는 여기 하나뿐이고 처음 한 번만 겪습니다. 끝나면 그때부터는 스키마 변경까지 계속 따라옵니다.',
-      'g.h4':'스냅샷 찍기',
-      'g.p4':'리플리카에 이름을 붙여 그 시점을 남깁니다. O(1)이라 순식간입니다. 에이전트가 돌아올 자리이니, 데이터가 밀렸다 싶으면 새로 찍으세요.',
-      'g.h5':'클론 만들기',
-      'g.p5':'그 스냅샷에서 만든, 자기 포트를 가진 쓰기 가능한 Postgres입니다. 응답에 접속 문자열이 오는데, 넘길 건 그거 하나면 됩니다.',
-      'g.p5b':'민감한 데이터라면 클론을 만드는 동안 <code>configs/anonymize.sql</code>이 돌아갑니다.',
-      'g.h6':'에이전트에 물리기',
-      'g.p6':'MCP 서버를 등록하면 이 루프가 에이전트 것이 됩니다. <code>clones</code> 파라미터로 건드릴 수 있는 클론을 정해 두면, 헷갈린 에이전트가 남의 클론을 되돌릴 수 없습니다.',
-      'g.tiplabel':'클론을 최신으로 유지하기',
-      'g.tip':'클론은 한 시점에 멈춰 있고, 그 덕분에 테스트가 매번 같은 결과를 냅니다. 더 최신이 필요하면 스냅샷을 새로 찍고 <code>refresh_clone</code>을 쓰세요. 새것을 옆에 만들어 두고 바꿔치기하기 때문에 끊기는 건 0.5초 남짓입니다.',
+
+
+
+
+
+
+
+
+
       'i.title':'한 줄, 그다음은 UI',
       'i.lead':'설치 프로그램이 btrfs 풀 자리를 찾아 잡고, 관리 서버를 띄운 다음, 무엇을 복제할지 고르는 화면에서 멈춥니다.',
       'i.n1':'리눅스용입니다. Docker가 있어야 하고 btrfs-progs, postgresql-client, compose 플러그인은 없으면 알아서 깔아 줍니다.',
       'i.h2':'macOS','i.n2':'btrfs는 리눅스 커널 파일시스템이라 여기에는 깔 데가 없습니다. 설치 프로그램이 OrbStack으로 리눅스 머신을 만들자고 제안합니다.',
       'i.orblabel':'OrbStack에 예라고 답하기 전에',
       'i.orb':'OrbStack 무료 사용은 <strong>개인·비상업적 용도에 한합니다</strong>. 회사 노트북이라면 유료 좌석이 필요합니다(<a href="https://orbstack.dev/pricing">요금</a>). 설치 프로그램이 먼저 알려 주고, 기본 답은 아니오입니다. OrbStack에 묶인 건 없습니다. Colima, Lima, UTM, 아무 리눅스 서버든 똑같이 됩니다.',
-
       'i.h3':'붙일 DB가 없다면?','i.n3':'샘플 publisher를 만들어 전체가 어떻게 도는지 먼저 볼 수 있게 합니다.',
       'i.rerunlabel':'다시 실행할 때','i.rerun':'재실행이 곧 업그레이드입니다. 두 번째 실행에서 없어지는 건 없습니다. 이미 있는 걸 열지, 두 번째 설치를 옆에 만들지 물어봅니다.',
       'lab.verdict':'디스크 <b>{saved}</b> 덜 씁니다 · 클론 {n}개 · {x}배 차이',
@@ -1090,12 +1082,46 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'foot.tag':'Postgres 논리 복제 + btrfs copy-on-write'
     },
     ja: {
-      'gr.primary':'本番はそのまま','gr.replica':'追従し続ける','gr.snapshot':'凍結した複製','gr.clone':'書き込み可・使い捨て',
+      'g.title':'ゼロから、エージェント専用 DB まで',
+      'g.n1':'1. インストール','g.n2':'2. 初回コピー','g.n3':'3. 匿名化','g.n4':'4. スキーマ',
+      'g.n5':'5. スナップショット','g.n6':'6. クローン','g.n7':'7. エージェント','g.n8':'例外ケース',
+      'g.h1':'インストールしてプライマリを指定する',
+      'g.p1':'btrfs プールを用意し、管理プレーンを起動し、UI を開きます。プロンプトには接続 URI を — その DB からは読むだけです。無ければ <code>demo</code> と答えてください。',
+      'g.h2':'テーブルを選び、初回コピーを走らせる',
+      'g.p2':'UI で、各テーブルの容量と行数を見ながら選びます。指示するまで何もコピーしません。エージェントが実際に触れるものだけ選び、後から追加してください。',
+      'g.p2b':'スキーマを複製し、サブスクリプションを作り、選んだテーブルをコピーします。唯一の遅い工程で、一度きりです。完了後は変更が流れ込み続けます。',
+      'g.h3':'何を消すかを決める',
+      'g.p3':'例を <code>configs/anonymize.sql</code> にコピーするか、UI で編集してください。稼働中のレプリカから作るすべてのクローンの中で、ポートを渡す前に実行されます。',
+      'g.p3b':'スクリプトが失敗した場合、クローンは渡されずに破棄されます。中途半端に消えたコピーが誰の手にも渡らないようにです。スクリプトが無いクローンは本番データをそのまま渡すことなので、ファイルが無いことは推測せず報告します。',
+      'g.h4':'スキーマも追従させる',
+      'g.p4':'論理レプリケーションが運ぶのは行だけです。Snaplicator はプライマリにイベントトリガーを置き、CREATE・ALTER・DROP をすべてアウトボックステーブルに書き、そのテーブル自体を publication に入れます。だから DDL は普通の複製行として届き、ここで実行し直されます。',
+      'g.p4b':'プライマリでテーブルを作れば自動で publication に入り、何もしなくても複製が始まります。捕捉は意図的に広く取り、何を飛ばすかは実行し直すときに決めます。',
+      'g.lead':'ここまでは一度きりです。ここから先は、エージェントが自分で繰り返します。',
+      'g.h5':'スナップショットを取る',
+      'g.p5':'レプリカの名前付きの瞬間を O(1) で残します。エージェントが戻る地点なので、データが進んだら取り直してください。',
+      'g.h6':'クローンを作る',
+      'g.p6':'そのスナップショットから作られた、専用ポートを持つ書き込み可能な Postgres です。応答に接続文字列が入っており、渡すのはそれだけです。',
+      'g.h7':'エージェントにつなぐ',
+      'g.p7':'MCP サーバーを登録すれば、ループはエージェント自身のものになります。<code>clones</code> パラメータで触れるクローンを限定すれば、混乱したエージェントが他人のクローンを戻すことはありません。',
+      'g.tiplabel':'クローンを最新に保つ',
+      'g.tip':'クローンは一点に止まり、だからこそテストが再現可能です。新しいデータが要るときは新しいスナップショットを取り <code>refresh_clone</code> を使います。置き換えは隣に作ってから切り替わるので、断は 0.5 秒ほどです。',
+      'g.extitle':'ずれが起きうるところ',
+      'g.ex1t':'スナップショットから作ったクローンは匿名化されません',
+      'g.ex1':'スクリプトは稼働中のレプリカから作るクローンでのみ走ります。既存のスナップショットから取ったクローンは飛ばすので、人手に渡る前に自分で消してください。',
+      'g.ex2t':'CREATE INDEX CONCURRENTLY',
+      'g.ex2':'適用ワーカーのトランザクション内では実行できません。そこで失敗させる代わりに <code>_snaplicator_ddl_deferred</code> に積み、トランザクションの外で実行します。',
+      'g.ex3t':'ここで失敗した DDL',
+      'g.ex3':'<code>_snaplicator_ddl_failures</code> に記録して、そのままにします。再試行も、こっそり埋め合わせもしません。間違いが見えるスキーマのほうが、正しく見えて実は違うスキーマよりましです。',
+      'g.ex4t':'インストール前にあったスキーマ変更',
+      'g.ex4':'ウォーターマークが、トリガー設置より古いものの再実行を止めます。スキーマは設置時に一度まるごと複製し、その後はトリガーが引き継ぎます。',
+      'g.ex5t':'本当に追従しているかを確かめる',
+      'g.ex5':'<code>configs/replication_check.sql</code> をプライマリとレプリカの両方で実行し、結果を突き合わせます。読み取り専用が強制され、保存時に書き込みと DDL は拒否され、実行も READ ONLY トランザクション内で行われます。',
+      'gr.primary':'本番はそのまま','gr.replica':'プライマリのスロット 1 つ','gr.snapshot':'O(1) · 以後は差分だけ','gr.clone':'1 つ数秒 · 書き込むまで約 0 GB',
       'gr.e1':'論理レプリケーション','gr.e2':'凍結','gr.e3':'起動',
       'common.copy':'コピー',
       'hero.eyebrow':'AI のためのテスト DB',
-      'hero.title':'エージェントが壊してもいいデータベースを。',
-      'hero.lead':'マイグレーションを壊す行は本番にしか無く、そこでは試せません。Snaplicator はレプリカ 1 台をプライマリに追従させ続け、その使い捨てコピーを配ります。作成は数秒、ディスクはほぼゼロです。',
+      'hero.title':'エージェントと一緒に、本番データで思いきりテストを。',
+      'hero.lead':'本番そのものではなく、使い捨てのコピーの上で。Snaplicator はレプリカ 1 台をプライマリに追従させ続け、そこからクローンを配ります。作成は数秒、ディスクはほぼゼロです。',
       'hero.macnote':'macOS では sudo 不要 — まず Linux マシンを作ります。','loop.title':'エージェントが実際にやること',
       'loop.w1':'エージェント','loop.b1':'クローンを 1 つ取ります。数秒で、誰にも影響しません。',
       'loop.w2':'エージェント','loop.b2':'マイグレーションを実行。間違った列を削除。WHERE なしで DELETE。',
@@ -1106,19 +1132,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'why.t1':'共有ステージング DB','why.p1':'あるエージェントの失敗したマイグレーションが、他の全エージェントの不安定なテストになります。',
       'why.t2':'ダンプのリストア','why.p2':'正確ですが、データベースが大きいほど時間がかかります。待たされるリセットは、結局使われません。',
       'why.t3':'シードフィクスチャ','why.p3':'速くて綺麗ですが、バグを再現しません。誰も想定しなかった NULL は、ファクトリではなく本番にあります。','con.title':'レプリカ、スナップショット、クローン',
-      'con.lead':'それぞれ 1 つ前のものから作られます。カードを選ぶとコストが見えます。',
-      'con.k1':'1 つ、常時稼働','con.h1':'レプリカ',
-      'con.p1':'プライマリを購読して追従し続ける Postgres です。ここに直接クエリはしません。最新であることが存在理由です。',
-      'con.c1':'コスト: プライマリのレプリケーションスロット 1 つ',
-      'con.m1':'インストールごとに 1 つ。エージェントに渡すものではなく、他のすべてを切り出す元です。スキーマ変更も追従するので形がずれません。',
-      'con.k2':'サーバーではなく瞬間','con.h2':'スナップショット',
-      'con.p2':'レプリカのファイルをある時点で凍結したものです。動いているものが無く、接続できません。',
-      'con.c2':'コスト: 取得は O(1) · 以後に差分が出た分だけ',
-      'con.m2':'ここで唯一データベースでないものです。クローンをその時点へ戻せる、それがすべてです。',
-      'con.k3':'いくつでも','con.h3':'クローン',
-      'con.p3':'スナップショットの上に Postgres を起動したもので、専用ポートを持ちます。書き込み可、使い捨て、上流には影響しません。',
-      'con.c3':'コスト: 作成は数秒 · 書き込むまで約 0 GB',
-      'con.m3':'エージェントが受け取る接続文字列はこれです。プライマリに追従せず一点に止まるので、テストの結果が毎回同じになります。',
+      'con.lead':'それぞれ 1 つ前のものから作られます。クローンを壊しても上流は何も起きません。',
       'lab.title':'Copy-on-write を手元で',
       'lab.hint':'説明用モデル — ベース 300 GB',
       'lab.intro':'クローンは元のスナップショットと全ブロックを共有し、変更した分だけ確保します。',
@@ -1127,30 +1141,20 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.empty':'クローンなし — レプリカのみ',
       'lab.verdict0':'クローンを追加して差を確かめてください。',
       'con.notelabel':'これを成り立たせているもの',
-      'con.note':'プールが btrfs だからで、Snaplicator の小細工ではありません。300 GB のレプリカのクローン 10 個は、300 GB + その 10 個が書いた分です。','g.title':'ゼロから、エージェント専用 DB まで',
-      'g.lead':'ここまでは一度きりです。ここから先は、エージェントが自分で繰り返します。',
-      'g.n1':'1. インストール','g.n2':'2. テーブル選択','g.n3':'3. 初回コピー','g.n4':'4. スナップショット','g.n5':'5. クローン','g.n6':'6. エージェント連携',
-      'g.h1':'インストールしてプライマリを指定',
-      'g.p1':'btrfs プールを用意し、管理プレーンを起動し、UI を開きます。プロンプトには接続 URI を — その DB からは読むだけです。無ければ <code>demo</code> と答えてください。',
-      'g.h2':'複製対象を選ぶ',
-      'g.p2':'UI で、各テーブルの容量と行数を見ながら選びます。検索で絞れば、ツールバーから一致するもの全部を一度に設定できます。指示するまで何もコピーしません。エージェントが実際に触れるものだけ選び、後から追加してください。',
-      
-      'g.h3':'初回コピーを実行',
-      'g.p3':'スキーマを複製し、サブスクリプションを作り、選択したテーブルをコピーします。唯一の遅い工程で、一度きりです。完了後はスキーマ変更を含めて流れ込み続けます。',
-      'g.h4':'スナップショットを取る',
-      'g.p4':'レプリカの名前付きの瞬間を O(1) で残します。エージェントが戻る地点なので、データが進んだら取り直してください。',
-      'g.h5':'クローンを作る',
-      'g.p5':'そのスナップショットから作られた、専用ポートを持つ書き込み可能な Postgres です。応答に接続文字列が入っており、渡すのはそれだけです。',
-      'g.p5b':'機微なデータなら、クローン構築中に <code>configs/anonymize.sql</code> が走ります。',
-      'g.h6':'エージェントに組み込む',
-      'g.p6':'MCP サーバーを登録すれば、ループはエージェント自身のものになります。<code>clones</code> パラメータで触れるクローンを限定すれば、混乱したエージェントが他人のクローンを戻すことはありません。',
-      'g.tiplabel':'クローンを新しく保つ',
-      'g.tip':'クローンは一点に止まり、だからこそテストが再現可能です。新しいデータが要るときは新しいスナップショットを取り <code>refresh_clone</code> を使います。置き換えは隣に作ってから切り替わるので、断は 0.5 秒ほどです。','i.title':'一行、そして UI',
+      'con.note':'プールが btrfs だからで、Snaplicator の小細工ではありません。300 GB のレプリカのクローン 10 個は、300 GB + その 10 個が書いた分です。',
+
+
+
+
+
+
+
+
+      'i.title':'一行、そして UI',
       'i.lead':'インストーラーが btrfs プールの置き場所を用意し、管理プレーンを起動し、複製対象を選ぶ画面で止まります。','i.n1':'Docker が必要です。btrfs-progs、postgresql-client、compose プラグインは無ければ追加されます。',
       'i.h2':'macOS','i.n2':'btrfs は Linux カーネルのファイルシステムなので、ここには入れる先がありません。インストーラーが OrbStack で Linux マシンを作ることを提案します。',
       'i.orblabel':'OrbStack に「はい」と答える前に',
       'i.orb':'OrbStack の無料利用は<strong>個人の非商用に限られます</strong>。会社の端末なら有料ライセンスが必要です(<a href="https://orbstack.dev/pricing">価格</a>)。インストーラーは先にこれを伝え、既定は「いいえ」です。OrbStack 依存はありません。Colima、Lima、UTM、任意の Linux マシンで同じように動きます。',
-
       'i.h3':'つなぐ DB が無い場合','i.n3':'サンプルの publisher を作り、まず全体の動きを見られるようにします。',
       'i.rerunlabel':'再実行するとき','i.rerun':'再実行がそのままアップグレードです。2 回目で壊れるものはありません。既にあるものを開くか、2 つ目のインストールを隣に作るかを尋ねます。',
       'lab.verdict':'<b>{saved}</b> 未割り当て · クローン {n} 個 · ディスク {x} 分の 1',
@@ -1255,16 +1259,6 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
   });
 
   /* ── concept cards ─────────────────────────────────────── */
-  document.getElementById('spine').addEventListener('click', function (e) {
-    var s = e.target.closest('.stage');
-    if (!s) return;
-    var open = s.getAttribute('aria-expanded') === 'true';
-    [].forEach.call(this.querySelectorAll('.stage'), function (o) {
-      o.setAttribute('aria-expanded', 'false');
-      o.querySelector('.more').hidden = true;
-    });
-    if (!open) { s.setAttribute('aria-expanded', 'true'); s.querySelector('.more').hidden = false; }
-  });
 
   /* ── copy buttons ──────────────────────────────────────── */
   document.addEventListener('click', function (e) {
