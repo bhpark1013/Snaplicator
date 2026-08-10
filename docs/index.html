@@ -9,10 +9,10 @@
 <meta property="og:title" content="Snaplicator — a test database your agent is allowed to break">
 <meta property="og:description" content="Production-shaped Postgres for AI agents. Clones take seconds and almost no disk; reset to a snapshot when the agent breaks it.">
 <meta property="og:type" content="website">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%233faf8c'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23157f5a'/></svg>">
 <style>
   /* Hallmark · macrostructure: Workbench · nav: N8 terminal-command · footer: Ft2 inline
-   * genre: modern-minimal · theme: custom (tone-on-tone, one hue ~160°)
+   * genre: modern-minimal · theme: custom (warm paper 45°, accents 159-168°)
    * display: Space Grotesk (self-hosted latin subset) · body: system sans · data: system mono
    * enrichment: none — the copy-on-write lab is the artifact, not decoration
    */
@@ -35,32 +35,39 @@
   body { margin: 0; }
   h1, h2, h3, p, ol, ul, pre, figure { margin: 0; }
   button { font: inherit; }
-  /* ── tone on tone ─────────────────────────────────────────
-     One hue family (~168°) carries everything: the neutrals are
-     biased into it rather than being grey, and the three concepts
-     are three lightness steps of the same hue rather than three
-     different colours. They still have to be told apart — that is
-     what the steps are for — but nothing on the page is a
-     different colour from anything else. */
+  /* ── warm paper, tone-on-tone accents ─────────────────────
+     Tone on tone belongs to the accents, not to the canvas. Tinting
+     the paper and the ink into the accent hue too turned every
+     surface faintly green, which is what made the page look unwell:
+     nothing was neutral for the colour to be read against.
+     So the ground goes back to warm paper (hue 45°) with cool
+     neutral ink (220°) — a real off-white, the way paper is — and
+     the three concepts stay one family, 159–168°, told apart by
+     lightness. One accent hue on a neutral ground; that is the
+     whole scheme. */
   :root {
-    --paper:     #f5f7f6;
-    --paper-2:   #eaefec;
-    --paper-3:   #e0e7e3;
-    --ink:       #101a17;
-    --ink-2:     #384c46;
-    --ink-3:     #5a6f68;
-    --rule:      #cfdad5;
-    --rule-soft: #e0e7e3;
+    --paper:     #f6f5f2;
+    --paper-2:   #ecebe6;
+    --paper-3:   #e4e2da;
+    --ink:       #16181c;
+    --ink-2:     #3d434d;
+    --ink-3:     #5f6672;   /* the original #6b7280 sat at 4.43 on this paper */
+    --rule:      #d3d2cb;
+    --rule-soft: #e2e1db;
 
-    --t-deep:  #1f5449;   /* replica  */
-    --t-mid:   #276f5d;   /* snapshot */
-    --t-live:  #3faf8c;   /* clone — fills, dots, bars      */
-    --t-live-ink: #28795f; /* clone — the same step, as text */
+    --t-deep:  #1f5449;    /* replica  · 168° */
+    --t-mid:   #276f5d;    /* snapshot · 165° */
+    --t-live:  #157f5a;    /* clone    · 159° — fills, dots, bars */
+    --t-live-ink: #146b4d; /* clone as small text: 5.94 : 1       */
     --t-deep-bg: #1f544912;
-    --t-mid-bg:  #2f857012;
-    --t-live-bg: #3faf8c14;
+    --t-mid-bg:  #276f5d12;
+    --t-live-bg: #157f5a14;
 
-    --measure: 66ch;
+    /* The column is now sized to the measure, so prose does not need a second
+       cap 11px short of it — a near-miss reads as a mistake where a real
+       difference would read as a choice. Display lines still get their own
+       shorter caps in ch, where being short is the point. */
+    --measure: 100%;
     --gap: clamp(3rem, 6vw, 5rem);
     --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Pretendard, 'Apple SD Gothic Neo',
             'Hiragino Sans', 'Noto Sans JP', system-ui, sans-serif;
@@ -73,26 +80,26 @@
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --paper: #0c1211; --paper-2: #121a18; --paper-3: #18231f;
-      --ink: #e6edea; --ink-2: #adbfb9; --ink-3: #7b8f89;
-      --rule: #24322d; --rule-soft: #1a2421;
-      --t-deep: #4b8d7d; --t-mid: #5fb69a; --t-live: #79dcb6; --t-live-ink: #79dcb6;
-      --t-deep-bg: #4b8d7d1c; --t-mid-bg: #5fb69a1c; --t-live-bg: #79dcb61f;
+      --paper: #101216; --paper-2: #171a20; --paper-3: #1e222a;
+      --ink: #e9eaec; --ink-2: #b3b8c0; --ink-3: #848b96;
+      --rule: #2a2e36; --rule-soft: #21252c;
+      --t-deep: #4b8d7d; --t-mid: #5fb69a; --t-live: #4fbf92; --t-live-ink: #6fd0ab;
+      --t-deep-bg: #4b8d7d1c; --t-mid-bg: #5fb69a1c; --t-live-bg: #4fbf921f;
     }
   }
   :root[data-theme="dark"] {
-    --paper: #0c1211; --paper-2: #121a18; --paper-3: #18231f;
-    --ink: #e6edea; --ink-2: #adbfb9; --ink-3: #7b8f89;
-    --rule: #24322d; --rule-soft: #1a2421;
-    --t-deep: #4b8d7d; --t-mid: #5fb69a; --t-live: #79dcb6; --t-live-ink: #79dcb6;
-    --t-deep-bg: #4b8d7d1c; --t-mid-bg: #5fb69a1c; --t-live-bg: #79dcb61f;
+    --paper: #101216; --paper-2: #171a20; --paper-3: #1e222a;
+    --ink: #e9eaec; --ink-2: #b3b8c0; --ink-3: #848b96;
+    --rule: #2a2e36; --rule-soft: #21252c;
+    --t-deep: #4b8d7d; --t-mid: #5fb69a; --t-live: #4fbf92; --t-live-ink: #6fd0ab;
+    --t-deep-bg: #4b8d7d1c; --t-mid-bg: #5fb69a1c; --t-live-bg: #4fbf921f;
   }
   :root[data-theme="light"] {
-    --paper: #f5f7f6; --paper-2: #eaefec; --paper-3: #e0e7e3;
-    --ink: #101a17; --ink-2: #384c46; --ink-3: #5a6f68;
-    --rule: #cfdad5; --rule-soft: #e0e7e3;
-    --t-deep: #1f5449; --t-mid: #276f5d; --t-live: #3faf8c; --t-live-ink: #28795f;
-    --t-deep-bg: #1f544912; --t-mid-bg: #2f857012; --t-live-bg: #3faf8c14;
+    --paper: #f6f5f2; --paper-2: #ecebe6; --paper-3: #e4e2da;
+    --ink: #16181c; --ink-2: #3d434d; --ink-3: #5f6672;
+    --rule: #d3d2cb; --rule-soft: #e2e1db;
+    --t-deep: #1f5449; --t-mid: #276f5d; --t-live: #157f5a; --t-live-ink: #146b4d;
+    --t-deep-bg: #1f544912; --t-mid-bg: #276f5d12; --t-live-bg: #157f5a14;
   }
 
   body {
@@ -100,7 +107,12 @@
     font-family: var(--sans); font-size: 16px; line-height: 1.65;
     -webkit-font-smoothing: antialiased;
   }
-  .wrap { max-width: 72rem; margin: 0 auto; padding: 0 clamp(1.15rem, 4vw, 3rem); }
+  /* One column, one width. The page had six different right edges — prose at
+     66ch, the loop at 50rem, commands at 46rem, the run-in list at the measure,
+     the h1 at the full wrap, the footer wider still — all sharing a left edge
+     and none sharing a right one. Every block now fills the column and the
+     column is the measure, so there is exactly one of each. */
+  .wrap { max-width: 52rem; margin: 0 auto; padding: 0 clamp(1.15rem, 4vw, 3rem); }
   .col { max-width: var(--measure); }
 
   /* ── header / menu ───────────────────────────────────────── */
@@ -136,7 +148,7 @@
            animation: blink 1.05s steps(2) infinite; }
   @keyframes blink { 50% { opacity: 0 } }
 
-  .langs { display: flex; gap: .1rem; border: 1px solid var(--rule); border-radius: 6px; padding: .12rem; }
+  .langs { display: flex; gap: .1rem; margin-left: auto; border: 1px solid var(--rule); border-radius: 6px; padding: .12rem; }
   .langs button {
     font-family: var(--mono); font-size: .7rem; padding: .22rem .45rem;
     border: 0; border-radius: 4px; background: none; color: var(--ink-3); cursor: pointer;
@@ -183,7 +195,7 @@
             font-weight: 500; color: var(--ink); max-width: 44ch; margin: 0 0 1.5rem;
             text-wrap: balance; }
   .tablewrap { overflow-x: auto; border-top: 1px solid var(--rule); }
-  table.cmp { border-collapse: collapse; width: 100%; min-width: 52rem; font-size: .86rem; }
+  table.cmp { border-collapse: collapse; width: 100%; min-width: 46rem; font-size: .86rem; }
   table.cmp th, table.cmp td { text-align: left; vertical-align: top;
                                padding: .7rem .9rem .7rem 0; border-bottom: 1px solid var(--rule-soft); }
   table.cmp thead th { font-family: var(--mono); font-size: .7rem; letter-spacing: .08em;
@@ -197,7 +209,7 @@
   table.cmp tr.ours { background: var(--t-live-bg); }
   table.cmp em { font-style: italic; }
   .alts q { quotes: '“' '”'; font-style: normal; color: var(--ink); }
-  .ddl { margin-top: clamp(2rem, 4vw, 3rem); max-width: var(--measure); }
+  .ddl { margin-top: clamp(2rem, 4vw, 3rem); }
   .ddl p { font-size: .95rem; }
   .ddl q { quotes: '“' '”'; color: var(--ink); }
 
@@ -207,7 +219,7 @@
            background: var(--paper-2); border-radius: 0 0 10px 10px; padding: 1.15rem 1.25rem 1.3rem; }
   .scene-when { font-family: var(--display); font-weight: 700; font-size: 1.02rem;
                 color: var(--ink); margin: 0 0 1rem; max-width: 46ch; }
-  .scene-paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+  .scene-paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
                  gap: 1rem 1.6rem; }
   .path-who { font-family: var(--mono); font-size: .72rem; letter-spacing: .04em;
               color: var(--ink-3); display: block; margin-bottom: .4rem; }
@@ -229,11 +241,19 @@
 
   /* ── command line ────────────────────────────────────────── */
   .cmd { display: flex; border: 1px solid var(--rule); border-radius: 8px;
-         background: var(--paper-2); overflow: hidden; max-width: min(46rem, 100%); margin-top: 1.4rem; }
+         background: var(--paper-2); overflow: hidden; margin-top: 1.4rem; }
   .cmd .p { font-family: var(--mono); font-size: .8rem; display: flex; align-items: center;
             padding: 0 .8rem; color: var(--ink-3); border-right: 1px solid var(--rule); }
+  /* The command is longer than the column and the copy button is right there,
+     so this is scrolled rather than read to the end. A scrollbar drawn inside
+     a rounded frame just looks broken; a fade at the edge says the same thing
+     and takes no height. */
   .cmd .l { font-family: var(--mono); font-size: .8rem; padding: .8rem .95rem; flex: 1;
-            min-width: 0; overflow-x: auto; white-space: nowrap; }
+            min-width: 0; overflow-x: auto; white-space: nowrap;
+            scrollbar-width: none;
+            -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent); }
+  .cmd .l::-webkit-scrollbar { display: none; }
   .cmd button.copy {
     white-space: nowrap; border: 0; border-left: 1px solid var(--rule); background: none; cursor: pointer;
     font-family: var(--mono); font-size: .7rem; color: var(--ink-3); padding: 0 .8rem;
@@ -245,7 +265,13 @@
     font-family: var(--mono); font-size: .78rem; line-height: 1.7;
     background: var(--paper-2); border: 1px solid var(--rule); border-radius: 8px;
     padding: .95rem 1.1rem; overflow-x: auto; color: var(--ink-2);
-    max-width: min(46rem, 100%); margin: 1.2rem 0 0; white-space: pre;
+    margin: 1.2rem 0 0;
+    /* Wrapped, not scrolled. In the hero the command is there to be copied, so
+       a fade is fine; in the guide it is there to be read, and a line clipped
+       mid-URL hides the part someone came for. Continuations are indented so a
+       wrap still reads as one command. */
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    padding-left: 2.4rem; text-indent: -1.3rem;
   }
   pre.term .k { color: var(--t-live-ink); }
   pre.term .c { color: var(--ink-3); }
@@ -255,35 +281,47 @@
   /* Not three equal columns — a sequence. Each step is made from the one
      before it and the last one is the thing you actually use, so the last
      one is wider. Equal thirds said they were peers; they are not. */
-  .spine { display: grid; grid-template-columns: minmax(0,.82fr) minmax(0,.82fr) minmax(0,1.36fr);
+  .spine { display: grid; grid-template-rows: auto auto 1fr auto auto;
+           grid-template-columns: minmax(0,.9fr) minmax(0,.9fr) minmax(0,1.2fr);
            border: 1px solid var(--rule); border-radius: 10px; background: var(--paper-2);
            overflow: hidden; margin-top: 2rem; }
-  .stage { padding: 1.3rem 1.25rem 1.4rem; border-left: 1px solid var(--rule);
+  .stage { display: grid; grid-row: 1 / span 4; grid-template-rows: subgrid; row-gap: 0;
+           padding: 1.3rem 1.25rem 1.4rem; border-left: 1px solid var(--rule);
            background: none; text-align: left; font: inherit; color: inherit; cursor: pointer;
            transition: background .15s; }
   .stage:first-child { border-left: 0; }
   .stage:hover { background: var(--paper-3); }
   .stage[aria-expanded="true"] { background: var(--paper-3); }
   .tag { font-family: var(--mono); font-size: .68rem; letter-spacing: .12em; text-transform: uppercase;
-         display: inline-flex; align-items: center; gap: .4rem; padding: .18rem .45rem;
-         border-radius: 4px; margin-bottom: .75rem; }
+         display: inline-flex; align-items: flex-start; gap: .4rem; padding: .18rem .45rem;
+         border-radius: 4px; margin-bottom: .75rem; align-self: start; }
+  .tag .dot { margin-top: .38rem; flex: none; }
   .tag .dot { width: 7px; height: 7px; border-radius: 50%; }
-  .stage p { font-size: .87rem; margin: 0; line-height: 1.55; }
+  .stage p { font-size: .87rem; margin: 0; line-height: 1.55; align-self: start; }
+  @supports not (grid-template-rows: subgrid) {
+    .stage { display: block; }
+  }
   .cost { font-family: var(--mono); font-size: .72rem; color: var(--ink-3);
           margin-top: .85rem; padding-top: .7rem; border-top: 1px dashed var(--rule); }
   .more { font-size: .87rem; margin-top: .85rem; padding-top: .8rem;
-          border-top: 1px solid var(--rule); color: var(--ink-2); }
+          border-top: 1px solid var(--rule); color: var(--ink-2); grid-column: 1; }
   .more[hidden] { display: none; }
   .s1 .tag { color: var(--t-deep); background: var(--t-deep-bg); } .s1 .dot { background: var(--t-deep); }
   .s2 .tag { color: var(--t-mid);  background: var(--t-mid-bg); }  .s2 .dot { background: var(--t-mid); }
   .s3 .tag { color: var(--t-live-ink); background: var(--t-live-bg); } .s3 .dot { background: var(--t-live); }
-  .flow { grid-column: 1/-1; display: flex; align-items: center; gap: .55rem; flex-wrap: wrap;
+  .flow { grid-row: 5; grid-column: 1/-1; display: flex; align-items: center; gap: .55rem; flex-wrap: wrap;
           font-family: var(--mono); font-size: .76rem; color: var(--ink-3);
           padding: .75rem 1.25rem; border-top: 1px solid var(--rule); }
   @media (max-width: 760px) {
-    .spine { grid-template-columns: 1fr; }
-    .stage { border-left: 0; border-top: 1px solid var(--rule); }
+    /* The row assignment has to be undone as well as the columns. Left in
+       place, all three cards still claim row 1, and a grid asked for three
+       things in one row invents the columns to hold them — so the stack that
+       was supposed to happen here did not, and three cards shared 375px. */
+    .spine { grid-template-columns: 1fr; grid-template-rows: none; }
+    .stage { display: block; grid-row: auto; grid-template-rows: none;
+             border-left: 0; border-top: 1px solid var(--rule); }
     .stage:first-child { border-top: 0; }
+    .flow { grid-row: auto; }
   }
 
   /* ── the lab ─────────────────────────────────────────────── */
@@ -343,7 +381,7 @@
   .verdict b { color: var(--t-live-ink); }
 
   /* ── steps / loop / notes ────────────────────────────────── */
-  .steps { list-style: none; padding: 0; margin: 1.6rem 0 0; counter-reset: s; max-width: var(--measure); }
+  .steps { list-style: none; padding: 0; margin: 1.6rem 0 0; counter-reset: s; }
   /* minmax(0,1fr), not 1fr: a grid track's automatic minimum is its content's
      min-content width, and a <pre> that scrolls internally still reports the
      width of its longest line. Left as 1fr the track refuses to shrink and
@@ -365,12 +403,12 @@
   .steps p { margin: 0; font-size: .93rem; }
   .steps pre.term { margin-top: .8rem; }
 
-  .note { border-left: 2px solid var(--t-mid); padding-left: 1rem; margin-top: 1.7rem; max-width: var(--measure); }
+  .note { border-left: 2px solid var(--t-mid); padding-left: 1rem; margin-top: 1.7rem; }
   .note .label { font-family: var(--mono); font-size: .68rem; letter-spacing: .12em;
                  text-transform: uppercase; color: var(--t-mid); display: block; margin-bottom: .25rem; }
   .note p { margin: 0; font-size: .91rem; }
 
-  .loop { display: grid; margin-top: 1.6rem; max-width: 50rem; }
+  .loop { display: grid; margin-top: 1.6rem; }
   .beat { display: grid; grid-template-columns: 8.5rem 1fr; gap: 1.1rem;
           padding: .85rem 0; border-top: 1px solid var(--rule-soft); align-items: baseline; }
   .beat:first-child { border-top: 0; }
@@ -383,7 +421,7 @@
   /* Was three equal cards — the same 3-up the concepts diagram already
      uses. Run-in heads in a ruled list instead: same content, and the page
      stops repeating its own shape. */
-  .alts { margin: 1.4rem 0 0; max-width: var(--measure); }
+  .alts { margin: 1.4rem 0 0; }
   .alts > div { padding: .9rem 0; border-top: 1px solid var(--rule-soft); }
   .alts > div:first-child { border-top: 0; padding-top: .2rem; }
   .alts dt { font-family: var(--display); font-weight: 700; font-size: .97rem;
@@ -455,7 +493,7 @@
         <div class="beat"><span class="who" data-i18n="loop.w4">Agent</span>
           <p data-i18n="loop.b4">Tries the next version. The loop is seconds long, so being wrong is cheap.</p></div>
       </div>
-      <p style="margin-top:1.5rem;max-width:var(--measure)" data-i18n="loop.mcp">
+      <p style="margin-top:1.5rem" data-i18n="loop.mcp">
         It drives this itself. Snaplicator ships an MCP server, so creating, resetting and
         dropping clones are tools the agent calls — not steps you perform for it.
       </p>
@@ -925,6 +963,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.verdict':'디스크 <b>{saved}</b> 덜 씁니다 · 클론 {n}개 · {x}배 차이',
       'lab.notesnap':'기준 {base} GB + 클론 {n}개가 쓴 {w}',
       'lab.notenaive':'{base} GB × {n}',
+      'lab.resetShort':'되돌리기','lab.deleteShort':'삭제',
       'lab.a11yWrite':'clone-{n}에 {w} GB 쓰기',
       'lab.a11yReset':'스냅샷으로 되돌리기',
       'lab.a11yResetN':'clone-{n}을 스냅샷으로 되돌리기',
@@ -1029,6 +1068,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.verdict':'<b>{saved}</b> 未割り当て · クローン {n} 個 · ディスク {x} 分の 1',
       'lab.notesnap':'ベース {base} GB + クローン {n} 個が書いた {w}',
       'lab.notenaive':'{base} GB × {n}',
+      'lab.resetShort':'戻す','lab.deleteShort':'削除',
       'lab.a11yWrite':'clone-{n} に {w} GB 書き込む',
       'lab.a11yReset':'スナップショットへ戻す',
       'lab.a11yResetN':'clone-{n} をスナップショットへ戻す',
@@ -1191,14 +1231,16 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       w.setAttribute('aria-label', fill(t('lab.a11yWrite', 'Write {w} GB in clone-{n}'), { w: WRITE, n: c.n }));
       w.onclick = function () { c.written += WRITE; render(); };
       var r = document.createElement('button');
-      r.className = 'btn mini'; r.textContent = '⟲';
+      /* Was ⟲ (U+27F2), which the monospace fallback has no glyph for — it
+         drew a box. Words are wider and better: they say what they do. */
+      r.className = 'btn mini'; r.textContent = t('lab.resetShort', 'reset');
       /* Glyph-only, so the name has to be supplied — otherwise a screen
          reader announces the character and nothing else. */
       r.title = t('lab.a11yReset', 'Reset to snapshot');
       r.setAttribute('aria-label', fill(t('lab.a11yResetN', 'Reset clone-{n} to the snapshot'), { n: c.n }));
       r.onclick = function () { c.written = 0; render(); };
       var d = document.createElement('button');
-      d.className = 'btn mini'; d.textContent = '✕';
+      d.className = 'btn mini'; d.textContent = t('lab.deleteShort', 'delete');
       d.title = t('lab.a11yDelete', 'Delete clone');
       d.setAttribute('aria-label', fill(t('lab.a11yDeleteN', 'Delete clone-{n}'), { n: c.n }));
       d.onclick = function () { clones = clones.filter(function (x) { return x !== c; }); render(); };
