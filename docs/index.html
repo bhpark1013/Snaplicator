@@ -147,6 +147,7 @@
   #overview { padding-block: clamp(2.5rem, 6vw, 4.5rem) calc(var(--gap) + 1rem); }
   #concepts { padding-block: clamp(1.75rem, 4vw, 2.75rem) var(--gap); }
   #guide    { padding-block: clamp(2rem, 5vw, 3.5rem) var(--gap); }
+  #compare  { padding-block: clamp(1.75rem, 4vw, 2.75rem) var(--gap); }
   #install  { padding-block: clamp(1.75rem, 4vw, 2.75rem) clamp(2.5rem, 5vw, 3.5rem); }
   main > section.active { display: block; animation: fade .2s ease backwards; }
   @keyframes fade { from { opacity: 0 } }
@@ -172,6 +173,31 @@
   /* A figure that opened the view needs air before the prose that explains it. */
   .after-figure { margin-top: clamp(2rem, 4vw, 3rem); }
   .spine--lead, .cmd--lead { margin-top: 0; }
+  /* A comparison is genuinely tabular, so it is a table — and it is the one
+     shape this page does not already use. Scrolls inside its own box; the
+     body never moves sideways. */
+  .thesis { font-family: var(--display); font-size: clamp(1.05rem, 2.2vw, 1.3rem);
+            font-weight: 500; color: var(--ink); max-width: 44ch; margin: 0 0 1.5rem;
+            text-wrap: balance; }
+  .tablewrap { overflow-x: auto; border-top: 1px solid var(--rule); }
+  table.cmp { border-collapse: collapse; width: 100%; min-width: 40rem; font-size: .86rem; }
+  table.cmp th, table.cmp td { text-align: left; vertical-align: top;
+                               padding: .7rem .9rem .7rem 0; border-bottom: 1px solid var(--rule-soft); }
+  table.cmp thead th { font-family: var(--mono); font-size: .7rem; letter-spacing: .08em;
+                       text-transform: uppercase; color: var(--ink-3); font-weight: 400;
+                       padding-top: .55rem; padding-bottom: .55rem; }
+  table.cmp tbody th { font-family: var(--display); font-weight: 700; white-space: nowrap;
+                       padding-right: 1.4rem; color: var(--ink); }
+  table.cmp td { color: var(--ink-2); }
+  table.cmp tr.ours th { color: var(--t-live-ink); }
+  table.cmp tr.ours td { color: var(--ink); }
+  table.cmp tr.ours { background: var(--t-live-bg); }
+  table.cmp em { font-style: italic; }
+  .alts q { quotes: '“' '”'; font-style: normal; color: var(--ink); }
+  .sources { font-family: var(--mono); font-size: .72rem; color: var(--ink-3);
+             margin-top: 1.8rem; line-height: 2; }
+  .sources a { color: var(--ink-3); }
+  .sources a:hover { color: var(--t-live-ink); }
   .subnav { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 2rem; }
   .subnav a {
     font-family: var(--mono); font-size: .74rem; color: var(--ink-3);
@@ -363,6 +389,7 @@
         <button data-view="overview" data-i18n="nav.overview">--overview</button>
         <button data-view="concepts" data-i18n="nav.concepts">--concepts</button>
         <button data-view="guide"    data-i18n="nav.guide">--guide</button>
+        <button data-view="compare"  data-i18n="nav.compare">--compare</button>
         <button data-view="install"  data-i18n="nav.install">--install</button>
       </nav>
       <span class="caret" aria-hidden="true">▮</span>
@@ -606,6 +633,90 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
     </div>
   </section>
 
+  <!-- ═══════════════ COMPARE ═══════════════ -->
+  <section id="compare">
+    <p class="thesis" data-i18n="cmp.thesis">
+      All of these do copy-on-write. What differs is where your data has to live for it to work.
+    </p>
+
+    <div class="tablewrap">
+      <table class="cmp">
+        <thead>
+          <tr>
+            <th data-i18n="cmp.c0">&nbsp;</th>
+            <th data-i18n="cmp.c1">Runs where</th>
+            <th data-i18n="cmp.c2">A copy starts with</th>
+            <th data-i18n="cmp.c3">How it stays current</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">Neon</th>
+            <td data-i18n="cmp.neon1">Neon&rsquo;s cloud</td>
+            <td data-i18n="cmp.neon2">the parent branch, instantly</td>
+            <td data-i18n="cmp.neon3">it <em>is</em> your database — branches are of the real thing</td>
+          </tr>
+          <tr>
+            <th scope="row">Supabase</th>
+            <td data-i18n="cmp.sb1">Supabase&rsquo;s cloud</td>
+            <td data-i18n="cmp.sb2">nothing — no production data at all</td>
+            <td data-i18n="cmp.sb3">you seed it yourself</td>
+          </tr>
+          <tr>
+            <th scope="row">Aurora cloning</th>
+            <td data-i18n="cmp.aur1">AWS, Aurora only</td>
+            <td data-i18n="cmp.aur2">the source cluster&rsquo;s pages</td>
+            <td data-i18n="cmp.aur3">clone again for fresher data</td>
+          </tr>
+          <tr>
+            <th scope="row">DBLab</th>
+            <td data-i18n="cmp.dbl1">your hardware, any Postgres</td>
+            <td data-i18n="cmp.dbl2">the last retrieved copy</td>
+            <td data-i18n="cmp.dbl3">self-managed: continuous. Managed (RDS): periodic full refresh</td>
+          </tr>
+          <tr class="ours">
+            <th scope="row">Snaplicator</th>
+            <td data-i18n="cmp.sn1">your hardware, any Postgres</td>
+            <td data-i18n="cmp.sn2">the snapshot you picked</td>
+            <td data-i18n="cmp.sn3">logical replication, continuously — managed primaries included</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 class="after-figure" data-i18n="cmp.title">Where the differences actually bite</h2>
+
+    <dl class="alts">
+      <div>
+        <dt data-i18n="cmp.t1">Neon and Supabase branching</dt>
+        <dd data-i18n="cmp.p1">Both are excellent, and both assume you already run on them. If production is RDS, Cloud SQL, or a machine you own, neither is a route to a test copy of it — you would be migrating your database, not cloning it. Supabase draws the line explicitly: <q>New branches do not start with any data from your main project.</q></dd>
+      </div>
+      <div>
+        <dt data-i18n="cmp.t2">Aurora fast cloning</dt>
+        <dd data-i18n="cmp.p2">Copy-on-write at the storage layer, and genuinely fast — but a clone is a DB cluster, and a cluster needs at least one instance, so every clone bills compute for as long as it exists. AWS also caps it: <q>You can create up to 15 clones with copy-on-write protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora only, not plain RDS Postgres.</dd>
+      </div>
+      <div>
+        <dt data-i18n="cmp.t3">DBLab (Postgres.ai)</dt>
+        <dd data-i18n="cmp.p3">The closest thing to this, older and more capable — ZFS or LVM thin clones, and it will clone 10 TiB in under two seconds. The difference is how the copy keeps up. Its physical mode follows a primary continuously but <q>is not available for managed cloud Postgres services such as Amazon RDS</q>; against those you use dump/restore, which is a periodic full refresh. Snaplicator subscribes over logical replication instead, so a managed primary is followed rather than re-copied.</dd>
+      </div>
+    </dl>
+
+    <div class="note">
+      <span class="label" data-i18n="cmp.notlabel">When Snaplicator is the wrong answer</span>
+      <p data-i18n="cmp.not">
+        It needs <code>wal_level=logical</code> and a replication slot on your primary — if you cannot have either, stop here. It replicates what you put in a publication, so anything you left out simply is not there. It is one machine with one pool and no failover; the replica going down costs you clones, not data. And if you already run on Neon or Supabase, use their branching. This exists for the case where production lives somewhere that has no branch button.
+      </p>
+    </div>
+
+    <p class="sources">
+      <span data-i18n="cmp.srclabel">Checked against:</span>
+      <a href="https://neon.com/docs/introduction/branching">Neon branching</a> ·
+      <a href="https://supabase.com/docs/guides/deployment/branching">Supabase branching</a> ·
+      <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Managing.Clone.html">Aurora cloning</a> ·
+      <a href="https://postgres.ai/docs/dblab-howtos/administration/data">DBLab data sources</a>
+    </p>
+  </section>
+
   <!-- ═══════════════ INSTALL ═══════════════ -->
   <section id="install">
     <div class="cmd cmd--lead">
@@ -735,6 +846,23 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.a11yResetN':'clone-{n}을 스냅샷으로 되돌리기',
       'lab.a11yDelete':'클론 삭제',
       'lab.a11yDeleteN':'clone-{n} 삭제',
+      'cmp.thesis':'여기 있는 것들은 전부 copy-on-write를 씁니다. 다른 건 그게 되려면 데이터가 어디에 있어야 하느냐입니다.',
+      'cmp.c0':' ','cmp.c1':'어디서 도나','cmp.c2':'복사본의 시작 상태','cmp.c3':'최신을 어떻게 따라가나',
+      'cmp.neon1':'Neon 클라우드','cmp.neon2':'부모 브랜치 그대로, 즉시','cmp.neon3':'그게 곧 내 DB라서, 브랜치가 실물에서 갈라져 나옵니다',
+      'cmp.sb1':'Supabase 클라우드','cmp.sb2':'아무것도 없음 — 프로덕션 데이터 0','cmp.sb3':'직접 시드를 넣어야 합니다',
+      'cmp.aur1':'AWS, Aurora만','cmp.aur2':'원본 클러스터의 페이지','cmp.aur3':'더 최신이 필요하면 다시 클론',
+      'cmp.dbl1':'내 서버, 아무 Postgres나','cmp.dbl2':'마지막으로 받아 둔 사본','cmp.dbl3':'직접 운영 중이면 계속 따라감. 매니지드(RDS)는 주기적 전체 갱신',
+      'cmp.sn1':'내 서버, 아무 Postgres나','cmp.sn2':'내가 고른 스냅샷','cmp.sn3':'논리 복제로 계속 따라감 — 매니지드 프라이머리 포함',
+      'cmp.title':'차이가 실제로 갈리는 지점',
+      'cmp.t1':'Neon과 Supabase 브랜칭',
+      'cmp.p1':'둘 다 훌륭한데, 둘 다 이미 거기서 돌고 있다는 걸 전제합니다. 프로덕션이 RDS나 Cloud SQL이거나 직접 굴리는 서버에 있으면 이건 테스트 사본을 만드는 길이 아니라 데이터베이스를 이사시키는 일이 됩니다. Supabase는 아예 못을 박아 뒀습니다. <q>New branches do not start with any data from your main project.</q>',
+      'cmp.t2':'Aurora 패스트 클로닝',
+      'cmp.p2':'스토리지 계층의 copy-on-write이고 실제로 빠릅니다. 다만 클론 하나가 DB 클러스터 하나고 클러스터에는 인스턴스가 최소 하나 붙어야 해서, 살려 두는 내내 컴퓨트 요금이 나갑니다. 개수 제한도 있습니다. <q>You can create up to 15 clones with copy-on-write protocol. After you have 15 clones, the next clone that you create is a full copy.</q> 그리고 Aurora 전용이라 일반 RDS Postgres는 안 됩니다.',
+      'cmp.t3':'DBLab (Postgres.ai)',
+      'cmp.p3':'이 중에 가장 가깝고, 더 오래됐고 기능도 더 많습니다. ZFS나 LVM 씬 클론이고 10 TiB를 2초 안에 뜹니다. 갈리는 건 사본을 어떻게 최신으로 유지하느냐입니다. 물리 모드는 프라이머리를 계속 따라가지만 <q>is not available for managed cloud Postgres services such as Amazon RDS</q>이고, 매니지드 상대로는 덤프/복원이라 주기적으로 통째로 다시 받습니다. Snaplicator는 논리 복제로 구독하기 때문에 매니지드 프라이머리도 다시 받는 게 아니라 따라갑니다.',
+      'cmp.notlabel':'Snaplicator가 답이 아닌 경우',
+      'cmp.not':'프라이머리에 <code>wal_level=logical</code>과 복제 슬롯이 있어야 합니다. 둘 중 하나라도 안 되면 여기서 접으세요. publication에 넣은 것만 복제하니 빼놓은 건 그냥 없습니다. 머신 하나에 풀 하나뿐이고 페일오버가 없어서, 리플리카가 죽으면 잃는 건 클론이지 데이터가 아닙니다. 그리고 이미 Neon이나 Supabase에서 돌고 있다면 그쪽 브랜칭을 쓰세요. 이건 프로덕션이 브랜치 버튼 없는 곳에 있을 때를 위한 물건입니다.',
+      'cmp.srclabel':'확인한 문서:',
       'foot.tag':'Postgres 논리 복제 + btrfs copy-on-write'
     },
     ja: {
@@ -804,6 +932,23 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.a11yResetN':'clone-{n} をスナップショットへ戻す',
       'lab.a11yDelete':'クローンを削除',
       'lab.a11yDeleteN':'clone-{n} を削除',
+      'cmp.thesis':'ここに挙げたものはすべて copy-on-write です。違うのは、それが成り立つためにデータがどこになければならないか、です。',
+      'cmp.c0':' ','cmp.c1':'どこで動くか','cmp.c2':'コピーの初期状態','cmp.c3':'新しさをどう保つか',
+      'cmp.neon1':'Neon のクラウド','cmp.neon2':'親ブランチそのまま、即時','cmp.neon3':'それ自体が本番なので、ブランチは実物から分かれます',
+      'cmp.sb1':'Supabase のクラウド','cmp.sb2':'空 — 本番データは入りません','cmp.sb3':'自分でシードを入れます',
+      'cmp.aur1':'AWS、Aurora のみ','cmp.aur2':'元クラスターのページ','cmp.aur3':'新しくしたいならクローンし直し',
+      'cmp.dbl1':'自前のサーバー、任意の Postgres','cmp.dbl2':'最後に取得したコピー','cmp.dbl3':'自前運用なら継続追従。マネージド (RDS) は定期的な全体リフレッシュ',
+      'cmp.sn1':'自前のサーバー、任意の Postgres','cmp.sn2':'選んだスナップショット','cmp.sn3':'論理レプリケーションで継続追従 — マネージドのプライマリも含めて',
+      'cmp.title':'違いが実際に効いてくるところ',
+      'cmp.t1':'Neon と Supabase のブランチ',
+      'cmp.p1':'どちらも優秀ですが、どちらも「すでにそこで動いている」ことが前提です。本番が RDS や Cloud SQL、あるいは自前のマシンにあるなら、これはテスト用コピーを作る道ではなく、データベースを引っ越す話になります。Supabase は明言しています。<q>New branches do not start with any data from your main project.</q>',
+      'cmp.t2':'Aurora ファストクローニング',
+      'cmp.p2':'ストレージ層の copy-on-write で、実際に速いです。ただしクローン 1 つが DB クラスター 1 つで、クラスターには最低 1 台のインスタンスが要るので、置いておくあいだずっと計算リソースの課金が続きます。上限もあります。<q>You can create up to 15 clones with copy-on-write protocol. After you have 15 clones, the next clone that you create is a full copy.</q> そして Aurora 専用で、通常の RDS Postgres では使えません。',
+      'cmp.t3':'DBLab (Postgres.ai)',
+      'cmp.p3':'この中で最も近く、歴史も長く機能も多いです。ZFS か LVM のシンクローンで、10 TiB でも 2 秒かかりません。分かれるのはコピーの鮮度の保ち方です。物理モードはプライマリに継続追従しますが <q>is not available for managed cloud Postgres services such as Amazon RDS</q>。マネージド相手ではダンプとリストアになり、定期的に丸ごと取り直します。Snaplicator は論理レプリケーションで購読するので、マネージドのプライマリも取り直さず追従します。',
+      'cmp.notlabel':'Snaplicator が答えにならない場合',
+      'cmp.not':'プライマリに <code>wal_level=logical</code> とレプリケーションスロットが必要です。どちらかが無理ならここで諦めてください。publication に入れたものだけを複製するので、外したものは単に存在しません。マシン 1 台にプール 1 つ、フェイルオーバーは無く、レプリカが落ちて失うのはクローンでありデータではありません。そして既に Neon や Supabase で動いているなら、そちらのブランチ機能を使ってください。これは本番がブランチボタンの無い場所にある場合のための道具です。',
+      'cmp.srclabel':'参照した資料:',
       'foot.tag':'Postgres 論理レプリケーション + btrfs copy-on-write'
     }
   };
@@ -830,7 +975,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
   }
 
   /* ── views ─────────────────────────────────────────────── */
-  var VIEWS = ['overview', 'concepts', 'guide', 'install'];
+  var VIEWS = ['overview', 'concepts', 'guide', 'compare', 'install'];
   function show(view, push) {
     if (VIEWS.indexOf(view) < 0) view = 'overview';
     VIEWS.forEach(function (v) {
