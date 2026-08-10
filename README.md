@@ -40,7 +40,7 @@ it never drifts out of shape.
 many writable clones from it as you like — seconds each, effectively no disk
 until something writes, and resetting one back is a single call.
 
-## Use it if
+**Use it if**
 
 - Production is on RDS, Azure Database for PostgreSQL, Cloud SQL or a machine
   you own, and you are not moving it.
@@ -49,7 +49,7 @@ until something writes, and resetting one back is a single call.
 - Your agent needs to test against production data without consequences.
 - Applying every schema change to the test database has become a chore.
 
-## Don't use it if
+**Don't use it if**
 
 - You cannot enable `wal_level=logical` or create a replication slot on the
   primary. Nothing else here works without it.
