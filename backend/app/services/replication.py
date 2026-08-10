@@ -1160,6 +1160,15 @@ def install_ddl_apply(
                                      (cannot run inside the apply worker's
                                      transaction; the sync loop executes it
                                      out-of-band)
+      * OWNER TO / GRANT / REVOKE  -> record to _snaplicator_ddl_skipped and
+                                     do not execute. An owner is a reference
+                                     to a role in the publisher's cluster;
+                                     this is a different cluster, and the
+                                     initial clone already drops ownership
+                                     (--no-owner --no-privileges) for that
+                                     reason. Executing them can only fail,
+                                     and failing is reserved for things that
+                                     were supposed to work.
       * any execution error        -> record to _snaplicator_ddl_failures +
                                      RAISE WARNING and CONTINUE. Never
                                      re-raise: a re-raise would crash-loop
@@ -1226,6 +1235,20 @@ ALTER TABLE public._snaplicator_ddl_failures
     ADD COLUMN IF NOT EXISTS search_path text;
 """)
 
+    # Kept apart from the failures table on purpose: one is "this did not
+    # work", the other is "this was never going to be applied here". Mixing
+    # them is what turned a design decision into a page at 2am.
+    _sub_sql("""
+CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_skipped (
+    id bigserial PRIMARY KEY,
+    log_id bigint NOT NULL,
+    ddl_text text NOT NULL,
+    reason text NOT NULL,
+    search_path text,
+    skipped_at timestamptz NOT NULL DEFAULT now()
+);
+""")
+
     _sub_sql("""
 CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_deferred (
     id bigserial PRIMARY KEY,
@@ -1270,7 +1293,24 @@ BEGIN
     END IF;
     INSERT INTO public._snaplicator_ddl_applied (id) VALUES (NEW.id);
 
-    IF NEW.ddl_text ~* 'CONCURRENTLY' THEN
+    -- Ownership and privileges are not replicated, and never were: the
+    -- initial schema clone is taken with --no-owner --no-privileges, because
+    -- an owner is a reference to a role in *this* cluster and the replica is a
+    -- different cluster with none of the primary's roles in it. Replaying
+    -- these statements can therefore only fail —
+    --
+    --   role "brandazine_api_prod" does not exist
+    --   ddl: ALTER TABLE url_product OWNER TO brandazine_api_prod
+    --
+    -- and it failed loudly, into the table that pages someone, for a statement
+    -- whose absence is the intended state. Recorded as skipped instead: still
+    -- visible, no longer an incident.
+    IF NEW.command_tag IN ('GRANT', 'REVOKE', 'ALTER DEFAULT PRIVILEGES')
+       OR NEW.ddl_text ~* '^\\s*ALTER\\s+.*\\sOWNER\\s+TO\\s'
+       OR NEW.ddl_text ~* '^\\s*(GRANT|REVOKE)\\s' THEN
+        INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
+        VALUES (NEW.id, NEW.ddl_text, 'ownership/privileges are not replicated', NEW.search_path);
+    ELSIF NEW.ddl_text ~* 'CONCURRENTLY' THEN
         INSERT INTO public._snaplicator_ddl_deferred (log_id, ddl_text, search_path)
         VALUES (NEW.id, NEW.ddl_text, NEW.search_path);
     ELSE
