@@ -247,9 +247,6 @@
   /* A comparison is genuinely tabular, so it is a table — and it is the one
      shape this page does not already use. Scrolls inside its own box; the
      body never moves sideways. */
-  .thesis { font-family: var(--display); font-size: clamp(1.05rem, 2.2vw, 1.3rem);
-            font-weight: 500; color: var(--ink); max-width: 44ch; margin: 0 0 1.5rem;
-            text-wrap: balance; }
   .tablewrap { overflow-x: auto; border-top: 1px solid var(--rule); }
   table.cmp { border-collapse: collapse; width: 100%; min-width: 46rem; font-size: .86rem; }
   table.cmp th, table.cmp td { text-align: left; vertical-align: top;
@@ -608,10 +605,7 @@
     </div>
 
     <div style="margin-top:var(--gap)">
-      <h2 data-i18n="cmp.head">How this compares to Neon, Aurora and DBLab</h2>
-    <p class="thesis" data-i18n="cmp.thesis">
-      All of these do <span class="nb">copy-on-write</span>. What differs is where your data has to live for it to work.
-    </p>
+      <h2 data-i18n="cmp.head">How is this different from other CoW Postgres database SaaS?</h2>
 
     <div class="tablewrap">
       <table class="cmp">
@@ -1014,7 +1008,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'fit.no':'이럴 때는 쓰지 마세요',
       'fit.n1':'primary에 <code>wal_level=logical</code>을 켜거나 복제 슬롯을 만들 수 없을 때.',
       'fit.n2':'이미 primary db로 Neon을 사용하고 있을 때.',
-      'cmp.head':'Neon · Aurora · DBLab과 비교하면',
+      'cmp.head':'다른 CoW 지원 postgres database saas와 뭐가 다른가요?',
       'g.title':'아무것도 없는 상태에서 에이전트 전용 DB까지',
       'g.n1':'1. 설치','g.n2':'2. 초기 복제','g.n3':'3. 익명화','g.n4':'4. 스키마',
       'g.n5':'5. 스냅샷','g.n6':'6. 클론','g.n7':'7. 에이전트','g.n8':'예외 케이스',
@@ -1092,7 +1086,6 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.a11yResetN':'clone-{n}을 스냅샷으로 되돌리기',
       'lab.a11yDelete':'클론 삭제',
       'lab.a11yDeleteN':'clone-{n} 삭제',
-      'cmp.thesis':'여기 있는 것들은 전부 <span class="nb">copy-on-write</span>를 씁니다. 다른 건 그게 되려면 데이터가 어디에 있어야 하느냐입니다.',
       'cmp.c0':' ','cmp.c1':'프로덕션 행을 따라감','cmp.c2':'스키마도 따라감','cmp.c3':'스냅샷 · 브랜칭',
       'cmp.neon1':'논리 복제','cmp.neon2':'직접 맞춰야 함','cmp.neon3':'<span class="nb">copy-on-write</span> 브랜치',
       'cmp.sb1':'브랜치는 데이터 없이 시작','cmp.sb2':'마이그레이션 파일에서','cmp.sb3':'자기네 클라우드만',
@@ -1143,7 +1136,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'fit.no':'こんなときは使わないでください',
       'fit.n1':'primary で <code>wal_level=logical</code> を有効にできない、レプリケーションスロットを作れないとき。',
       'fit.n2':'すでに primary db として Neon を使っているとき。',
-      'cmp.head':'Neon・Aurora・DBLab との比較',
+      'cmp.head':'他の CoW 対応 postgres database saas と何が違いますか?',
       'g.title':'ゼロから、エージェント専用 DB まで',
       'g.n1':'1. インストール','g.n2':'2. 初回コピー','g.n3':'3. 匿名化','g.n4':'4. スキーマ',
       'g.n5':'5. スナップショット','g.n6':'6. クローン','g.n7':'7. エージェント','g.n8':'例外ケース',
@@ -1218,7 +1211,6 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.a11yResetN':'clone-{n} をスナップショットへ戻す',
       'lab.a11yDelete':'クローンを削除',
       'lab.a11yDeleteN':'clone-{n} を削除',
-      'cmp.thesis':'ここに挙げたものはすべて <span class="nb">copy-on-write</span> です。違うのは、それが成り立つためにデータがどこになければならないか、です。',
       'cmp.c0':' ','cmp.c1':'本番の行に追従','cmp.c2':'スキーマも追従','cmp.c3':'スナップショット・ブランチ',
       'cmp.neon1':'論理レプリケーション','cmp.neon2':'自分で合わせ続ける','cmp.neon3':'<span class="nb">copy-on-write</span> ブランチ',
       'cmp.sb1':'ブランチはデータ無しで始まる','cmp.sb2':'マイグレーションファイルから','cmp.sb3':'自社クラウドのみ',
