@@ -533,8 +533,9 @@
     <p class="kicker" data-i18n="hero.eyebrow">Test DB for AI</p>
     <h1 data-i18n="hero.title">Test on production data, as freely as your agent likes.</h1>
     <p class="lead col" style="margin-top:1.3rem" data-i18n="hero.lead">
-      On a disposable copy of it — never on the primary itself. Snaplicator keeps a replica
-      following your primary and hands out clones of it: seconds to make, almost no disk.
+      On a disposable copy of it, never on the primary. Production stays where it is — RDS,
+      Azure Database for PostgreSQL, Cloud SQL, or a machine you own — and Snaplicator keeps a
+      replica following it, handing out clones that take seconds and almost no disk.
     </p>
 
     <div class="cmd">
@@ -560,6 +561,28 @@
         Snaplicator ships an MCP server, so the agent calls all of this itself. You are not
         in the loop.
       </p>
+    </div>
+
+    <div style="margin-top:var(--gap)">
+      <h2 data-i18n="sc.title">When you reach for it</h2>
+      <dl class="alts">
+        <div>
+          <dt data-i18n="sc.t1">A bug in production, right now</dt>
+          <dd data-i18n="sc.p1">The row that causes it only exists in production. Take a snapshot, make a clone, and seconds later you are querying the same data — on a copy you are free to break while the incident is still open.</dd>
+        </div>
+        <div>
+          <dt data-i18n="sc.t2">A migration you don&rsquo;t trust</dt>
+          <dd data-i18n="sc.p2">It passed against seed data because seed data has none of the nulls, duplicates and orphaned rows that production accumulates. Run it on a clone; if it breaks, reset and try the next version.</dd>
+        </div>
+        <div>
+          <dt data-i18n="sc.t3">Several agents at once</dt>
+          <dd data-i18n="sc.p3">Each gets its own clone on its own port. One of them dropping a table is not the other one&rsquo;s flaky test.</dd>
+        </div>
+        <div>
+          <dt data-i18n="sc.t4">A query plan you can believe</dt>
+          <dd data-i18n="sc.p4">Same size, same statistics, same indexes as production. A plan that is instant over a small staging table is not instant over the real one.</dd>
+        </div>
+      </dl>
     </div>
 
     <div style="margin-top:var(--gap)">
@@ -867,7 +890,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
     <dl class="alts">
       <div>
         <dt data-i18n="cmp.t1">Neon and Supabase branching</dt>
-        <dd data-i18n="cmp.p1">Both are excellent, and both assume you already run on them. If production is RDS, Cloud SQL, or a machine you own, neither is a route to a test copy of it. Supabase draws the line explicitly: <q>New branches do not start with any data from your main project.</q></dd>
+        <dd data-i18n="cmp.p1">Both are excellent, and if you already run on them, use their branching — a branch there <em>is</em> your data. Neon will also follow an RDS or Cloud SQL primary over logical replication rather than hosting it, and then two things change: the data lands in Neon&rsquo;s cloud, and the schema becomes yours to keep in step — their guide requires that <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> That is the gap the next section is about.</dd>
       </div>
       <div>
         <dt data-i18n="cmp.t2">Aurora fast cloning</dt>
@@ -899,6 +922,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
     <p class="sources">
       <span data-i18n="cmp.srclabel">Checked against:</span>
       <a href="https://neon.com/docs/introduction/branching">Neon branching</a> ·
+      <a href="https://neon.com/docs/guides/logical-replication-rds-to-neon">Neon: replicate from RDS</a> ·
       <a href="https://supabase.com/docs/guides/deployment/branching">Supabase branching</a> ·
       <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Managing.Clone.html">Aurora cloning</a> ·
       <a href="https://postgres.ai/docs/dblab-howtos/administration/data">DBLab data sources</a> ·
@@ -974,6 +998,15 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
      than two that can drift. The other languages are overlays. */
   var DICT = {
     ko: {
+      'sc.title':'이럴 때 씁니다',
+      'sc.t1':'지금 프로덕션에 버그가 났을 때',
+      'sc.p1':'그 버그를 일으키는 행은 프로덕션에만 있습니다. 스냅샷 찍고 클론 하나 만들면 몇 초 뒤에 같은 데이터에 쿼리하고 있습니다. 장애가 아직 진행 중인 동안, 마음대로 부숴도 되는 사본에서요.',
+      'sc.t2':'마이그레이션이 미덥지 않을 때',
+      'sc.p2':'시드 데이터에서 통과한 건 시드에 NULL도, 중복도, 부모 없는 행도 없기 때문입니다. 프로덕션에는 쌓여 있고요. 클론에서 돌려 보고, 깨지면 되돌리고 다음 버전을 시도하세요.',
+      'sc.t3':'에이전트를 여러 개 동시에 돌릴 때',
+      'sc.p3':'각자 자기 클론을 자기 포트로 받습니다. 한쪽이 테이블을 지워도 다른 쪽 테스트가 흔들리지 않습니다.',
+      'sc.t4':'쿼리 계획을 믿고 싶을 때',
+      'sc.p4':'크기도 통계도 인덱스도 프로덕션과 같습니다. 작은 스테이징 테이블에서 순식간인 계획이 실제 테이블에서도 순식간이지는 않습니다.',
       'g.title':'아무것도 없는 상태에서 에이전트 전용 DB까지',
       'g.n1':'1. 설치','g.n2':'2. 초기 복제','g.n3':'3. 익명화','g.n4':'4. 스키마',
       'g.n5':'5. 스냅샷','g.n6':'6. 클론','g.n7':'7. 에이전트','g.n8':'예외 케이스',
@@ -1013,7 +1046,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'common.copy':'복사',
       'hero.eyebrow':'AI를 위한 테스트 DB',
       'hero.title':'에이전트와 함께, 프로덕션 데이터로 마음껏 테스트하세요.',
-      'hero.lead':'프로덕션 자체가 아니라 버려도 되는 사본에서요. Snaplicator는 리플리카 한 대를 프라이머리에 붙여 두고, 거기서 클론을 떠 줍니다. 만드는 데 몇 초, 디스크는 거의 안 씁니다.',
+      'hero.lead':'프로덕션 자체가 아니라 버려도 되는 사본에서요. 프로덕션은 있던 자리에 그대로 둡니다. RDS든, Azure Database for PostgreSQL이든, Cloud SQL이든, 직접 굴리는 서버든요. Snaplicator는 거기에 리플리카 한 대를 붙여 두고, 몇 초면 만들어지고 디스크는 거의 안 쓰는 클론을 떠 줍니다.',
       'hero.macnote':'macOS에서는 sudo를 빼세요. 리눅스 머신부터 만듭니다.',
       'loop.title':'에이전트가 실제로 하는 일',
       'loop.w1':'에이전트','loop.b1':'클론을 하나 뜹니다. 몇 초면 되고, 남한테 영향 갈 일도 없습니다.',
@@ -1071,7 +1104,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.sn1':'내 서버, 아무 Postgres나','cmp.sn2':'내가 고른 스냅샷','cmp.sn3':'논리 복제로 계속 따라감 — 매니지드 프라이머리 포함',
       'cmp.title':'차이가 실제로 갈리는 지점',
       'cmp.t1':'Neon과 Supabase 브랜칭',
-      'cmp.p1':'둘 다 훌륭한데, 둘 다 이미 거기서 돌고 있다는 걸 전제합니다. 프로덕션이 RDS나 Cloud SQL이거나 직접 굴리는 서버에 있으면 이건 테스트 사본을 만드는 길이 아닙니다. Supabase는 못을 박아 뒀습니다. <q>New branches do not start with any data from your main project.</q>',
+      'cmp.p1':'둘 다 훌륭하고, 이미 거기서 돌고 있다면 그쪽 브랜칭을 쓰세요. 거기 브랜치는 <em>곧</em> 내 데이터입니다. Neon은 RDS나 Cloud SQL 프라이머리를 호스팅하는 대신 논리 복제로 따라가 주기도 합니다. 그러면 두 가지가 달라집니다. 데이터가 Neon 클라우드에 놓이고, 스키마는 직접 맞춰 둬야 합니다. 자기네 가이드가 이렇게 요구하니까요. <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> 바로 다음 절이 그 빈틈 이야기입니다.',
       'cmp.t2':'Aurora 패스트 클로닝',
       'cmp.p2':'스토리지 계층의 <span class="nb">copy-on-write</span>이고 실제로 빠릅니다. 다만 클론 하나가 DB 클러스터고 클러스터에는 인스턴스가 붙어야 해서, 살려 두는 내내 컴퓨트 요금이 나갑니다. 개수 제한도 있습니다. <q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 전용이라 일반 RDS Postgres는 안 됩니다.',
       'cmp.t3':'DBLab (Postgres.ai)',
@@ -1097,6 +1130,15 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'foot.tag':'Postgres 논리 복제 + btrfs <span class="nb">copy-on-write</span>'
     },
     ja: {
+      'sc.title':'こんなときに使います',
+      'sc.t1':'いま本番でバグが出ているとき',
+      'sc.p1':'それを起こしている行は本番にしかありません。スナップショットを取ってクローンを作れば、数秒後には同じデータにクエリを投げています。障害が続いているあいだ、壊してかまわないコピーの上で。',
+      'sc.t2':'マイグレーションが信じきれないとき',
+      'sc.p2':'シードデータで通ったのは、シードに NULL も重複も親のない行も無いからです。本番には溜まっています。クローンで走らせ、壊れたら戻して次の版を試してください。',
+      'sc.t3':'エージェントを同時に何本も回すとき',
+      'sc.p3':'それぞれが自分のクローンを自分のポートで受け取ります。片方がテーブルを消しても、もう片方のテストは揺れません。',
+      'sc.t4':'クエリプランを信じたいとき',
+      'sc.p4':'サイズも統計もインデックスも本番と同じです。小さなステージングのテーブルで一瞬のプランが、本物のテーブルでも一瞬とは限りません。',
       'g.title':'ゼロから、エージェント専用 DB まで',
       'g.n1':'1. インストール','g.n2':'2. 初回コピー','g.n3':'3. 匿名化','g.n4':'4. スキーマ',
       'g.n5':'5. スナップショット','g.n6':'6. クローン','g.n7':'7. エージェント','g.n8':'例外ケース',
@@ -1136,7 +1178,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'common.copy':'コピー',
       'hero.eyebrow':'AI のためのテスト DB',
       'hero.title':'エージェントと一緒に、本番データで思いきりテストを。',
-      'hero.lead':'本番そのものではなく、使い捨てのコピーの上で。Snaplicator はレプリカ 1 台をプライマリに追従させ続け、そこからクローンを配ります。作成は数秒、ディスクはほぼゼロです。',
+      'hero.lead':'本番そのものではなく、使い捨てのコピーの上で。本番は今ある場所に置いたままです。RDS でも、Azure Database for PostgreSQL でも、Cloud SQL でも、自前のマシンでも。Snaplicator はそこにレプリカ 1 台を追従させ、数秒ででき、ディスクをほぼ使わないクローンを配ります。',
       'hero.macnote':'macOS では sudo 不要 — まず Linux マシンを作ります。','loop.title':'エージェントが実際にやること',
       'loop.w1':'エージェント','loop.b1':'クローンを 1 つ取ります。数秒で、誰にも影響しません。',
       'loop.w2':'エージェント','loop.b2':'マイグレーションを実行。間違った列を削除。WHERE なしで DELETE。',
@@ -1190,7 +1232,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.sn1':'自前のサーバー、任意の Postgres','cmp.sn2':'選んだスナップショット','cmp.sn3':'論理レプリケーションで継続追従 — マネージドのプライマリも含めて',
       'cmp.title':'違いが実際に効いてくるところ',
       'cmp.t1':'Neon と Supabase のブランチ',
-      'cmp.p1':'どちらも優秀ですが、どちらも「すでにそこで動いている」ことが前提です。本番が RDS や Cloud SQL、あるいは自前のマシンにあるなら、これはテスト用コピーを作る道になりません。Supabase は明言しています。<q>New branches do not start with any data from your main project.</q>',
+      'cmp.p1':'どちらも優秀で、すでにそこで動いているなら、そちらのブランチ機能を使ってください。あちらのブランチは<em>そのまま</em>自分のデータです。Neon は RDS や Cloud SQL のプライマリを、ホストする代わりに論理レプリケーションで追従することもできます。その場合、2 つが変わります。データが Neon のクラウドに置かれること、そしてスキーマは自分で合わせ続ける必要があることです。公式ガイドがこう求めています。<q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> 次の節はまさにその隙間の話です。',
       'cmp.t2':'Aurora ファストクローニング',
       'cmp.p2':'ストレージ層の <span class="nb">copy-on-write</span> で、実際に速いです。ただしクローン 1 つが DB クラスターで、クラスターにはインスタンスが要るので、置いておくあいだ課金が続きます。上限もあります。<q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 専用で、通常の RDS Postgres では使えません。',
       'cmp.t3':'DBLab (Postgres.ai)',
