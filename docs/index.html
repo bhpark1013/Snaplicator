@@ -258,6 +258,15 @@
   table.cmp thead th { font-family: var(--mono); font-size: .7rem; letter-spacing: .08em;
                        text-transform: uppercase; color: var(--ink-3); font-weight: 400;
                        padding-top: .55rem; padding-bottom: .55rem; }
+  /* O / △ / X. The middle mark exists because three cells are honestly
+     neither — DBLab follows a self-managed primary but re-copies a managed
+     one, and two products cap the branching. A bare tick there would be a
+     claim the source does not support. The glyph is decoration; the words
+     beside it carry the meaning, so screen readers skip it. */
+  .m { font-style: normal; margin-right: .55ch; font-size: .95em; }
+  .m.o { color: var(--t-live-ink); }
+  .m.t { color: var(--ink-3); }
+  .m.x { color: var(--ink-3); opacity: .75; }
   table.cmp tbody th { font-family: var(--display); font-weight: 700; white-space: nowrap;
                        padding-right: 1.4rem; color: var(--ink); }
   table.cmp td { color: var(--ink-2); }
@@ -685,38 +694,38 @@
         <tbody>
           <tr>
             <th scope="row">Neon</th>
-            <td data-i18n="cmp.neon1">yes — logical replication</td>
-            <td data-i18n="cmp.neon2">no — yours to keep in step</td>
-            <td data-i18n="cmp.neon3">yes — <span class="nb">copy-on-write</span> branches</td>
-            <td data-i18n="cmp.neon4"><span class="nb">Apache-2.0</span>, but <span class="nb">self-hosting</span> is scoped to experiments</td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.neon1">logical replication</span></td>
+            <td><i class="m x" aria-hidden="true">✕</i><span data-i18n="cmp.neon2">yours to keep in step</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.neon3"><span class="nb">copy-on-write</span> branches</span></td>
+            <td><i class="m x" aria-hidden="true">✕</i><span data-i18n="cmp.neon4">open source, but scoped to experiments</span></td>
           </tr>
           <tr>
             <th scope="row">Supabase</th>
-            <td data-i18n="cmp.sb1">no — branches start with no production data</td>
-            <td data-i18n="cmp.sb2">yes — from your migration files</td>
-            <td data-i18n="cmp.sb3">yes, on their cloud</td>
-            <td data-i18n="cmp.sb4"><span class="nb">self-hosting</span> is documented, but without branching</td>
+            <td><i class="m x" aria-hidden="true">✕</i><span data-i18n="cmp.sb1">branches start with no data</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sb2">from your migration files</span></td>
+            <td><i class="m t" aria-hidden="true">△</i><span data-i18n="cmp.sb3">their cloud only</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sb4">documented — but without branching</span></td>
           </tr>
           <tr>
             <th scope="row">Aurora cloning</th>
-            <td data-i18n="cmp.aur1">no — a clone is fixed at the moment you take it</td>
-            <td data-i18n="cmp.aur2">yes — comes with the clone, same storage</td>
-            <td data-i18n="cmp.aur3">yes — up to 15, then it is a full copy</td>
-            <td data-i18n="cmp.aur4">no — AWS Aurora only</td>
+            <td><i class="m x" aria-hidden="true">✕</i><span data-i18n="cmp.aur1">a clone is fixed when taken</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.aur2">same storage as the source</span></td>
+            <td><i class="m t" aria-hidden="true">△</i><span data-i18n="cmp.aur3">15, then it is a full copy</span></td>
+            <td><i class="m x" aria-hidden="true">✕</i><span data-i18n="cmp.aur4">AWS Aurora only</span></td>
           </tr>
           <tr>
             <th scope="row">DBLab</th>
-            <td data-i18n="cmp.dbl1"><span class="nb">self-managed</span> yes; managed primaries are <span class="nb">re-copied</span> on a schedule</td>
-            <td data-i18n="cmp.dbl2">with the copy; on managed, only at the next full refresh</td>
-            <td data-i18n="cmp.dbl3">yes — ZFS or LVM thin clones</td>
-            <td data-i18n="cmp.dbl4">yes</td>
+            <td><i class="m t" aria-hidden="true">△</i><span data-i18n="cmp.dbl1">managed primaries are re-copied on a schedule</span></td>
+            <td><i class="m t" aria-hidden="true">△</i><span data-i18n="cmp.dbl2">only at the next full refresh</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.dbl3">ZFS or LVM thin clones</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.dbl4">your hardware</span></td>
           </tr>
           <tr class="ours">
             <th scope="row">Snaplicator</th>
-            <td data-i18n="cmp.sn1">yes — logical replication, managed primaries included</td>
-            <td data-i18n="cmp.sn2">yes — event triggers replay DDL here</td>
-            <td data-i18n="cmp.sn3">yes — btrfs <span class="nb">copy-on-write</span></td>
-            <td data-i18n="cmp.sn4">yes — one machine you own</td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sn1">logical replication, managed included</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sn2">event triggers replay DDL here</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sn3">btrfs <span class="nb">copy-on-write</span></span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sn4">one machine you own</span></td>
           </tr>
         </tbody>
       </table>
@@ -1171,11 +1180,11 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.a11yDeleteN':'clone-{n} 삭제',
       'cmp.thesis':'여기 있는 것들은 전부 <span class="nb">copy-on-write</span>를 씁니다. 다른 건 그게 되려면 데이터가 어디에 있어야 하느냐입니다.',
       'cmp.c0':' ','cmp.c1':'프로덕션 행을 따라감','cmp.c2':'스키마도 따라감','cmp.c3':'스냅샷 · 브랜칭',
-      'cmp.neon1':'예 — 논리 복제','cmp.neon2':'아니오 — 직접 맞춰야 함','cmp.neon3':'예 — <span class="nb">copy-on-write</span> 브랜치',
-      'cmp.sb1':'아니오 — 브랜치는 프로덕션 데이터 없이 시작','cmp.sb2':'예 — 마이그레이션 파일에서','cmp.sb3':'예, 자기네 클라우드에서',
-      'cmp.aur1':'아니오 — 클론은 뜬 시점에 고정','cmp.aur2':'예 — 클론에 딸려 옴, 같은 스토리지','cmp.aur3':'예 — 15개까지, 그 뒤로는 전체 복사',
-      'cmp.dbl1':'직접 운영이면 예; 매니지드는 주기적으로 다시 받음','cmp.dbl2':'사본과 함께; 매니지드는 다음 전체 갱신 때','cmp.dbl3':'예 — ZFS 또는 LVM 씬 클론',
-      'cmp.sn1':'예 — 논리 복제, 매니지드 프라이머리 포함','cmp.sn2':'예 — 이벤트 트리거가 DDL을 여기서 재실행','cmp.sn3':'예 — btrfs <span class="nb">copy-on-write</span>',
+      'cmp.neon1':'논리 복제','cmp.neon2':'직접 맞춰야 함','cmp.neon3':'<span class="nb">copy-on-write</span> 브랜치',
+      'cmp.sb1':'브랜치는 데이터 없이 시작','cmp.sb2':'마이그레이션 파일에서','cmp.sb3':'자기네 클라우드만',
+      'cmp.aur1':'클론은 뜬 시점에 고정','cmp.aur2':'원본과 같은 스토리지','cmp.aur3':'15개까지, 그 뒤로는 전체 복사',
+      'cmp.dbl1':'매니지드는 주기적으로 다시 받음','cmp.dbl2':'다음 전체 갱신 때만','cmp.dbl3':'ZFS 또는 LVM 씬 클론',
+      'cmp.sn1':'논리 복제, 매니지드 포함','cmp.sn2':'이벤트 트리거가 DDL을 재실행','cmp.sn3':'btrfs <span class="nb">copy-on-write</span>',
       'cmp.title':'차이가 실제로 갈리는 지점',
       'cmp.t1':'Neon과 Supabase 브랜칭',
       'cmp.p1':'둘 다 훌륭하고, 이미 거기서 돌고 있다면 그쪽 브랜칭을 쓰세요. 거기 브랜치는 <em>곧</em> 내 데이터입니다. Neon은 RDS나 Cloud SQL 프라이머리를 호스팅하는 대신 논리 복제로 따라가 주기도 합니다. 그러면 두 가지가 달라집니다. 데이터가 Neon 클라우드에 놓이고, 스키마는 직접 맞춰 둬야 합니다. 자기네 가이드가 이렇게 요구하니까요. <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> 바로 다음 절이 그 빈틈 이야기입니다.',
@@ -1186,10 +1195,10 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.sblabel':'Supabase를 쓰고 있다면',
       'cmp.sbnote':'거기 브랜치는 설계상 프로덕션 데이터 없이 시작하고, Supabase는 논리 복제 publisher가 될 수 있습니다. <code>wal_level</code>은 이미 <code>logical</code>입니다. 자기네 가이드가 짚는 주의점 둘 — 풀러 말고 직접 연결 문자열을 쓸 것, 구독하는 쪽에 IPv6나 IPv4 애드온이 필요하다는 것.',
       'cmp.c4':'우리 인프라에서',
-      'cmp.neon4':'<span class="nb">Apache-2.0</span>이지만 자체 호스팅 범위는 실험용','cmp.sb4':'자체 호스팅은 문서화돼 있지만 브랜칭이 빠짐',
-      'cmp.aur4':'아니오 — AWS Aurora 전용',
-      'cmp.dbl4':'예',
-      'cmp.sn4':'예 — 내가 가진 머신 한 대',
+      'cmp.neon4':'오픈소스지만 범위는 실험용','cmp.sb4':'문서화됨 — 단 브랜칭 제외',
+      'cmp.aur4':'AWS Aurora 전용',
+      'cmp.dbl4':'내 장비',
+      'cmp.sn4':'내가 가진 머신 한 대',
       'cmp.ddltitle':'스키마 칸이 진짜 볼 곳입니다',
       'cmp.ddl1':'Postgres 문서가 딱 잘라 말합니다. <q>The database schema and DDL commands are not replicated.</q> 그래서 매니지드 프라이머리를 따라가려면 보통 주기적으로 통째로 다시 받습니다. 안 그러면 스키마가 어긋나다가 복제가 터집니다.',
       'cmp.ddl2':'Snaplicator는 프라이머리에서 이벤트 트리거로 DDL을 잡아 같은 publication에 실어 보내고, 리플리카에서 다시 실행합니다. 14시 02분에 컬럼을 추가하면 리플리카도 14시 02분에 갖습니다.',
@@ -1315,11 +1324,11 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'lab.a11yDeleteN':'clone-{n} を削除',
       'cmp.thesis':'ここに挙げたものはすべて <span class="nb">copy-on-write</span> です。違うのは、それが成り立つためにデータがどこになければならないか、です。',
       'cmp.c0':' ','cmp.c1':'本番の行に追従','cmp.c2':'スキーマも追従','cmp.c3':'スナップショット・ブランチ',
-      'cmp.neon1':'はい — 論理レプリケーション','cmp.neon2':'いいえ — 自分で合わせ続ける','cmp.neon3':'はい — <span class="nb">copy-on-write</span> ブランチ',
-      'cmp.sb1':'いいえ — ブランチは本番データ無しで始まる','cmp.sb2':'はい — マイグレーションファイルから','cmp.sb3':'はい、自社クラウドで',
-      'cmp.aur1':'いいえ — クローンは取った時点で固定','cmp.aur2':'はい — クローンに付いてくる、同じストレージ','cmp.aur3':'はい — 15 個まで、その後は完全コピー',
-      'cmp.dbl1':'自己運用なら はい; マネージドは定期的に取り直し','cmp.dbl2':'コピーと一緒に; マネージドは次の完全更新時','cmp.dbl3':'はい — ZFS または LVM のシンクローン',
-      'cmp.sn1':'はい — 論理レプリケーション、マネージドも含む','cmp.sn2':'はい — イベントトリガーが DDL をここで再実行','cmp.sn3':'はい — btrfs <span class="nb">copy-on-write</span>',
+      'cmp.neon1':'論理レプリケーション','cmp.neon2':'自分で合わせ続ける','cmp.neon3':'<span class="nb">copy-on-write</span> ブランチ',
+      'cmp.sb1':'ブランチはデータ無しで始まる','cmp.sb2':'マイグレーションファイルから','cmp.sb3':'自社クラウドのみ',
+      'cmp.aur1':'クローンは取った時点で固定','cmp.aur2':'ソースと同じストレージ','cmp.aur3':'15 個まで、その後は完全コピー',
+      'cmp.dbl1':'マネージドは定期的に取り直し','cmp.dbl2':'次の完全更新時のみ','cmp.dbl3':'ZFS または LVM のシンクローン',
+      'cmp.sn1':'論理レプリケーション、マネージドも','cmp.sn2':'イベントトリガーが DDL を再実行','cmp.sn3':'btrfs <span class="nb">copy-on-write</span>',
       'cmp.title':'違いが実際に効いてくるところ',
       'cmp.t1':'Neon と Supabase のブランチ',
       'cmp.p1':'どちらも優秀で、すでにそこで動いているなら、そちらのブランチ機能を使ってください。あちらのブランチは<em>そのまま</em>自分のデータです。Neon は RDS や Cloud SQL のプライマリを、ホストする代わりに論理レプリケーションで追従することもできます。その場合、2 つが変わります。データが Neon のクラウドに置かれること、そしてスキーマは自分で合わせ続ける必要があることです。公式ガイドがこう求めています。<q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q> 次の節はまさにその隙間の話です。',
@@ -1330,10 +1339,10 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.sblabel':'Supabase を使っている場合',
       'cmp.sbnote':'あちらのブランチは設計上、本番データを持たずに始まります。そして Supabase は論理レプリケーションの publisher になれます。<code>wal_level</code> はすでに <code>logical</code> です。公式ガイドの注意点が 2 つ — プーラーではなく直接接続の文字列を使うこと、購読側に IPv6 か IPv4 アドオンが要ること。',
       'cmp.c4':'自社インフラで',
-      'cmp.neon4':'<span class="nb">Apache-2.0</span> だが自己ホストの範囲は実験用','cmp.sb4':'自己ホストは文書化されているがブランチは非対応',
-      'cmp.aur4':'いいえ — AWS Aurora 専用',
-      'cmp.dbl4':'はい',
-      'cmp.sn4':'はい — 自分の持つマシン 1 台',
+      'cmp.neon4':'オープンソースだが範囲は実験用','cmp.sb4':'文書化済み — ただしブランチ非対応',
+      'cmp.aur4':'AWS Aurora 専用',
+      'cmp.dbl4':'自前の機材',
+      'cmp.sn4':'自分の持つマシン 1 台',
       'cmp.ddltitle':'スキーマの列が本題です',
       'cmp.ddl1':'Postgres の文書は明快です。<q>The database schema and DDL commands are not replicated.</q> だからマネージドのプライマリに追従するには、たいてい定期的に丸ごと取り直すことになります。さもなければスキーマがずれ、やがてレプリケーションが止まります。',
       'cmp.ddl2':'Snaplicator はイベントトリガーで DDL を捕まえ、同じ publication に載せて送り、レプリカで実行し直します。14:02 に列を追加すれば、レプリカも 14:02 に持ちます。',
