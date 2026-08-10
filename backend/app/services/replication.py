@@ -1239,6 +1239,22 @@ ALTER TABLE public._snaplicator_ddl_failures
     # work", the other is "this was never going to be applied here". Mixing
     # them is what turned a design decision into a page at 2am.
     _sub_sql("""
+CREATE OR REPLACE FUNCTION public._snaplicator_ddl_is_local_only(cmd_tag text, ddl text)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $localonly$
+    SELECT (cmd_tag IN ('GRANT', 'REVOKE', 'ALTER DEFAULT PRIVILEGES')
+            OR ddl ~* '^\\s*ALTER\\s+.*\\sOWNER\\s+TO\\s'
+            OR ddl ~* '^\\s*(GRANT|REVOKE)\\s')
+       -- ...and only when that is the whole of it. ddl_text is
+       -- current_query(), so a batch sent in one round trip is stored as
+       -- one row: `ALTER TABLE t ADD COLUMN c; ALTER TABLE t OWNER TO r;`
+       -- is a single entry. Skipping that on the strength of the OWNER TO
+       -- would drop the ADD COLUMN with it, into a table nobody alerts on.
+       -- A batch falls through and fails audibly, as it did before.
+       AND btrim(ddl) !~ ';\\s*\\S';
+$localonly$;
+""")
+
+    _sub_sql("""
 CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_skipped (
     id bigserial PRIMARY KEY,
     log_id bigint NOT NULL,
@@ -1305,9 +1321,7 @@ BEGIN
     -- and it failed loudly, into the table that pages someone, for a statement
     -- whose absence is the intended state. Recorded as skipped instead: still
     -- visible, no longer an incident.
-    IF NEW.command_tag IN ('GRANT', 'REVOKE', 'ALTER DEFAULT PRIVILEGES')
-       OR NEW.ddl_text ~* '^\\s*ALTER\\s+.*\\sOWNER\\s+TO\\s'
-       OR NEW.ddl_text ~* '^\\s*(GRANT|REVOKE)\\s' THEN
+    IF public._snaplicator_ddl_is_local_only(NEW.command_tag, NEW.ddl_text) THEN
         INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
         VALUES (NEW.id, NEW.ddl_text, 'ownership/privileges are not replicated', NEW.search_path);
     ELSIF NEW.ddl_text ~* 'CONCURRENTLY' THEN
@@ -1625,6 +1639,16 @@ BEGIN
         -- that half-succeeds must not come round again.
         INSERT INTO public._snaplicator_ddl_applied (id) VALUES (r.id)
             ON CONFLICT DO NOTHING;
+
+        -- Same rule as the trigger, through the same function. Both paths
+        -- apply the same log to the same database, so a statement the
+        -- trigger skips and catch-up executes would put ownership DDL back
+        -- into the failures table by the other door.
+        IF public._snaplicator_ddl_is_local_only(r.command_tag, r.ddl_text) THEN
+            INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
+            VALUES (r.id, r.ddl_text, 'ownership/privileges are not replicated', r.search_path);
+            CONTINUE;
+        END IF;
 
         IF r.ddl_text ~* 'CONCURRENTLY' THEN
             INSERT INTO public._snaplicator_ddl_deferred (log_id, ddl_text, search_path)
