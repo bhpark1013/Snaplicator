@@ -608,17 +608,15 @@
           <ul>
             <li data-i18n="fit.y1">Production is on RDS, Azure Database for PostgreSQL, Cloud SQL or a machine you own, and you are not moving it.</li>
             <li data-i18n="fit.y2">You need real production data to test against, and it cannot leave your own infrastructure.</li>
-            <li data-i18n="fit.y3">You run several agents at once and each needs a database it is free to destroy.</li>
-            <li data-i18n="fit.y4">Your schema changes often enough that taking the copy again on a schedule has become a chore.</li>
+            <li data-i18n="fit.y3">When your agent needs to test against production data without consequences.</li>
+            <li data-i18n="fit.y4">When applying every schema change to the test database has become a chore.</li>
           </ul>
         </div>
         <div>
-          <h3 class="no" data-i18n="fit.no">Look elsewhere if</h3>
+          <h3 class="no" data-i18n="fit.no">Don&rsquo;t use it if</h3>
           <ul>
-            <li data-i18n="fit.n1">You cannot set <code>wal_level=logical</code> or create a replication slot on the primary. Stop here — nothing else works without it.</li>
-            <li data-i18n="fit.n2">You already run on Neon or Supabase. Use their branching; a branch there <em>is</em> your data.</li>
-            <li data-i18n="fit.n3">You need high availability. One machine, one pool, no failover — losing the replica costs you clones.</li>
-            <li data-i18n="fit.n4">You are looking for a production database. This is a test copy, not somewhere to serve from.</li>
+            <li data-i18n="fit.n1">You cannot enable <code>wal_level=logical</code> or create a replication slot on the primary.</li>
+            <li data-i18n="fit.n2">You already use Neon as your primary database.</li>
           </ul>
         </div>
       </div>
@@ -1084,13 +1082,11 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'fit.yes':'이럴 때 쓰세요',
       'fit.y1':'프로덕션이 RDS, Azure Database for PostgreSQL, Cloud SQL, 또는 직접 굴리는 서버에 있고 옮길 생각이 없을 때.',
       'fit.y2':'진짜 프로덕션 데이터로 테스트해야 하는데, 그 데이터가 우리 인프라 밖으로 나가면 안 될 때.',
-      'fit.y3':'에이전트를 여러 개 동시에 돌려서, 각자 부숴도 되는 DB가 필요할 때.',
-      'fit.y4':'스키마가 자주 바뀌어서, 사본을 주기적으로 다시 뜨는 일이 지겨워졌을 때.',
-      'fit.no':'이럴 땐 다른 걸 보세요',
-      'fit.n1':'프라이머리에 <code>wal_level=logical</code>을 켜거나 복제 슬롯을 만들 수 없을 때. 여기서 접으세요. 이게 없으면 나머지가 무의미합니다.',
-      'fit.n2':'이미 Neon이나 Supabase 위에서 돌고 있을 때. 그쪽 브랜칭을 쓰세요. 거기서 브랜치는 <em>곧</em> 내 데이터입니다.',
-      'fit.n3':'고가용성이 필요할 때. 머신 하나에 풀 하나, 페일오버 없음 — 리플리카가 죽으면 잃는 건 클론입니다.',
-      'fit.n4':'운영용 데이터베이스를 찾고 있을 때. 이건 테스트용 사본이지 서비스를 태울 곳이 아닙니다.',
+      'fit.y3':'에이전트가 문제없이 production data로 테스트해야할 때.',
+      'fit.y4':'스키마 변경을 매번 테스트 db에 반영하는게 귀찮을때',
+      'fit.no':'이럴 때는 쓰지 마세요',
+      'fit.n1':'primary에 <code>wal_level=logical</code>을 켜거나 복제 슬롯을 만들 수 없을 때.',
+      'fit.n2':'이미 primary db로 Neon을 사용하고 있을 때.',
       'cmp.head':'Neon · Aurora · DBLab과 비교하면',
       'sc.title':'이럴 때 씁니다',
       'sc.t1':'지금 프로덕션에 버그가 났을 때',
@@ -1235,13 +1231,11 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'fit.yes':'こんなときに',
       'fit.y1':'本番が RDS、Azure Database for PostgreSQL、Cloud SQL、または自前のマシンにあり、動かすつもりがないとき。',
       'fit.y2':'本物の本番データでテストする必要があり、そのデータを自社インフラの外に出せないとき。',
-      'fit.y3':'エージェントを同時に何本も回し、それぞれに壊してよい DB が要るとき。',
-      'fit.y4':'スキーマがよく変わり、コピーを定期的に取り直すのが面倒になってきたとき。',
-      'fit.no':'こんなときは別のものを',
-      'fit.n1':'プライマリで <code>wal_level=logical</code> を有効にできない、レプリケーションスロットを作れないとき。ここでやめてください。これが無ければ残りは意味がありません。',
-      'fit.n2':'すでに Neon か Supabase の上で動いているとき。そちらのブランチ機能を使ってください。あちらのブランチは<em>そのまま</em>自分のデータです。',
-      'fit.n3':'高可用性が要るとき。マシン 1 台にプール 1 つ、フェイルオーバーは無く、レプリカが落ちて失うのはクローンです。',
-      'fit.n4':'本番用のデータベースを探しているとき。これはテスト用のコピーで、サービスを載せる場所ではありません。',
+      'fit.y3':'エージェントが問題なく production data でテストする必要があるとき。',
+      'fit.y4':'スキーマ変更を毎回テスト db に反映するのが面倒なとき。',
+      'fit.no':'こんなときは使わないでください',
+      'fit.n1':'primary で <code>wal_level=logical</code> を有効にできない、レプリケーションスロットを作れないとき。',
+      'fit.n2':'すでに primary db として Neon を使っているとき。',
       'cmp.head':'Neon・Aurora・DBLab との比較',
       'sc.title':'こんなときに使います',
       'sc.t1':'いま本番でバグが出ているとき',
