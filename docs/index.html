@@ -188,6 +188,23 @@
   }
   .langs button[aria-pressed="true"] { background: var(--t-mid); color: var(--paper); }
 
+  /* Two-up. Used for the two things this does and for the two sides of
+     who it is for — deliberately not the .alts dl the page already uses
+     twice, so the reader can see at a glance that these are a different
+     kind of list. */
+  .pair { display: grid; gap: clamp(1.3rem, 3vw, 2.4rem); margin-top: 1.5rem;
+          grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @media (max-width: 700px) { .pair { grid-template-columns: 1fr; } }
+  .pair h3 { font-family: var(--display); font-size: 1rem; font-weight: 700;
+             letter-spacing: -.01em; margin: 0 0 .55rem; }
+  .pair p { font-size: .9rem; line-height: 1.6; color: var(--ink-2); margin: 0; }
+  .pair ul { margin: 0; padding-left: 1.05rem; font-size: .89rem; line-height: 1.55;
+             color: var(--ink-2); }
+  .pair li { margin-bottom: .6rem; }
+  .pair li::marker { color: var(--ink-3); }
+  .pair h3.yes { color: var(--t-live-ink); }
+  .pair h3.no  { color: var(--ink-3); }
+
   /* ── shared type ─────────────────────────────────────────── */
   main > section { display: none; padding-block: var(--gap) calc(var(--gap) + 1rem); }
   /* Each view earns its own breathing room: the hero opens, the reference
@@ -209,6 +226,11 @@
   h1 { font-family: var(--display); font-size: clamp(2.05rem, 5.2vw, 3.5rem); line-height: 1.04;
        letter-spacing: -.03em; font-weight: 700; text-wrap: balance; margin: 0;
        min-width: 0; }
+  /* Two sentences, two lines. Left to wrap on its own the headline broke as
+     "…테스트하세요. 시드도," — a line ending on a comma with the next sentence
+     already started, which reads as one tangled thought instead of a promise
+     and the relief that follows it. */
+  h1 span { display: block; }
   h2 { font-family: var(--display); font-size: clamp(1.35rem, 2.7vw, 1.8rem); line-height: 1.18;
        letter-spacing: -.02em; font-weight: 700; text-wrap: balance; margin: 0 0 .85rem; }
   h3 { font-family: var(--display); font-size: 1rem; font-weight: 700; margin: 0 0 .3rem; letter-spacing: -.01em; }
@@ -530,11 +552,12 @@
   <!-- ═══════════════ OVERVIEW ═══════════════ -->
   <section id="overview">
     <p class="kicker" data-i18n="hero.eyebrow">Test DB for AI</p>
-    <h1 data-i18n="hero.title">Test on production data, as freely as your agent likes.</h1>
+    <h1><span data-i18n="hero.title">Clone the production you already run, and test on that.</span>
+      <span data-i18n="hero.title2">No seeding, no dumps.</span></h1>
     <p class="lead col" style="margin-top:1.3rem" data-i18n="hero.lead">
-      On a disposable copy of it, never on the primary. Production stays where it is — RDS,
-      Azure Database for PostgreSQL, Cloud SQL, or a machine you own — and Snaplicator keeps a
-      replica following it, handing out clones that take seconds and almost no disk.
+      RDS, Azure Database for PostgreSQL, Cloud SQL or your own machine — production stays
+      exactly where it is. Snaplicator keeps one replica following it and hands out clones that
+      take seconds and almost no disk, and that your agent is free to break.
     </p>
 
     <div class="cmd">
@@ -543,6 +566,44 @@
       <button class="copy" data-copy="cmd1" data-i18n="common.copy">copy</button>
     </div>
     <p class="cmd-note" data-i18n="hero.macnote">macOS: drop the sudo — it builds a Linux machine first.</p>
+
+    <div style="margin-top:var(--gap)">
+      <h2 data-i18n="feat.title">The two things it does</h2>
+      <div class="pair">
+        <div>
+          <h3 data-i18n="feat.h1">Data and schema, replicated live</h3>
+          <p data-i18n="feat.p1">Logical replication carries rows and nothing else, which is why a copy of a managed primary normally has to be taken again on a schedule. Snaplicator catches CREATE, ALTER and DROP on the primary with event triggers and replays them here, so the replica never drifts out of shape.</p>
+        </div>
+        <div>
+          <h3 data-i18n="feat.h2">Database branching</h3>
+          <p data-i18n="feat.p2">Freeze the replica into a snapshot, then start as many writable clones from it as you like. Seconds each, effectively no disk until something writes, and putting one back is a single call.</p>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:var(--gap)">
+      <h2 data-i18n="fit.title">Is this you?</h2>
+      <div class="pair">
+        <div>
+          <h3 class="yes" data-i18n="fit.yes">Use it if</h3>
+          <ul>
+            <li data-i18n="fit.y1">Production is on RDS, Azure Database for PostgreSQL, Cloud SQL or a machine you own, and you are not moving it.</li>
+            <li data-i18n="fit.y2">You need real production data to test against, and it cannot leave your own infrastructure.</li>
+            <li data-i18n="fit.y3">You run several agents at once and each needs a database it is free to destroy.</li>
+            <li data-i18n="fit.y4">Your schema changes often enough that taking the copy again on a schedule has become a chore.</li>
+          </ul>
+        </div>
+        <div>
+          <h3 class="no" data-i18n="fit.no">Look elsewhere if</h3>
+          <ul>
+            <li data-i18n="fit.n1">You cannot set <code>wal_level=logical</code> or create a replication slot on the primary. Stop here — nothing else works without it.</li>
+            <li data-i18n="fit.n2">You already run on Neon or Supabase. Use their branching; a branch there <em>is</em> your data.</li>
+            <li data-i18n="fit.n3">You need high availability. One machine, one pool, no failover — losing the replica costs you clones.</li>
+            <li data-i18n="fit.n4">You are looking for a production database. This is a test copy, not somewhere to serve from.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
 
     <div style="margin-top:var(--gap)">
       <h2 data-i18n="loop.title">What an agent actually does with it</h2>
@@ -704,12 +765,6 @@
       </div>
     </dl>
 
-    <div class="note">
-      <span class="label" data-i18n="cmp.notlabel">When Snaplicator is the wrong answer</span>
-      <p data-i18n="cmp.not">
-        It needs <code>wal_level=logical</code> and a replication slot on your primary. It replicates only what you put in the publication. One machine, one pool, no failover — the replica going down costs you clones, not data. And if you already run on Neon, use their branching: a branch there <em>is</em> your data.
-      </p>
-    </div>
 
     <div class="note">
       <span class="label" data-i18n="cmp.sblabel">If you run on Supabase</span>
@@ -997,6 +1052,23 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
      than two that can drift. The other languages are overlays. */
   var DICT = {
     ko: {
+      'hero.title2':'시드도, 덤프도 필요 없습니다.',
+      'feat.title':'핵심은 두 가지입니다',
+      'feat.h1':'데이터와 스키마, 실시간 복제',
+      'feat.p1':'논리 복제는 행만 나릅니다. 그래서 매니지드 프라이머리의 사본은 보통 주기적으로 통째로 다시 떠야 합니다. Snaplicator는 프라이머리의 CREATE·ALTER·DROP까지 이벤트 트리거로 잡아 여기서 다시 실행하므로, 리플리카의 모양이 어긋나지 않습니다.',
+      'feat.h2':'데이터베이스 브랜칭',
+      'feat.p2':'리플리카를 스냅샷으로 얼리고, 거기서 쓰기 가능한 클론을 원하는 만큼 띄웁니다. 하나에 몇 초, 쓰기 전까지 디스크는 사실상 0, 되돌리는 건 호출 한 번입니다.',
+      'fit.title':'이건 누구를 위한 건가',
+      'fit.yes':'이럴 때 쓰세요',
+      'fit.y1':'프로덕션이 RDS, Azure Database for PostgreSQL, Cloud SQL, 또는 직접 굴리는 서버에 있고 옮길 생각이 없을 때.',
+      'fit.y2':'진짜 프로덕션 데이터로 테스트해야 하는데, 그 데이터가 우리 인프라 밖으로 나가면 안 될 때.',
+      'fit.y3':'에이전트를 여러 개 동시에 돌려서, 각자 부숴도 되는 DB가 필요할 때.',
+      'fit.y4':'스키마가 자주 바뀌어서, 사본을 주기적으로 다시 뜨는 일이 지겨워졌을 때.',
+      'fit.no':'이럴 땐 다른 걸 보세요',
+      'fit.n1':'프라이머리에 <code>wal_level=logical</code>을 켜거나 복제 슬롯을 만들 수 없을 때. 여기서 접으세요. 이게 없으면 나머지가 무의미합니다.',
+      'fit.n2':'이미 Neon이나 Supabase 위에서 돌고 있을 때. 그쪽 브랜칭을 쓰세요. 거기서 브랜치는 <em>곧</em> 내 데이터입니다.',
+      'fit.n3':'고가용성이 필요할 때. 머신 하나에 풀 하나, 페일오버 없음 — 리플리카가 죽으면 잃는 건 클론입니다.',
+      'fit.n4':'운영용 데이터베이스를 찾고 있을 때. 이건 테스트용 사본이지 서비스를 태울 곳이 아닙니다.',
       'cmp.head':'Neon · Aurora · DBLab과 비교하면',
       'sc.title':'이럴 때 씁니다',
       'sc.t1':'지금 프로덕션에 버그가 났을 때',
@@ -1045,8 +1117,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'gr.e1':'논리 복제','gr.e2':'얼리기','gr.e3':'띄우기',
       'common.copy':'복사',
       'hero.eyebrow':'AI를 위한 테스트 DB',
-      'hero.title':'에이전트와 함께, 프로덕션 데이터로 마음껏 테스트하세요.',
-      'hero.lead':'프로덕션 자체가 아니라 버려도 되는 사본에서요. 프로덕션은 있던 자리에 그대로 둡니다. RDS든, Azure Database for PostgreSQL이든, Cloud SQL이든, 직접 굴리는 서버든요. Snaplicator는 거기에 리플리카 한 대를 붙여 두고, 몇 초면 만들어지고 디스크는 거의 안 쓰는 클론을 떠 줍니다.',
+      'hero.title':'지금 쓰는 프로덕션을 즉시 복제해 테스트하세요.',
+      'hero.lead':'RDS든 Azure Database for PostgreSQL이든 Cloud SQL이든 직접 굴리는 서버든, 프로덕션은 있던 자리 그대로입니다. Snaplicator가 거기에 리플리카 하나를 붙여 두고, 몇 초면 만들어지고 디스크는 거의 안 쓰는 클론을 떠 줍니다. 에이전트가 마음껏 부숴도 되는 것으로요.',
       'hero.macnote':'macOS에서는 sudo를 빼세요. 리눅스 머신부터 만듭니다.',
       'loop.title':'에이전트가 실제로 하는 일',
       'loop.w1':'에이전트','loop.b1':'클론을 하나 뜹니다. 몇 초면 되고, 남한테 영향 갈 일도 없습니다.',
@@ -1109,8 +1181,6 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.p2':'스토리지 계층의 <span class="nb">copy-on-write</span>이고 실제로 빠릅니다. 다만 클론 하나가 DB 클러스터고 클러스터에는 인스턴스가 붙어야 해서, 살려 두는 내내 컴퓨트 요금이 나갑니다. 개수 제한도 있습니다. <q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 전용이라 일반 RDS Postgres는 안 됩니다.',
       'cmp.t3':'DBLab (Postgres.ai)',
       'cmp.p3':'이 중에 가장 가깝고, 더 오래됐고 기능도 더 많습니다. 10 TiB를 2초 안에 뜹니다. 갈리는 건 사본을 어떻게 최신으로 유지하느냐입니다. 물리 모드는 <q>is not available for managed cloud Postgres services such as Amazon RDS</q>라, 매니지드 상대로는 주기적으로 통째로 다시 받습니다. Snaplicator는 논리 복제로 구독해서 다시 받는 게 아니라 따라갑니다.',
-      'cmp.notlabel':'Snaplicator가 답이 아닌 경우',
-      'cmp.not':'프라이머리에 <code>wal_level=logical</code>과 복제 슬롯이 있어야 합니다. publication에 넣은 것만 복제합니다. 머신 하나에 풀 하나, 페일오버 없음 — 리플리카가 죽으면 잃는 건 클론이지 데이터가 아닙니다. 이미 Neon에서 돌고 있다면 그쪽 브랜칭을 쓰세요.',
       'cmp.sblabel':'Supabase를 쓰고 있다면',
       'cmp.sbnote':'거기 브랜치는 설계상 프로덕션 데이터 없이 시작하고, Supabase는 논리 복제 publisher가 될 수 있습니다. <code>wal_level</code>은 이미 <code>logical</code>입니다. 자기네 가이드가 짚는 주의점 둘 — 풀러 말고 직접 연결 문자열을 쓸 것, 구독하는 쪽에 IPv6나 IPv4 애드온이 필요하다는 것.',
       'cmp.c4':'스키마 변경',
@@ -1130,6 +1200,23 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'foot.tag':'Postgres 논리 복제 + btrfs <span class="nb">copy-on-write</span>'
     },
     ja: {
+      'hero.title2':'シードもダンプも要りません。',
+      'feat.title':'やることは 2 つです',
+      'feat.h1':'データとスキーマを、そのまま追従',
+      'feat.p1':'論理レプリケーションが運ぶのは行だけです。だからマネージドのプライマリのコピーは、ふつう定期的に丸ごと取り直すことになります。Snaplicator はプライマリの CREATE・ALTER・DROP までイベントトリガーで捕まえ、ここで実行し直すので、レプリカの形がずれません。',
+      'feat.h2':'データベースのブランチ',
+      'feat.p2':'レプリカをスナップショットに凍結し、そこから書き込み可能なクローンを好きなだけ起動します。1 つ数秒、書き込むまでディスクは実質ゼロ、戻すのは呼び出し 1 回です。',
+      'fit.title':'これは誰のためのものか',
+      'fit.yes':'こんなときに',
+      'fit.y1':'本番が RDS、Azure Database for PostgreSQL、Cloud SQL、または自前のマシンにあり、動かすつもりがないとき。',
+      'fit.y2':'本物の本番データでテストする必要があり、そのデータを自社インフラの外に出せないとき。',
+      'fit.y3':'エージェントを同時に何本も回し、それぞれに壊してよい DB が要るとき。',
+      'fit.y4':'スキーマがよく変わり、コピーを定期的に取り直すのが面倒になってきたとき。',
+      'fit.no':'こんなときは別のものを',
+      'fit.n1':'プライマリで <code>wal_level=logical</code> を有効にできない、レプリケーションスロットを作れないとき。ここでやめてください。これが無ければ残りは意味がありません。',
+      'fit.n2':'すでに Neon か Supabase の上で動いているとき。そちらのブランチ機能を使ってください。あちらのブランチは<em>そのまま</em>自分のデータです。',
+      'fit.n3':'高可用性が要るとき。マシン 1 台にプール 1 つ、フェイルオーバーは無く、レプリカが落ちて失うのはクローンです。',
+      'fit.n4':'本番用のデータベースを探しているとき。これはテスト用のコピーで、サービスを載せる場所ではありません。',
       'cmp.head':'Neon・Aurora・DBLab との比較',
       'sc.title':'こんなときに使います',
       'sc.t1':'いま本番でバグが出ているとき',
@@ -1178,8 +1265,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'gr.e1':'論理レプリケーション','gr.e2':'凍結','gr.e3':'起動',
       'common.copy':'コピー',
       'hero.eyebrow':'AI のためのテスト DB',
-      'hero.title':'エージェントと一緒に、本番データで思いきりテストを。',
-      'hero.lead':'本番そのものではなく、使い捨てのコピーの上で。本番は今ある場所に置いたままです。RDS でも、Azure Database for PostgreSQL でも、Cloud SQL でも、自前のマシンでも。Snaplicator はそこにレプリカ 1 台を追従させ、数秒ででき、ディスクをほぼ使わないクローンを配ります。',
+      'hero.title':'いま使っている本番をそのまま複製してテストしてください。',
+      'hero.lead':'RDS でも Azure Database for PostgreSQL でも Cloud SQL でも自前のマシンでも、本番は今ある場所のままです。Snaplicator がそこにレプリカ 1 台を追従させ、数秒ででき、ディスクをほぼ使わないクローンを配ります。エージェントが壊してかまわないものを。',
       'hero.macnote':'macOS では sudo 不要 — まず Linux マシンを作ります。','loop.title':'エージェントが実際にやること',
       'loop.w1':'エージェント','loop.b1':'クローンを 1 つ取ります。数秒で、誰にも影響しません。',
       'loop.w2':'エージェント','loop.b2':'マイグレーションを実行。間違った列を削除。WHERE なしで DELETE。',
@@ -1238,8 +1325,6 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'cmp.p2':'ストレージ層の <span class="nb">copy-on-write</span> で、実際に速いです。ただしクローン 1 つが DB クラスターで、クラスターにはインスタンスが要るので、置いておくあいだ課金が続きます。上限もあります。<q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 専用で、通常の RDS Postgres では使えません。',
       'cmp.t3':'DBLab (Postgres.ai)',
       'cmp.p3':'この中で最も近く、歴史も長く機能も多いです。10 TiB でも 2 秒かかりません。分かれるのはコピーの鮮度の保ち方です。物理モードは <q>is not available for managed cloud Postgres services such as Amazon RDS</q> なので、マネージド相手では定期的に丸ごと取り直します。Snaplicator は論理レプリケーションで購読し、取り直さず追従します。',
-      'cmp.notlabel':'Snaplicator が答えにならない場合',
-      'cmp.not':'プライマリに <code>wal_level=logical</code> とレプリケーションスロットが必要です。publication に入れたものだけを複製します。マシン 1 台にプール 1 つ、フェイルオーバーは無く、レプリカが落ちて失うのはクローンでデータではありません。すでに Neon なら、そちらのブランチ機能を使ってください。',
       'cmp.sblabel':'Supabase を使っている場合',
       'cmp.sbnote':'あちらのブランチは設計上、本番データを持たずに始まります。そして Supabase は論理レプリケーションの publisher になれます。<code>wal_level</code> はすでに <code>logical</code> です。公式ガイドの注意点が 2 つ — プーラーではなく直接接続の文字列を使うこと、購読側に IPv6 か IPv4 アドオンが要ること。',
       'cmp.c4':'スキーマ変更',
