@@ -245,6 +245,49 @@ class TestFailureIsolation:
 			desc="grant skipped",
 		)
 
+	def test_batch_carrying_ownership_is_not_swallowed(self, pg_pair):
+		"""ddl_text is current_query(), and capture dedupes per (txid, query
+		string), so two statements sent in one round trip are ONE log row.
+
+		Skipping that row because it mentions OWNER TO would take the other
+		statement with it — silently, into a table nobody alerts on. The skip
+		rule therefore requires the ownership statement to be the whole of the
+		text; a batch falls through to the normal path, where failing is at
+		least visible."""
+		pub, sub = pg_pair["pub"], pg_pair["sub"]
+		psql_conn(pub, "CREATE ROLE batch_role_here;")
+		psql_conn(pub, "CREATE TABLE batched_t (id int);")
+		# one -c, two statements: psql sends this as a single simple-protocol
+		# query, so both DDL commands share one current_query()
+		psql_conn(
+			pub,
+			"ALTER TABLE batched_t ADD COLUMN c text; "
+			"ALTER TABLE batched_t OWNER TO batch_role_here;",
+		)
+		wait_until(
+			lambda: psql_conn(
+				sub,
+				"SELECT count(*) FROM public._snaplicator_ddl_failures "
+				"WHERE ddl_text LIKE '%batched_t%ADD COLUMN%';",
+			) == "1",
+			desc="batch recorded as a failure",
+		)
+		# the point of the test: it is NOT filed away as an intentional skip
+		assert psql_conn(
+			sub,
+			"SELECT count(*) FROM public._snaplicator_ddl_skipped "
+			"WHERE ddl_text LIKE '%batched_t%';",
+		) == "0"
+		# and the honest consequence, stated rather than hidden: the batch is
+		# one EXECUTE, so the ADD COLUMN rolls back with the OWNER TO. Whoever
+		# makes this apply statement-by-statement should expect this line to
+		# fail, and should change it.
+		assert psql_conn(
+			sub,
+			"SELECT count(*) FROM information_schema.columns "
+			"WHERE table_name = 'batched_t' AND column_name = 'c';",
+		) == "0"
+
 	def test_concurrently_is_deferred_not_executed(self, pg_pair):
 		"""CREATE INDEX CONCURRENTLY cannot run inside the apply worker's
 		transaction — it must land in the deferred queue (executed later,
