@@ -504,6 +504,7 @@
   .note .label { font-family: var(--mono); font-size: .68rem; letter-spacing: .12em;
                  text-transform: uppercase; color: var(--t-mid); display: block; margin-bottom: .25rem; }
   .note p { margin: 0; font-size: .91rem; }
+  .note p + p { margin-top: .7rem; }
 
   .loop { display: grid; margin-top: 1.6rem; }
   .beat { display: grid; grid-template-columns: 8.5rem 1fr; gap: 1.1rem;
@@ -589,6 +590,13 @@
           <h3><span class="n">2.</span><span data-i18n="feat.h2">Database branching</span></h3>
           <p data-i18n="feat.p2">Save a particular state of the database, then reset back to it as many times as you like while you test and run QA.</p>
         </div>
+      </div>
+    </div>
+
+      <div class="note">
+        <span class="label" data-i18n="origin.label">Why this exists</span>
+        <p data-i18n="origin.p1">Every test database meant seeding the data again. A bug in production would not reproduce in the test environment. QA meant rebuilding the same scenario every time. That was tiresome enough to go and fix.</p>
+        <p data-i18n="origin.p2">So it replicates the primary&rsquo;s DML and DDL as they happen, and lets you snapshot a particular state of that copy — every test then starts from the same data.</p>
       </div>
     </div>
 
@@ -1063,6 +1071,9 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
      than two that can drift. The other languages are overlays. */
   var DICT = {
     ko: {
+      'origin.label':'만든 이유',
+      'origin.p1':'테스트 DB를 만들 때마다 데이터를 새로 시딩해야 했고, 프로덕션에서 버그가 나도 테스트 환경에서는 재현이 안 됐고, QA 때는 매번 같은 시나리오를 다시 만들어야 했습니다. 그게 번거로워서 만들었습니다.',
+      'origin.p2':'프라이머리의 DML과 DDL을 실시간으로 복제하고, 그 복제본의 특정 상태를 스냅샷으로 남겨 두면, 매번 같은 데이터로 테스트할 수 있습니다.',
       'hero.title2':'시드도, 덤프도 없습니다.',
       'feat.title':'핵심 기능 2가지',
       'feat.h1':'데이터 및 스키마 실시간 복제',
@@ -1211,6 +1222,9 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'foot.tag':'Postgres 논리 복제 + btrfs <span class="nb">copy-on-write</span>'
     },
     ja: {
+      'origin.label':'作った理由',
+      'origin.p1':'テスト DB を作るたびにデータをシードし直し、本番でバグが出てもテスト環境では再現できず、QA のたびに同じシナリオを組み直していました。それが面倒で作りました。',
+      'origin.p2':'プライマリの DML と DDL をリアルタイムで複製し、その複製の特定の状態をスナップショットに残しておけば、毎回同じデータでテストできます。',
       'hero.title2':'シードもダンプも不要。',
       'feat.title':'コア機能は 2 つ',
       'feat.h1':'データとスキーマのリアルタイム複製',
