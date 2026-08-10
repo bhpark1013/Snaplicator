@@ -140,7 +140,9 @@
   }
   /* N8 · terminal-command. The destinations are flags on a command the
      reader will actually run — this product is installed by pasting one.
-     The caret is allowed here and nowhere else: it marks where you'd type. */
+     No blinking caret: it was the only thing on the page that moved without
+     explaining anything, and a cursor at the end of a bar says you can type
+     into it, which you cannot. The command metaphor survives without it. */
   .bar { display: flex; align-items: baseline; gap: 1rem; padding: .75rem 0; flex-wrap: wrap; }
   .cmdline {
     font-family: var(--mono); font-size: .82rem; margin: 0;
@@ -179,10 +181,6 @@
   }
   nav button:hover { color: var(--ink); text-decoration-color: var(--rule); }
   nav button[aria-current="page"] { color: var(--t-live-ink); text-decoration-color: currentColor; }
-  .caret { display: inline-block; width: 1ch; color: var(--t-live-ink);
-           animation: blink 1.05s steps(2) infinite; }
-  @keyframes blink { 50% { opacity: 0 } }
-
   .langs { display: flex; gap: .1rem; margin-left: auto; border: 1px solid var(--rule); border-radius: 6px; padding: .12rem; }
   .langs button {
     font-family: var(--mono); font-size: .7rem; padding: .22rem .45rem;
@@ -519,7 +517,6 @@
         <button data-view="compare"  data-i18n="nav.compare">--compare</button>
         <button data-view="install"  data-i18n="nav.install">--install</button>
       </nav>
-      <span class="caret" aria-hidden="true">▮</span>
     </div>
     <div class="langs" id="langs">
       <button data-lang="en">EN</button>
