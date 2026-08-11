@@ -9,8 +9,12 @@ call into the service layer would be one hop shorter and a second contract
 to keep: every endpoint's validation, error mapping and settings resolution
 would have to be duplicated or bypassed. The hop is to localhost.
 """
+import functools
+import inspect
 import os
 import json
+
+import anyio
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
 
@@ -83,6 +87,31 @@ mcp = FastMCP(
         "the matching get_* first and send back the full text or list."
     ),
 )
+
+
+def tool(*dargs, **dkwargs):
+    """Register a tool, running the synchronous ones in a worker thread.
+
+    The SDK calls a sync tool with a plain `return fn(...)` — on the event
+    loop, not off it. That is fine for a standalone process and a deadlock
+    for a mounted one: every tool here reaches the API over HTTP, and when
+    the API is this same process, the blocking call holds the loop that
+    would have answered it. The tool times out, and so does everything else
+    served meanwhile.
+
+    Wrapping the function keeps the 59 tool bodies as they are — a change to
+    each would be 59 chances to make one of them wrong.
+    """
+    def decorate(fn):
+        if inspect.iscoroutinefunction(fn):
+            return mcp.tool(*dargs, **dkwargs)(fn)
+
+        @functools.wraps(fn)  # keeps the signature the SDK builds its schema from
+        async def runner(*args, **kwargs):
+            return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+
+        return mcp.tool(*dargs, **dkwargs)(runner)
+    return decorate
 
 
 def _get(path: str) -> dict:
@@ -164,7 +193,7 @@ def _resolve_clone(identifier: str | int) -> dict:
 
 # ── Health ──
 
-@mcp.tool()
+@tool()
 def health() -> str:
     """Check if the Snaplicator server is running."""
     return json.dumps(_get("/health"))
@@ -172,13 +201,13 @@ def health() -> str:
 
 # ── Clones ──
 
-@mcp.tool()
+@tool()
 def list_clones() -> str:
     """List all database clones with their container status, ports, and metadata."""
     return json.dumps(_get("/clones"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def create_clone(description: str, port: int | None = None, username: str | None = None, password: str | None = None) -> str:
     """Create a new database clone from the main replica.
 
@@ -201,7 +230,7 @@ def create_clone(description: str, port: int | None = None, username: str | None
     return json.dumps(_post("/clones", body), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_clone_detail(clone_id: str) -> str:
     """Get detailed info about a specific clone.
 
@@ -212,7 +241,7 @@ def get_clone_detail(clone_id: str) -> str:
     return json.dumps(_get(f"/clones/{clone['name']}"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def delete_clone(ctx: Context, clone_id: str) -> str:
     """Delete a clone and its container.
 
@@ -227,7 +256,7 @@ def delete_clone(ctx: Context, clone_id: str) -> str:
     return json.dumps(_delete(f"/clones/{target}"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def refresh_clone(ctx: Context, clone_id: str, description: str | None = None) -> str:
     """Refresh a clone with the latest data from main.
 
@@ -244,7 +273,7 @@ def refresh_clone(ctx: Context, clone_id: str, description: str | None = None) -
     return json.dumps(_post(f"/clones/{target}/refresh", body, timeout=180), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def reset_clone_to_snapshot(ctx: Context, clone_id: str, snapshot_name: str) -> str:
     """Reset (switch) an existing clone to a snapshot's state, keeping its port.
 
@@ -264,7 +293,7 @@ def reset_clone_to_snapshot(ctx: Context, clone_id: str, snapshot_name: str) -> 
     return json.dumps(_post(f"/clones/{clone['name']}/reset", body, timeout=180), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def create_clone_snapshot(
     ctx: Context,
     clone_id: str,
@@ -303,7 +332,7 @@ def create_clone_snapshot(
     return json.dumps(_post(f"/clones/{clone['name']}/snapshots", body), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def list_clone_snapshots(clone_id: str) -> str:
     """List snapshots taken from a specific clone.
 
@@ -314,7 +343,7 @@ def list_clone_snapshots(clone_id: str) -> str:
     return json.dumps(_get(f"/clones/{clone['name']}/snapshots"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_clone_usage(clone_id: str) -> str:
     """Get disk usage for a specific clone.
 
@@ -325,13 +354,13 @@ def get_clone_usage(clone_id: str) -> str:
     return json.dumps(_get(f"/clones/{clone['name']}/usage"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_filesystem_usage() -> str:
     """Get overall filesystem usage summary for the data directory."""
     return json.dumps(_get("/clones/usage/fs"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_clone_create_progress() -> str:
     """Where the clone currently being built has got to.
 
@@ -344,7 +373,7 @@ def get_clone_create_progress() -> str:
     return json.dumps(_get("/clones/create-progress"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def set_clone_description(ctx: Context, clone_id: str, name: str | None = None,
                           description: str | None = None) -> str:
     """Rename a clone or change its description.
@@ -377,7 +406,7 @@ def set_clone_description(ctx: Context, clone_id: str, name: str | None = None,
 # anonymized — so reading this does not by itself tell you whether a given
 # clone was scrubbed. get_clone_detail says which snapshot it came from.
 
-@mcp.tool()
+@tool()
 def get_anonymize_sql() -> str:
     """The anonymization script that runs on clones made from the main replica.
 
@@ -388,7 +417,7 @@ def get_anonymize_sql() -> str:
     return json.dumps(_get("/clones/anonymize-sql"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def set_anonymize_sql(sql: str) -> str:
     """Replace the anonymization script.
 
@@ -407,13 +436,13 @@ def set_anonymize_sql(sql: str) -> str:
 
 # ── Notifications ──
 
-@mcp.tool()
+@tool()
 def get_notification_config() -> str:
     """Webhook notification settings (URL is returned redacted)."""
     return json.dumps(_get("/notifications"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def set_notification_config(webhook_url: str | None = None, enabled: bool | None = None) -> str:
     """Change webhook notification settings.
 
@@ -434,7 +463,7 @@ def set_notification_config(webhook_url: str | None = None, enabled: bool | None
     return json.dumps(_put("/notifications", body), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def send_test_notification() -> str:
     """Send a test message to the configured webhook.
 
@@ -445,13 +474,13 @@ def send_test_notification() -> str:
 
 # ── Snapshots ──
 
-@mcp.tool()
+@tool()
 def list_snapshots() -> str:
     """List all snapshots of the main replica."""
     return json.dumps(_get("/snapshots"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def create_snapshot(
     description: str,
     previous_snapshot: str | None = None,
@@ -481,7 +510,7 @@ def create_snapshot(
     return json.dumps(_post("/snapshots", body), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def delete_snapshot(snapshot_name: str) -> str:
     """Delete a snapshot.
 
@@ -493,7 +522,7 @@ def delete_snapshot(snapshot_name: str) -> str:
     return json.dumps(_delete(f"/snapshots/{snapshot_name}"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def set_snapshot_retention(snapshot_name: str, retention_days: int = 14) -> str:
     """Change how long a snapshot is kept before it is eligible for cleanup.
 
@@ -510,7 +539,7 @@ def set_snapshot_retention(snapshot_name: str, retention_days: int = 14) -> str:
     )
 
 
-@mcp.tool()
+@tool()
 def set_snapshot_previous(snapshot_name: str, previous_snapshot: str | None = None) -> str:
     """Re-link a single snapshot's predecessor in the lineage graph.
 
@@ -531,7 +560,7 @@ def set_snapshot_previous(snapshot_name: str, previous_snapshot: str | None = No
     )
 
 
-@mcp.tool()
+@tool()
 def move_snapshot(snapshot_name: str, after: str | None = None, before: str | None = None) -> str:
     """Move a snapshot to a new position in the lineage graph (like dragging it).
 
@@ -584,7 +613,7 @@ def move_snapshot(snapshot_name: str, after: str | None = None, before: str | No
     return json.dumps(_post("/snapshots/lineage/batch", payload), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def clone_from_snapshot(snapshot_name: str, description: str | None = None) -> str:
     """Create a new clone from a specific snapshot.
 
@@ -600,25 +629,25 @@ def clone_from_snapshot(snapshot_name: str, description: str | None = None) -> s
 
 # ── Replication ──
 
-@mcp.tool()
+@tool()
 def get_replication_lag() -> str:
     """Get current replication lag between publisher and subscriber in seconds."""
     return json.dumps(_get("/replication/lag"))
 
 
-@mcp.tool()
+@tool()
 def get_replication_status() -> str:
     """Get subscription worker status (running, LSN positions, last sync time)."""
     return json.dumps(_get("/replication/subscription-status"))
 
 
-@mcp.tool()
+@tool()
 def list_replication_tables() -> str:
     """List all tables with their publication and subscriber status."""
     return json.dumps(_get("/replication/tables"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def add_tables_to_replication(tables: list[str], refresh: bool = False) -> str:
     """Add tables to the publication for replication.
 
@@ -631,7 +660,7 @@ def add_tables_to_replication(tables: list[str], refresh: bool = False) -> str:
     return json.dumps(_post("/replication/tables", {"tables": tables, "refresh": refresh}), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def remove_tables_from_replication(tables: list[str], refresh: bool = False) -> str:
     """Remove tables from the publication.
 
@@ -644,7 +673,7 @@ def remove_tables_from_replication(tables: list[str], refresh: bool = False) -> 
     return json.dumps(_delete("/replication/tables", {"tables": tables, "refresh": refresh}), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def refresh_subscription() -> str:
     """Refresh the subscription to pick up publication changes.
 
@@ -653,7 +682,7 @@ def refresh_subscription() -> str:
     return json.dumps(_post("/replication/refresh"))
 
 
-@mcp.tool()
+@tool()
 def get_replication_logs(tail: int = 500) -> str:
     """Get replication-related log lines from the replica container.
 
@@ -663,25 +692,25 @@ def get_replication_logs(tail: int = 500) -> str:
     return json.dumps(_get(f"/replication/logs?tail={tail}"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def run_replication_check() -> str:
     """Run replication consistency check on both publisher and subscriber."""
     return json.dumps(_get("/replication/check"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_replication_info() -> str:
     """Get publisher and subscriber connection info."""
     return json.dumps(_get("/replication/info"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_trigger_status() -> str:
     """Check if the auto-add event trigger is installed on the publisher."""
     return json.dumps(_get("/replication/trigger-status"))
 
 
-@mcp.tool()
+@tool()
 def install_trigger() -> str:
     """Install or update the auto-add event trigger on the publisher.
 
@@ -690,7 +719,7 @@ def install_trigger() -> str:
     return json.dumps(_post("/replication/trigger-install"))
 
 
-@mcp.tool()
+@tool()
 def get_copy_progress() -> str:
     """Get initial data copy progress (for new subscriptions)."""
     return json.dumps(_get("/replication/copy-progress"))
@@ -698,7 +727,7 @@ def get_copy_progress() -> str:
 
 # ── Replication check SQL ──
 
-@mcp.tool()
+@tool()
 def get_replication_check_sql() -> str:
     """The SQL run_replication_check executes on both ends.
 
@@ -709,7 +738,7 @@ def get_replication_check_sql() -> str:
     return json.dumps(_get("/replication/check-sql"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def set_replication_check_sql(sql: str) -> str:
     """Replace the replication-check SQL.
 
@@ -725,14 +754,14 @@ def set_replication_check_sql(sql: str) -> str:
 
 # ── Publication and table selection ──
 
-@mcp.tool()
+@tool()
 def list_publications() -> str:
     """Publications on the primary, which one this replica speaks for, and
     whether this install may rewrite it (`ours`)."""
     return json.dumps(_get("/replication/publications"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def choose_publication(name: str, mode: str) -> str:
     """Say which publication this replica speaks for.
 
@@ -752,14 +781,14 @@ def choose_publication(name: str, mode: str) -> str:
     return json.dumps(_put("/replication/publication", {"name": name, "mode": mode}), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_replication_selection() -> str:
     """The publication as a set of tables, plus which schemas future tables
     join on their own."""
     return json.dumps(_get("/replication/selection"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def set_replication_selection(tables: list[str], auto_schemas: list[str] | None = None) -> str:
     """Make the publication contain exactly these tables.
 
@@ -780,7 +809,7 @@ def set_replication_selection(tables: list[str], auto_schemas: list[str] | None 
 
 # ── Bootstrap (initial schema clone + subscription) ──
 
-@mcp.tool()
+@tool()
 def get_bootstrap_status(tail: int = 40) -> str:
     """Whether the replica has been brought up, is being brought up, or neither.
 
@@ -790,7 +819,7 @@ def get_bootstrap_status(tail: int = 40) -> str:
     return json.dumps(_get(f"/replication/bootstrap?tail={tail}"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def start_bootstrap(force: bool = False) -> str:
     """Clone the schema from the primary and create the subscription.
 
@@ -806,7 +835,7 @@ def start_bootstrap(force: bool = False) -> str:
     return json.dumps(_post(f"/replication/bootstrap?force={str(force).lower()}"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def cancel_bootstrap() -> str:
     """Stop a running bootstrap.
 
@@ -818,7 +847,7 @@ def cancel_bootstrap() -> str:
 
 # ── Fidelity and capacity: is this replica actually a copy? ──
 
-@mcp.tool()
+@tool()
 def get_capacity() -> str:
     """Will the current selection fit in the pool?
 
@@ -829,7 +858,7 @@ def get_capacity() -> str:
     return json.dumps(_get("/replication/capacity"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_schema_drift() -> str:
     """Where the replica's shape no longer matches what the primary publishes.
 
@@ -840,7 +869,7 @@ def get_schema_drift() -> str:
     return json.dumps(_get("/replication/schema-drift"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_schema_errors(limit: int = 200) -> str:
     """Objects the initial schema clone could not create.
 
@@ -853,7 +882,7 @@ def get_schema_errors(limit: int = 200) -> str:
     return json.dumps(_get(f"/replication/schema-errors?limit={limit}"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_extension_parity() -> str:
     """The primary's extensions against what this replica can offer.
 
@@ -865,7 +894,7 @@ def get_extension_parity() -> str:
     return json.dumps(_get("/replication/extensions"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def get_sync_log(limit: int = 100) -> str:
     """Recent auto-sync activity: new tables, column and constraint adds,
     schema moves, FDW drift re-imports, errors.
@@ -878,13 +907,13 @@ def get_sync_log(limit: int = 100) -> str:
 
 # ── FDW: tables read live from the primary instead of replicated ──
 
-@mcp.tool()
+@tool()
 def get_fdw_state() -> str:
     """The FDW yaml config plus the foreign tables actually present on the replica."""
     return json.dumps(_get("/replication/fdw"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def set_fdw_credentials(user: str, password: str, host: str | None = None,
                         port: int | None = None, dbname: str | None = None) -> str:
     """Set the login foreign tables are read as, and build the FDW server with it.
@@ -910,7 +939,7 @@ def set_fdw_credentials(user: str, password: str, host: str | None = None,
     return json.dumps(_put("/replication/fdw/credentials", body), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def clear_fdw_credentials() -> str:
     """Forget the FDW login.
 
@@ -919,7 +948,7 @@ def clear_fdw_credentials() -> str:
     return json.dumps(_delete("/replication/fdw/credentials"), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def add_fdw_tables(tables: list[dict]) -> str:
     """Expose primary tables on the replica as foreign tables.
 
@@ -934,7 +963,7 @@ def add_fdw_tables(tables: list[dict]) -> str:
     return json.dumps(_post("/replication/fdw/tables", {"tables": tables}, timeout=180), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def remove_fdw_tables(tables: list[dict]) -> str:
     """Remove foreign tables. Both the yaml entries and the tables go.
 
@@ -946,7 +975,7 @@ def remove_fdw_tables(tables: list[dict]) -> str:
     return json.dumps(_delete("/replication/fdw/tables", {"tables": tables}), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def add_fdw_schemas(schemas: list[str]) -> str:
     """Expose whole primary schemas as foreign tables.
 
@@ -959,7 +988,7 @@ def add_fdw_schemas(schemas: list[str]) -> str:
     return json.dumps(_post("/replication/fdw/schemas", {"schemas": schemas}, timeout=180), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def remove_fdw_schemas(schemas: list[str]) -> str:
     """Remove whole schemas from FDW.
 
@@ -971,7 +1000,7 @@ def remove_fdw_schemas(schemas: list[str]) -> str:
     return json.dumps(_delete("/replication/fdw/schemas", {"schemas": schemas}), ensure_ascii=False)
 
 
-@mcp.tool()
+@tool()
 def regenerate_fdw() -> str:
     """Re-render the generated FDW SQL from the yaml and re-apply it to the replica.
 
