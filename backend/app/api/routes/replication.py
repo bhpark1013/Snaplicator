@@ -23,6 +23,7 @@ from ...services.replication import (
     install_capture_triggers,
     verify_capture_installed,
     compare_published_schemas,
+    get_ddl_apply_rows,
 )
 from pathlib import Path
 import os
@@ -1149,6 +1150,37 @@ def get_extension_parity():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to compare extensions: {e}")
+
+
+@router.get("/ddl-apply")
+def get_ddl_apply(
+    limit: int = Query(100, ge=1, le=1000),
+    status: Optional[str] = Query(None, description="applied | deferred | deferred_done | deferred_failed | failed | skipped | seed | pending"),
+):
+    """Every captured DDL statement and what the subscriber did about it.
+
+    Three outcomes are worth telling apart and the counts alone do not:
+    applied ran here, deferred is waiting to run out of band (CONCURRENTLY
+    cannot run inside the apply transaction), failed ran and raised. A
+    statement is recorded as applied before it executes, so failed and
+    deferred outrank applied when a row is in both.
+    """
+    try:
+        _require_subscriber_settings()
+        return get_ddl_apply_rows(
+            settings.container_name,
+            settings.postgres_user,
+            settings.postgres_password,
+            settings.postgres_db,
+            limit=limit,
+            status=status,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read DDL apply state: {e}")
 
 
 @router.get("/schema-errors")

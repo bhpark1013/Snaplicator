@@ -40,6 +40,62 @@ interface FsUsageSummary {
 
 type CheckStatus = 'checking' | 'unconfigured' | 'ok' | 'mismatch' | 'error'
 
+// What the subscriber did with each captured DDL statement. Four outcomes
+// that a single count cannot tell apart: it ran, it is queued to run out of
+// band, it ran and raised, or it was never ours to run.
+type DdlStatus =
+    | 'applied' | 'deferred' | 'deferred_done' | 'deferred_failed'
+    | 'failed' | 'skipped' | 'seed' | 'pending'
+
+interface DdlRow {
+    id: number
+    status: DdlStatus
+    command_tag: string
+    object_identity: string | null
+    schema_name: string | null
+    captured_at: string
+    resolved_at: string | null
+    error: string | null
+    ddl_text: string
+}
+
+interface DdlApplyState {
+    installed: boolean
+    skipped_tracked?: boolean
+    seed: number
+    total: number
+    counts: Partial<Record<DdlStatus, number>>
+    rows: DdlRow[]
+}
+
+// Grouped for the filter, because "deferred" is one idea to a reader and
+// three states to the machine.
+const DDL_TABS: { key: string; label: string; match: DdlStatus[] }[] = [
+    { key: 'all', label: 'All', match: [] },
+    { key: 'applied', label: 'Applied', match: ['applied'] },
+    { key: 'deferred', label: 'Deferred', match: ['deferred', 'deferred_done', 'deferred_failed'] },
+    { key: 'failed', label: 'Failed', match: ['failed'] },
+    { key: 'other', label: 'Skipped / seed', match: ['skipped', 'seed', 'pending'] },
+]
+
+const DDL_LABEL: Record<DdlStatus, string> = {
+    applied: 'applied',
+    deferred: 'deferred — queued',
+    deferred_done: 'deferred — ran',
+    deferred_failed: 'deferred — failed',
+    failed: 'failed',
+    skipped: 'skipped',
+    seed: 'seed',
+    pending: 'pending',
+}
+
+function ddlVariant(s: DdlStatus): 'success' | 'warning' | 'destructive' | 'neutral' {
+    if (s === 'applied' || s === 'deferred_done') return 'success'
+    if (s === 'failed' || s === 'deferred_failed') return 'destructive'
+    if (s === 'deferred' || s === 'pending') return 'warning'
+    return 'neutral'
+}
+
 export function Config() {
     const [copy, setCopy] = useState<CopyProgress | null>(null)
     const [fsUsage, setFsUsage] = useState<FsUsageSummary | null>(null)
@@ -59,6 +115,11 @@ export function Config() {
     } | null>(null)
     const [schemaErrors, setSchemaErrors] = useState<{ recorded: boolean; count: number; errors: string[] } | null>(null)
     const [fidelityExpanded, setFidelityExpanded] = useState(false)
+
+    const [ddl, setDdl] = useState<DdlApplyState | null>(null)
+    const [ddlExpanded, setDdlExpanded] = useState(false)
+    const [ddlTab, setDdlTab] = useState('all')
+    const [ddlOpenRow, setDdlOpenRow] = useState<number | null>(null)
 
     const [anon, setAnon] = useState<{ configured: boolean; path: string; sql: string } | null>(null)
     const [anonExpanded, setAnonExpanded] = useState(false)
@@ -208,6 +269,13 @@ export function Config() {
             .catch(() => {})
     }
 
+    const loadDdl = () => {
+        fetch(`${base}/replication/ddl-apply?limit=300`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d) setDdl(d) })
+            .catch(() => {})
+    }
+
     const loadAnon = () => {
         fetch(`${base}/clones/anonymize-sql`)
             .then((r) => (r.ok ? r.json() : null))
@@ -310,6 +378,7 @@ export function Config() {
         runCheck()
         loadAnon()
         loadFidelity()
+        loadDdl()
         // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
 
@@ -354,6 +423,17 @@ export function Config() {
     const unconfigured = checkStatus === 'unconfigured'
 
     const missingExt = (ext?.missing_not_installed.length || 0) + (ext?.missing_not_available.length || 0)
+
+    // A deferred statement that failed out of band is as broken as one that
+    // failed in the stream — it just failed somewhere quieter.
+    const ddlBroken = (ddl?.counts.failed || 0) + (ddl?.counts.deferred_failed || 0)
+    const ddlPending = (ddl?.counts.deferred || 0) + (ddl?.counts.pending || 0)
+    const ddlVisible = (() => {
+        if (!ddl) return []
+        const tab = DDL_TABS.find((t) => t.key === ddlTab)
+        if (!tab || tab.key === 'all') return ddl.rows
+        return ddl.rows.filter((r) => tab.match.includes(r.status))
+    })()
 
     const anonLineCount = anon?.sql ? anon.sql.trimEnd().split('\n').length : 0
 
@@ -651,6 +731,125 @@ export function Config() {
                                 </pre>
                             )}
                         </div>
+                    </div>
+                )}
+            </Card>
+
+            {/* ── Collapsible detail: DDL apply ──
+                Rows only replicate; DDL gets here because this system carries
+                it separately, and that carriage can end three ways. A count of
+                "13 failures" says nothing about whether the schema is intact —
+                which statement, and what it raised, is the whole question. */}
+            <Card className="mt-3">
+                <button
+                    onClick={() => setDdlExpanded((v) => !v)}
+                    className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                    {ddlExpanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                    <span className="text-[13px] font-semibold tracking-tight">Schema changes from the primary</span>
+                    <span className="text-xs text-muted-foreground">
+                        {ddl === null
+                            ? ''
+                            : !ddl.installed
+                                ? '— DDL replication is not installed on this replica'
+                                : `— ${ddl.total} captured · ${ddl.counts.applied || 0} applied${(ddlPending || 0) > 0 ? ` · ${ddlPending} queued` : ''}${ddlBroken > 0 ? ` · ${ddlBroken} failed` : ''}`}
+                    </span>
+                    {ddlBroken > 0 && <Badge variant="destructive" className="ml-auto">{ddlBroken} failed</Badge>}
+                    {ddlBroken === 0 && (ddlPending || 0) > 0 && <Badge variant="warning" className="ml-auto">{ddlPending} queued</Badge>}
+                </button>
+
+                {ddlExpanded && (
+                    <div className="mt-3 space-y-3 pl-6">
+                        {ddl === null ? (
+                            <p className="text-xs text-muted-foreground">Loading…</p>
+                        ) : !ddl.installed ? (
+                            <p className="text-xs text-muted-foreground">
+                                No DDL log on this replica. Schema changes made on the primary are not
+                                being carried here — Postgres replicates rows only.
+                            </p>
+                        ) : (
+                            <>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                    {DDL_TABS.map((t) => {
+                                        const n = t.key === 'all'
+                                            ? ddl.total
+                                            : t.match.reduce((a, s) => a + (ddl.counts[s] || 0), 0)
+                                        return (
+                                            <button
+                                                key={t.key}
+                                                onClick={() => { setDdlTab(t.key); setDdlOpenRow(null) }}
+                                                className={`rounded-md border px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                                                    ddlTab === t.key
+                                                        ? 'border-primary bg-primary/10 text-foreground'
+                                                        : 'border-border text-muted-foreground hover:text-foreground'
+                                                }`}
+                                            >
+                                                {t.label} <span className="tabular-nums">{n}</span>
+                                            </button>
+                                        )
+                                    })}
+                                    <Button variant="ghost" size="sm" className="ml-auto" onClick={loadDdl}>
+                                        <RefreshCw className="size-3.5" />
+                                    </Button>
+                                </div>
+
+                                {/* Deferred is not a synonym for broken and not a
+                                    synonym for done, so it says which. */}
+                                {(ddl.counts.deferred || 0) > 0 && (
+                                    <p className="text-xs text-muted-foreground">
+                                        {ddl.counts.deferred} statement{ddl.counts.deferred === 1 ? '' : 's'} queued:
+                                        CREATE INDEX CONCURRENTLY cannot run inside the apply transaction, so it runs
+                                        out of band on the next sync pass.
+                                    </p>
+                                )}
+
+                                {ddlVisible.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground">Nothing in this group.</p>
+                                ) : (
+                                    <div className="divide-y divide-border overflow-hidden rounded-md border border-border">
+                                        {ddlVisible.map((r) => (
+                                            <div key={r.id}>
+                                                <button
+                                                    onClick={() => setDdlOpenRow((v) => (v === r.id ? null : r.id))}
+                                                    className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                                                >
+                                                    <Badge variant={ddlVariant(r.status)} className="mt-px shrink-0">
+                                                        {DDL_LABEL[r.status]}
+                                                    </Badge>
+                                                    <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">#{r.id}</span>
+                                                    <span className="shrink-0 text-[11px] text-muted-foreground">{r.command_tag}</span>
+                                                    <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
+                                                        {r.object_identity || r.ddl_text.replace(/\s+/g, ' ')}
+                                                    </span>
+                                                    <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                                                        {r.captured_at.slice(5, 16).replace('T', ' ')}
+                                                    </span>
+                                                </button>
+                                                {ddlOpenRow === r.id && (
+                                                    <div className="space-y-2 border-t border-border bg-secondary/30 px-2.5 py-2">
+                                                        {r.error && (
+                                                            <div className="rounded border border-destructive/30 bg-destructive/[0.07] px-2 py-1.5 font-mono text-[11px] text-destructive">
+                                                                {r.error}
+                                                            </div>
+                                                        )}
+                                                        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-[11px] leading-relaxed">
+                                                            {r.ddl_text}
+                                                        </pre>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {ddl.seed > 0 && (
+                                    <p className="text-xs text-muted-foreground">
+                                        Statements up to #{ddl.seed} predate this replica and were never replayed —
+                                        the initial clone already had their result.
+                                    </p>
+                                )}
+                            </>
+                        )}
                     </div>
                 )}
             </Card>
