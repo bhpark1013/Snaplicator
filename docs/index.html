@@ -1010,7 +1010,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'origin.label':'만든 이유',
       'origin.p1':'테스트 DB 구성을 위해 매번 데이터를 시딩해야하고, production에 버그 발생하면 test환경에서는 재현이 안되고, QA시 매번 특정 시나리오에서 테스트해야하는 상황이 번거로워서 만들었습니다.',
       'origin.p2':'실시간으로 primary db의 dml 및 ddl을 복제하고, 복제된 DB에 특정 상태에 스냅샷을 찍어 매번 같은 데이터로 테스트할 수 있습니다.',
-      'hero.title2':'시드도, 덤프도 없습니다.',
+      'hero.title2':'',
       'feat.title':'핵심기능 2가지',
       'feat.h1':'데이터 및 스키마 실시간 복제',
       'feat.p1':'dml 뿐만 아니라 primary의 스키마 변경을 실시간으로 반영합니다.',
@@ -1063,7 +1063,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'gr.e1':'논리 복제','gr.e2':'얼리기','gr.e3':'띄우기',
       'common.copy':'복사',
       'hero.eyebrow':'AI를 위한 테스트 DB',
-      'hero.title':'프로덕션을 즉시 복제한 테스트 DB.',
+      'hero.title':'프로덕션 데이터로 빠르게 테스트하세요',
       'hero.macnote':'sudo 없이 실행하세요. 리눅스 머신부터 만듭니다.',
       'con.title':'리플리카, 스냅샷, 클론',
       'con.lead':'셋은 앞의 것에서 차례로 만들어집니다. 클론을 부숴도 위쪽은 아무 영향이 없습니다.',
@@ -1242,7 +1242,11 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
     var d = DICT[lang];
     i18nNodes.forEach(function (el) {
       var k = el.getAttribute('data-i18n');
-      var v = (d && d[k]) || EN[k];
+      // Presence, not truthiness: a translation that is deliberately empty
+      // — a headline that is one line in this language and two in English —
+      // is a real answer, and `||` would have thrown it away and shown the
+      // English instead.
+      var v = (d && d[k] != null) ? d[k] : EN[k];
       if (v != null) el.innerHTML = v;
     });
     document.documentElement.lang = lang;
