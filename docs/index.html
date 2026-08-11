@@ -841,12 +841,24 @@
     <ol class="steps">
       <li id="g1"><div>
         <h3 data-i18n="g.h1">Install and point it at the primary</h3>
-        <p data-i18n="g.p1">It provisions the btrfs pool, starts the management plane and opens the UI. Answer the prompt with a connection URI — it only ever reads — or <code>demo</code> for a sample database.</p>
+        <p data-i18n="g.p1">It provisions the btrfs pool, starts the management plane and opens the UI. Answer the prompt with a connection URI — of an account that may do the two things below — or <code>demo</code> for a sample database.</p>
         <pre class="term"><span class="c"># Linux</span>
 curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash
 
 <span class="c"># macOS — no sudo; creates an OrbStack Linux machine and continues inside it</span>
 curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</pre>
+
+        <p style="margin-top:.9rem" data-i18n="g.p1b">It asks for a superuser, which is a lot to ask, so here is why. Schema changes are captured with <b>event triggers</b>, and <code>CREATE EVENT TRIGGER</code> is superuser-only — PostgreSQL provides no <code>GRANT</code> for it, so no narrower role can install one. Putting a newly created table into the publication additionally needs ownership of that table. Both are properties of PostgreSQL, not shortcuts taken here.</p>
+
+        <pre class="term" data-i18n="g.p1pre"><span class="c"># everything it creates on your primary — all named _snaplicator*</span>
+_snaplicator_ddl_log          table        one row per CREATE / ALTER / DROP
+_snaplicator_capture_ddl      trigger      writes that row
+_snaplicator_capture_drop     trigger      the same, for drops
+_snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publication
+&lt;publication&gt;                 publication  created, or one you already have
+&lt;slot&gt;                        slot         opened by the replica, as any has</pre>
+
+        <p style="margin-top:.75rem" data-i18n="g.p1c">Your rows are read and never written — the replica is downstream and has no path back. You still set <code>wal_level=logical</code> and the replication role yourself; the installer checks both before it changes anything. Removing all of it is six statements, listed in the README.</p>
       </div></li>
 
       <li id="g2"><div>
@@ -1030,7 +1042,10 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'g.n1':'1. 설치','g.n2':'2. 초기 복제','g.n3':'3. 익명화','g.n4':'4. 스키마',
       'g.n5':'5. 스냅샷','g.n6':'6. 클론','g.n7':'7. 에이전트','g.n8':'예외 케이스',
       'g.h1':'설치하고 프라이머리 지정하기',
-      'g.p1':'btrfs 풀을 잡고 관리 서버를 띄운 다음 UI를 엽니다. 프롬프트에는 접속 URI를 넣으면 되고, 그 DB에서는 읽기만 합니다. 붙일 DB가 없으면 <code>demo</code>라고 답하세요.',
+      'g.p1':'btrfs 풀을 잡고 관리 서버를 띄운 다음 UI를 엽니다. 프롬프트에는 아래 두 가지를 할 수 있는 계정의 접속 URI를 넣으면 됩니다. 붙일 DB가 없으면 <code>demo</code>라고 답하세요.',
+      'g.p1b':'슈퍼유저를 요구합니다. 큰 요구라서 이유를 적습니다. 스키마 변경은 <b>이벤트 트리거</b>로 잡는데, <code>CREATE EVENT TRIGGER</code>는 슈퍼유저 전용이고 PostgreSQL에 이걸 위한 <code>GRANT</code>가 없습니다. 더 좁은 권한으로는 설치 자체가 안 됩니다. 새로 만든 테이블을 publication에 넣으려면 그 테이블의 소유권도 필요합니다. 둘 다 PostgreSQL의 성질이지 여기서 편하려고 잡은 게 아닙니다.',
+      'g.p1pre':'<span class="c"># 프로덕션에 만들어지는 것 전부 — 이름이 모두 _snaplicator*</span>\n_snaplicator_ddl_log          테이블      CREATE / ALTER / DROP 한 건당 한 행\n_snaplicator_capture_ddl      트리거      그 행을 씁니다\n_snaplicator_capture_drop     트리거      같은 일, DROP용\n_snaplicator_auto_add_&lt;pub&gt;   트리거      새 테이블이 publication에 합류\n&lt;publication&gt;                 publication 새로 만들거나, 쓰던 것을 고름\n&lt;slot&gt;                        슬롯        복제본이 여는 것, 여느 복제와 같음',
+      'g.p1c':'여러분의 행은 읽기만 하고 쓰지 않습니다. 복제본은 하류에 있고 거슬러 올라올 경로가 없습니다. <code>wal_level=logical</code>과 복제 역할은 직접 설정해야 하고, 설치 프로그램이 무언가 바꾸기 전에 둘 다 확인합니다. 전부 지우는 건 문장 여섯 개고 README에 있습니다.',
       'g.h2':'테이블 고르고 첫 복사 돌리기',
       'g.p2':'UI에서 테이블마다 용량과 행 수를 보면서 고릅니다. 고르기 전까지는 아무것도 복사하지 않습니다. 에이전트가 실제로 건드리는 것만 고르고, 나중에 더 넣으세요.',
       'g.p2b':'스키마를 복제하고 구독을 만든 다음, 고른 테이블을 복사합니다. 오래 걸리는 단계는 여기 하나뿐이고 처음 한 번만 겪습니다. 끝나면 그때부터는 변경분이 계속 흘러들어옵니다.',
@@ -1146,7 +1161,10 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'g.n1':'1. インストール','g.n2':'2. 初回コピー','g.n3':'3. 匿名化','g.n4':'4. スキーマ',
       'g.n5':'5. スナップショット','g.n6':'6. クローン','g.n7':'7. エージェント','g.n8':'例外ケース',
       'g.h1':'インストールしてプライマリを指定する',
-      'g.p1':'btrfs プールを用意し、管理プレーンを起動し、UI を開きます。プロンプトには接続 URI を — その DB からは読むだけです。無ければ <code>demo</code> と答えてください。',
+      'g.p1':'btrfs プールを用意し、管理プレーンを起動し、UI を開きます。プロンプトには下の二つができるアカウントの接続 URI を入れてください。無ければ <code>demo</code> と答えてください。',
+      'g.p1b':'スーパーユーザーを要求します。大きな要求なので理由を書きます。スキーマ変更は<b>イベントトリガー</b>で捕まえますが、<code>CREATE EVENT TRIGGER</code> はスーパーユーザー専用で、PostgreSQL にはこれ用の <code>GRANT</code> がありません。より狭い権限では設置そのものができません。新しく作ったテーブルを publication に入れるには、そのテーブルの所有権も必要です。どちらも PostgreSQL の性質であって、ここで手を抜いた結果ではありません。',
+      'g.p1pre':'<span class="c"># 本番に作られるもの全部 — すべて _snaplicator* という名前</span>\n_snaplicator_ddl_log          テーブル    CREATE / ALTER / DROP 1 件につき 1 行\n_snaplicator_capture_ddl      トリガー    その行を書きます\n_snaplicator_capture_drop     トリガー    同じこと、DROP 用\n_snaplicator_auto_add_&lt;pub&gt;   トリガー    新しいテーブルが publication に加わる\n&lt;publication&gt;                 publication 新規作成、または既存のものを選択\n&lt;slot&gt;                        スロット    レプリカが開く、通常の複製と同じ',
+      'g.p1c':'あなたの行は読むだけで、書きません。レプリカは下流にあり、遡る経路がありません。<code>wal_level=logical</code> と複製ロールはご自身で設定する必要があり、インストーラは何かを変える前に両方を確認します。すべて消すのは 6 文で、README にあります。',
       'g.h2':'テーブルを選び、初回コピーを走らせる',
       'g.p2':'UI で、各テーブルの容量と行数を見ながら選びます。指示するまで何もコピーしません。エージェントが実際に触れるものだけ選び、後から追加してください。',
       'g.p2b':'スキーマを複製し、サブスクリプションを作り、選んだテーブルをコピーします。唯一の遅い工程で、一度きりです。完了後は変更が流れ込み続けます。',

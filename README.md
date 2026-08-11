@@ -42,6 +42,54 @@ it never drifts out of shape.
 many writable clones from it as you like — seconds each, effectively no disk
 until something writes, and resetting one back is a single call.
 
+## What it asks of your primary, and why
+
+It asks for a superuser, which is a lot to ask, so here is exactly what that
+buys and exactly what lands in your production database.
+
+**Why superuser.** Schema changes are captured with **event triggers**, and
+`CREATE EVENT TRIGGER` is superuser-only — PostgreSQL provides no `GRANT` for
+it, so there is no narrower role that can install one. Adding a newly created
+table to the publication additionally requires owning that table. A
+replication-only role gets through neither step. This is a property of
+PostgreSQL, not a shortcut taken here.
+
+**What it creates**, all named `_snaplicator*` so you can find every piece:
+
+| Object | Kind | What it is for |
+|---|---|---|
+| `_snaplicator_ddl_log` | table (+ sequence, PK) | One row per `CREATE` / `ALTER` / `DROP`. This is the outbox. |
+| `_snaplicator_capture_ddl` | function + event trigger (`ddl_command_end`) | Writes that row. |
+| `_snaplicator_capture_drop` | function + event trigger (`sql_drop`) | Same, for drops, which the other event cannot see. |
+| `_snaplicator_auto_add_<publication>` | function + event trigger | Adds a newly created table to the publication so it starts replicating. |
+| your publication | publication | Created, or an existing one you pick. |
+| a replication slot | slot | Created by the subscriber, as any logical replica does. |
+
+**What it writes.** One row per schema change, into its own log table. Your
+tables are read and never written — the replica is downstream of them and has
+no path back.
+
+**What you have to set yourself.** `wal_level=logical` and a role that may
+replicate (`rds_replication` on RDS/Aurora). The installer checks both before
+it changes anything and tells you which is missing.
+
+**Removing it** leaves nothing behind:
+
+```sql
+DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_ddl;
+DROP EVENT TRIGGER IF EXISTS _snaplicator_capture_drop;
+DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_add_<publication>;
+DROP FUNCTION IF EXISTS public._snaplicator_capture_ddl(),
+                        public._snaplicator_capture_drop(),
+                        public._snaplicator_auto_add_<publication>();
+DROP TABLE IF EXISTS public._snaplicator_ddl_log;   -- sequence and index go with it
+DROP PUBLICATION IF EXISTS <publication>;
+SELECT pg_drop_replication_slot('<slot>');          -- do not skip this one
+```
+
+The slot is the one that matters. A slot nobody reads holds WAL on the primary
+until the disk is gone, so drop it if you stop using Snaplicator.
+
 ## Who it is for
 
 **Use it if**
