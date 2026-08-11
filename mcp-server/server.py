@@ -56,7 +56,18 @@ mcp = FastMCP(
         "Tools whose description starts with ⚠️ mutate real state: clone/snapshot create "
         "and delete, reset/refresh (which discard data), and publication/trigger changes that "
         "act on the upstream PRIMARY database. Confirm any " "⚠️" " operation with the user "
-        "before calling, especially on a production deployment."
+        "before calling, especially on a production deployment.\n\n"
+        "Four of them deserve more than the usual confirmation, because what they "
+        "break is not the thing you are pointing at:\n"
+        "  set_anonymize_sql — unvalidated SQL that then runs against real production "
+        "data on every future clone; shortening it silently stops masking.\n"
+        "  set_replication_selection / choose_publication — narrowing a publication "
+        "DROPs and recreates it on the live primary, which can break a replica "
+        "belonging to someone else.\n"
+        "  start_bootstrap — hours of initial copy, and force=true discards the "
+        "replica's current contents.\n"
+        "Every set_*/put-style tool takes the COMPLETE new value, not a delta. Read "
+        "the matching get_* first and send back the full text or list."
     ),
 )
 
@@ -69,6 +80,12 @@ def _get(path: str) -> dict:
 
 def _post(path: str, body: dict | None = None, timeout: int = 60) -> dict:
     r = httpx.post(f"{BASE_URL}{path}", json=body, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+def _put(path: str, body: dict | None = None, timeout: int = 60) -> dict:
+    r = httpx.put(f"{BASE_URL}{path}", json=body, timeout=timeout)
     r.raise_for_status()
     return r.json()
 
@@ -299,6 +316,118 @@ def get_clone_usage(clone_id: str) -> str:
 def get_filesystem_usage() -> str:
     """Get overall filesystem usage summary for the data directory."""
     return json.dumps(_get("/clones/usage/fs"), ensure_ascii=False)
+
+
+@mcp.tool()
+def get_clone_create_progress() -> str:
+    """Where the clone currently being built has got to.
+
+    create_clone / clone_from_snapshot do not return until the clone is serving,
+    so this is how progress is read: call it from a separate turn while the
+    create is still open. `active` distinguishes a run in flight from the last
+    finished one. Stages: checkpoint → snapshot → permissions → container →
+    ready → subscriptions → sequences → anonymize → user.
+    """
+    return json.dumps(_get("/clones/create-progress"), ensure_ascii=False)
+
+
+@mcp.tool()
+def set_clone_description(ctx: Context, clone_id: str, name: str | None = None,
+                          description: str | None = None) -> str:
+    """Rename a clone or change its description.
+
+    ⚠️ Mutates state, but metadata only: no database content is touched and the
+    change is reversible. Subject to the mutable-clone allowlist like any other
+    clone write.
+
+    Args:
+        clone_id: Clone identifier (subvolume name, container name, port, or connection URL)
+        name: New display name, or None to leave it
+        description: New description, or None to leave it
+    """
+    clone = _resolve_clone(clone_id)
+    _assert_clone_mutable(ctx, clone)
+    body = {}
+    if name is not None:
+        body["name"] = name
+    if description is not None:
+        body["description"] = description
+    if not body:
+        raise ValueError("Provide at least one of `name` / `description`")
+    return json.dumps(_post(f"/clones/{clone['name']}/description", body), ensure_ascii=False)
+
+
+# ── Anonymization ──
+#
+# The script runs on every clone made from the live main replica. Clones made
+# from a snapshot skip it — the backend assumes a clone_snapshot is already
+# anonymized — so reading this does not by itself tell you whether a given
+# clone was scrubbed. get_clone_detail says which snapshot it came from.
+
+@mcp.tool()
+def get_anonymize_sql() -> str:
+    """The anonymization script that runs on clones made from the main replica.
+
+    `configured` false means there is no script: clones are handed out as plain
+    copies of production. That is a legitimate setup and a bad accident, which
+    is why it is reported rather than assumed.
+    """
+    return json.dumps(_get("/clones/anonymize-sql"), ensure_ascii=False)
+
+
+@mcp.tool()
+def set_anonymize_sql(sql: str) -> str:
+    """Replace the anonymization script.
+
+    ⚠️ Dangerous, and in two directions. The text is saved verbatim with NO
+    validation and NO dry run, then executed against real production data on
+    every clone built from the main replica after this. Bad SQL fails the whole
+    clone build; a shortened script silently stops masking whatever it dropped.
+    A full overwrite, not a patch — read get_anonymize_sql first and send back
+    the complete text. Always confirm the diff with the user.
+
+    Args:
+        sql: The complete new script. An empty string is rejected by the server.
+    """
+    return json.dumps(_put("/clones/anonymize-sql", {"sql": sql}), ensure_ascii=False)
+
+
+# ── Notifications ──
+
+@mcp.tool()
+def get_notification_config() -> str:
+    """Webhook notification settings (URL is returned redacted)."""
+    return json.dumps(_get("/notifications"), ensure_ascii=False)
+
+
+@mcp.tool()
+def set_notification_config(webhook_url: str | None = None, enabled: bool | None = None) -> str:
+    """Change webhook notification settings.
+
+    ⚠️ Mutates state: sets where Snaplicator sends alerts. Passing enabled=false
+    silences failure notifications for everyone using this install.
+
+    Args:
+        webhook_url: New webhook URL, or None to leave it
+        enabled: Turn notifications on/off, or None to leave it
+    """
+    body: dict = {}
+    if webhook_url is not None:
+        body["webhook_url"] = webhook_url
+    if enabled is not None:
+        body["enabled"] = enabled
+    if not body:
+        raise ValueError("Provide at least one of `webhook_url` / `enabled`")
+    return json.dumps(_put("/notifications", body), ensure_ascii=False)
+
+
+@mcp.tool()
+def send_test_notification() -> str:
+    """Send a test message to the configured webhook.
+
+    ⚠️ Sends a real message to a real channel. Harmless but visible to people.
+    """
+    return json.dumps(_post("/notifications/test"), ensure_ascii=False)
 
 
 # ── Snapshots ──
@@ -552,6 +681,292 @@ def install_trigger() -> str:
 def get_copy_progress() -> str:
     """Get initial data copy progress (for new subscriptions)."""
     return json.dumps(_get("/replication/copy-progress"))
+
+
+# ── Replication check SQL ──
+
+@mcp.tool()
+def get_replication_check_sql() -> str:
+    """The SQL run_replication_check executes on both ends.
+
+    `configured` false means the query is still the shipped example, which
+    references tables that do not exist here — so the check always errors and
+    always reads as broken replication rather than as an unanswered question.
+    """
+    return json.dumps(_get("/replication/check-sql"), ensure_ascii=False)
+
+
+@mcp.tool()
+def set_replication_check_sql(sql: str) -> str:
+    """Replace the replication-check SQL.
+
+    ⚠️ Mutates state, but the server refuses anything not provably read-only
+    (400) and additionally runs it in a READ ONLY transaction. A full overwrite,
+    not a patch.
+
+    Args:
+        sql: The complete new query. Read-only statements only.
+    """
+    return json.dumps(_put("/replication/check-sql", {"sql": sql}), ensure_ascii=False)
+
+
+# ── Publication and table selection ──
+
+@mcp.tool()
+def list_publications() -> str:
+    """Publications on the primary, which one this replica speaks for, and
+    whether this install may rewrite it (`ours`)."""
+    return json.dumps(_get("/replication/publications"), ensure_ascii=False)
+
+
+@mcp.tool()
+def choose_publication(name: str, mode: str) -> str:
+    """Say which publication this replica speaks for.
+
+    ⚠️ Acts on the publisher (the upstream PRIMARY database). `create` runs
+    CREATE PUBLICATION on the live primary. `adopt` claims the right to rewrite
+    a publication that may predate this install and may be feeding a replica
+    that has nothing to do with us — narrowing one drops and recreates it, which
+    would break that other replica. Confirm with the user first.
+
+    Args:
+        name: Publication name
+        mode: create (new, empty, ours to narrow) | reuse (read as it stands,
+              never rewritten) | adopt (existing, taken over — rewritable)
+    """
+    if mode not in ("create", "reuse", "adopt"):
+        raise ValueError("mode must be one of: create, reuse, adopt")
+    return json.dumps(_put("/replication/publication", {"name": name, "mode": mode}), ensure_ascii=False)
+
+
+@mcp.tool()
+def get_replication_selection() -> str:
+    """The publication as a set of tables, plus which schemas future tables
+    join on their own."""
+    return json.dumps(_get("/replication/selection"), ensure_ascii=False)
+
+
+@mcp.tool()
+def set_replication_selection(tables: list[str], auto_schemas: list[str] | None = None) -> str:
+    """Make the publication contain exactly these tables.
+
+    ⚠️ Acts on the publisher (the upstream PRIMARY database) and is destructive
+    to replication. A FOR ALL TABLES publication cannot have a table removed, so
+    the first exclusion DROPs and recreates the publication — any other
+    subscriber reading it is affected. Tables dropped from the selection stop
+    replicating and go stale on the replica. Returns 409 if this install does
+    not own the publication. Send the COMPLETE desired set, not a delta.
+
+    Args:
+        tables: Full list of schema.table to replicate
+        auto_schemas: Schemas whose future tables should join by themselves
+    """
+    body = {"tables": tables, "auto_schemas": auto_schemas or []}
+    return json.dumps(_put("/replication/selection", body, timeout=180), ensure_ascii=False)
+
+
+# ── Bootstrap (initial schema clone + subscription) ──
+
+@mcp.tool()
+def get_bootstrap_status(tail: int = 40) -> str:
+    """Whether the replica has been brought up, is being brought up, or neither.
+
+    Args:
+        tail: Recent log lines to include (max 2000)
+    """
+    return json.dumps(_get(f"/replication/bootstrap?tail={tail}"), ensure_ascii=False)
+
+
+@mcp.tool()
+def start_bootstrap(force: bool = False) -> str:
+    """Clone the schema from the primary and create the subscription.
+
+    ⚠️ The heaviest operation here. Reads the primary's whole schema and starts
+    an initial data copy measured in minutes to hours; force=true restarts one
+    that already exists, discarding the replica's current contents. Returns
+    immediately — the run continues on its own; poll get_bootstrap_status.
+    409 means it is already running or already subscribed.
+
+    Args:
+        force: Re-run even if the replica is already bootstrapped
+    """
+    return json.dumps(_post(f"/replication/bootstrap?force={str(force).lower()}"), ensure_ascii=False)
+
+
+@mcp.tool()
+def cancel_bootstrap() -> str:
+    """Stop a running bootstrap.
+
+    ⚠️ Leaves whatever it managed to create — a half-built replica, not a clean
+    slate. 409 if nothing is running.
+    """
+    return json.dumps(_delete("/replication/bootstrap"), ensure_ascii=False)
+
+
+# ── Fidelity and capacity: is this replica actually a copy? ──
+
+@mcp.tool()
+def get_capacity() -> str:
+    """Will the current selection fit in the pool?
+
+    Two separate answers: `fits` is a fact about this disk today and is what the
+    copy refuses over; `comfortable` is a forecast about the snapshots and
+    clones that come later, and is only ever advisory.
+    """
+    return json.dumps(_get("/replication/capacity"), ensure_ascii=False)
+
+
+@mcp.tool()
+def get_schema_drift() -> str:
+    """Where the replica's shape no longer matches what the primary publishes.
+
+    Read-only by design: by the time a difference is detectable the DDL that
+    would close it is gone, and inventing one is how a diagnostic becomes an
+    outage.
+    """
+    return json.dumps(_get("/replication/schema-drift"), ensure_ascii=False)
+
+
+@mcp.tool()
+def get_schema_errors(limit: int = 200) -> str:
+    """Objects the initial schema clone could not create.
+
+    `recorded: false` means the clone reported nothing or predates this record —
+    absence of evidence, not a clean bill of health.
+
+    Args:
+        limit: Maximum errors to return (1-2000)
+    """
+    return json.dumps(_get(f"/replication/schema-errors?limit={limit}"), ensure_ascii=False)
+
+
+@mcp.tool()
+def get_extension_parity() -> str:
+    """The primary's extensions against what this replica can offer.
+
+    Two different failures with two different fixes: `not installed` (the files
+    are there, CREATE EXTENSION was never run) versus `not available` (the
+    binary is not in the image, so no SQL can fix it — only a different
+    POSTGRES_IMAGE can).
+    """
+    return json.dumps(_get("/replication/extensions"), ensure_ascii=False)
+
+
+@mcp.tool()
+def get_sync_log(limit: int = 100) -> str:
+    """Recent auto-sync activity: new tables, column and constraint adds,
+    schema moves, FDW drift re-imports, errors.
+
+    Args:
+        limit: Maximum events to return
+    """
+    return json.dumps(_get(f"/replication/sync-log?limit={limit}"), ensure_ascii=False)
+
+
+# ── FDW: tables read live from the primary instead of replicated ──
+
+@mcp.tool()
+def get_fdw_state() -> str:
+    """The FDW yaml config plus the foreign tables actually present on the replica."""
+    return json.dumps(_get("/replication/fdw"), ensure_ascii=False)
+
+
+@mcp.tool()
+def set_fdw_credentials(user: str, password: str, host: str | None = None,
+                        port: int | None = None, dbname: str | None = None) -> str:
+    """Set the login foreign tables are read as, and build the FDW server with it.
+
+    ⚠️ Stores a credential for the upstream PRIMARY database and connects to it
+    to verify. Leave host/port/dbname empty for wherever replication already
+    connects — a bastion or a pooler is the reason to differ.
+
+    Args:
+        user: Primary database username
+        password: Its password
+        host: Override host, or None for the replication host
+        port: Override port, or None
+        dbname: Override database, or None
+    """
+    body: dict = {"user": user, "password": password}
+    if host is not None:
+        body["host"] = host
+    if port is not None:
+        body["port"] = port
+    if dbname is not None:
+        body["dbname"] = dbname
+    return json.dumps(_put("/replication/fdw/credentials", body), ensure_ascii=False)
+
+
+@mcp.tool()
+def clear_fdw_credentials() -> str:
+    """Forget the FDW login.
+
+    ⚠️ Every foreign table stops being readable until a credential is set again.
+    """
+    return json.dumps(_delete("/replication/fdw/credentials"), ensure_ascii=False)
+
+
+@mcp.tool()
+def add_fdw_tables(tables: list[dict]) -> str:
+    """Expose primary tables on the replica as foreign tables.
+
+    ⚠️ Runs IMPORT FOREIGN SCHEMA against the PRIMARY and rewrites the FDW
+    config. Reads of these tables hit the live primary, so they add load to
+    production. Rejected (400) if a requested table is already replicated
+    through the publication — a table cannot be both.
+
+    Args:
+        tables: [{"schema": "public", "name": "orders"}, ...]
+    """
+    return json.dumps(_post("/replication/fdw/tables", {"tables": tables}, timeout=180), ensure_ascii=False)
+
+
+@mcp.tool()
+def remove_fdw_tables(tables: list[dict]) -> str:
+    """Remove foreign tables. Both the yaml entries and the tables go.
+
+    ⚠️ Mutates state: anything querying these tables on the replica breaks.
+
+    Args:
+        tables: [{"schema": "public", "name": "orders"}, ...]
+    """
+    return json.dumps(_delete("/replication/fdw/tables", {"tables": tables}), ensure_ascii=False)
+
+
+@mcp.tool()
+def add_fdw_schemas(schemas: list[str]) -> str:
+    """Expose whole primary schemas as foreign tables.
+
+    ⚠️ Same as add_fdw_tables but for every table in the schema, current and
+    imported at once. Runs IMPORT FOREIGN SCHEMA against the PRIMARY.
+
+    Args:
+        schemas: Schema names
+    """
+    return json.dumps(_post("/replication/fdw/schemas", {"schemas": schemas}, timeout=180), ensure_ascii=False)
+
+
+@mcp.tool()
+def remove_fdw_schemas(schemas: list[str]) -> str:
+    """Remove whole schemas from FDW.
+
+    ⚠️ Mutates state: every foreign table in these schemas disappears.
+
+    Args:
+        schemas: Schema names
+    """
+    return json.dumps(_delete("/replication/fdw/schemas", {"schemas": schemas}), ensure_ascii=False)
+
+
+@mcp.tool()
+def regenerate_fdw() -> str:
+    """Re-render the generated FDW SQL from the yaml and re-apply it to the replica.
+
+    ⚠️ Rebuilds every foreign table from the config. Use after a manual yaml
+    edit or to recover from drift; 400 if the config does not validate against
+    the current publication.
+    """
+    return json.dumps(_post("/replication/fdw/regenerate", timeout=300), ensure_ascii=False)
 
 
 if __name__ == "__main__":
