@@ -1,4 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import PlainTextResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
@@ -11,12 +14,14 @@ from .api.routes.snapshots import router as snapshots_router
 from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
 from .api.routes.notifications import router as notifications_router
+from .api.routes.anonymize import router as anonymize_router
 from .services import fdw as fdw_svc
 from .services import fdw_creds
 from .services import sync_log
 from .services import bootstrap as bootstrap_svc
 from .services import policy as policy_svc
 from .services import publication as publication_svc
+from .services import usage as usage_svc
 from .services.replication import (
     auto_sync_new_tables,
     compare_published_schemas,
@@ -74,7 +79,9 @@ def _build_publisher_connstr() -> str | None:
 
 async def ddl_sync_loop():
     """Background task that periodically checks for new tables in publication and syncs them."""
-    interval = int(settings.ddl_sync_interval or 30)
+    # `or 30` would read a configured 0 as "unset" and start a 30s loop,
+    # making the documented way to turn the loop off unreachable.
+    interval = 30 if settings.ddl_sync_interval is None else int(settings.ddl_sync_interval)
     if interval <= 0:
         logger.info("DDL sync disabled (interval <= 0)")
         return
@@ -331,6 +338,27 @@ async def ddl_sync_loop():
         await asyncio.sleep(interval)
 
 
+async def usage_refresh_loop():
+    """Keep per-subvolume disk usage warm: hourly, queue any subvolume whose
+    cached measurement is older than the 24h TTL (usage.get_usage measures in
+    a worker thread — one pass over all ~30 subvolumes costs ~5 min of
+    sequential btrfs fi du, once a day). Also prunes entries for deleted
+    subvolumes so the cache tracks reality."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            if settings.root_data_dir:
+                paths = await asyncio.to_thread(
+                    usage_svc.all_subvolume_paths, settings.root_data_dir,
+                )
+                if paths:
+                    await asyncio.to_thread(usage_svc.get_usage, paths, True)
+                    await asyncio.to_thread(usage_svc.prune_except, paths)
+        except Exception as e:
+            logger.warning(f"usage warm sweep failed: {e}")
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Best-effort: install the DDL capture triggers (outbox) on the publisher
@@ -348,13 +376,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not install capture triggers at startup (will retry in polling loop): {e}")
 
-    task = asyncio.create_task(ddl_sync_loop())
+    tasks = [
+        asyncio.create_task(ddl_sync_loop()),
+        asyncio.create_task(usage_refresh_loop()),
+    ]
     yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Snaplicator API", version="0.1.0", lifespan=lifespan)
@@ -367,8 +400,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── API-failure alerting ─────────────────────────────────────────────
+# Any 5xx leaving the API is recorded as a sync event, which forwards to
+# Slack via sync_log -> notify_event (the detail carries an "error" key;
+# notify.send's per-kind cooldown keeps a crash-looping endpoint from
+# flooding the channel). 4xx are client mistakes, not incidents.
+
+@app.exception_handler(StarletteHTTPException)
+async def _alert_http_5xx(request: Request, exc: StarletteHTTPException):
+    if exc.status_code >= 500:
+        sync_log.record("api_error", {
+            "method": request.method,
+            "path": request.url.path,
+            "status": exc.status_code,
+            "error": str(exc.detail)[:500],
+        }, dedupe=False)
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(Exception)
+async def _alert_unhandled(request: Request, exc: Exception):
+    logging.getLogger("snaplicator.api").error(
+        "unhandled error on %s %s: %r", request.method, request.url.path, exc)
+    sync_log.record("api_error", {
+        "method": request.method,
+        "path": request.url.path,
+        "status": 500,
+        "error": repr(exc)[:500],
+    }, dedupe=False)
+    # same body/status the default 500 path produces
+    return PlainTextResponse("Internal Server Error", status_code=500)
+
+
 app.include_router(health_router, prefix="/health", tags=["health"]) 
 app.include_router(snapshots_router, prefix="/snapshots", tags=["snapshots"]) 
 app.include_router(clones_router, prefix="/clones", tags=["clones"]) 
 app.include_router(replication_router, prefix="/replication", tags=["replication"])
 app.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
+app.include_router(anonymize_router, prefix="/anonymize", tags=["anonymize"])

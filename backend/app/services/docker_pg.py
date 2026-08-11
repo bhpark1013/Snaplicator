@@ -10,7 +10,6 @@ from typing import Optional, Dict, List, Tuple
 import time
 import json
 
-from . import clone_progress
 from .btrfs import write_snaplicator_metadata, read_snaplicator_metadata, get_clone_detail
 
 
@@ -216,70 +215,6 @@ BEGIN
 END$$;"""
 
 
-def _stop_container(container_name: str, timeout: int = 60) -> None:
-    """Stop a clone's postgres so its clients are told, rather than cut off.
-
-    `docker rm -f` is SIGKILL and then the container's network namespace is
-    gone. Nothing closes the client connections, so nothing reaches the far
-    end either: an open socket stays ESTABLISHED and its packets go nowhere,
-    and the application sees no error at all — just silence, until TCP
-    keepalive notices, which on a Linux default is two hours away. That is
-    what makes a pool look unable to reconnect long after the database is
-    back.
-
-    `docker stop` sends the image's STOPSIGNAL, and the postgres images set
-    that to SIGINT — PostgreSQL's fast shutdown, which disconnects every
-    client, rolls back their transactions and checkpoints before exiting. The
-    clients get a FIN immediately and reconnect on their own.
-
-    The timeout is generous because the checkpoint is the point: killed
-    halfway, the data directory needs crash recovery on the next start, which
-    is the delay this whole path exists to avoid.
-    """
-    subprocess.run(
-        ["docker", "stop", "--time", str(timeout), container_name],
-        check=False, capture_output=True,
-    )
-
-
-def _give_pgdata_to_postgres(clone_path: Path, image: str) -> bool:
-    """Make PGDATA answer postgres's startup check, if it does not already.
-
-    postgres refuses to start unless the data directory is owned by the uid
-    its server process runs as and is 0700 or 0750. A btrfs snapshot carries
-    the source's ownership, so this matters exactly when the clone runs a
-    different image from the replica it came from and the two disagree about
-    which uid `postgres` is.
-
-    Same image on both sides — the ordinary case — and it already matches, so
-    the walk changes nothing while still visiting every file in the tree. One
-    stat answers whether it is needed at all; checking the top is enough
-    because the source is a data directory postgres itself laid down, and
-    that is uniform by construction.
-    """
-    uid, gid = _detect_postgres_uid_gid(image)
-    try:
-        st = clone_path.stat()
-        if st.st_uid == uid and st.st_gid == gid and (st.st_mode & 0o777) in (0o700, 0o750):
-            _timing_log(f"[CLONE_TIMING] chown_skipped path={clone_path} uid={uid} gid={gid}")
-            return False
-    except OSError:
-        pass
-    t0 = time.monotonic()
-    _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
-    _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
-    _timing_log(f"[CLONE_TIMING] chown_ms={int((time.monotonic()-t0)*1000)} path={clone_path}")
-    return True
-
-
-def _delete_subvolume_quietly(path: Path) -> None:
-    try:
-        if path.exists():
-            _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(path)])
-    except subprocess.CalledProcessError:
-        pass
-
-
 def _sync_owned_sequences(container_name: str, user: str, db: str) -> None:
     t0 = time.monotonic()
     try:
@@ -369,18 +304,11 @@ def _launch_clone_container(
     anonymize_ran = False
     anonymize_output: Optional[str] = None
 
-    clone_progress.stage("container")
     tr0 = time.monotonic()
     subprocess.run(cmd, check=True)
     tr1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] docker_run_ms={int((tr1-tr0)*1000)} container={container_name} port={host_port}")
 
-    # The longest stretch with nothing to show for it: the snapshot was taken
-    # from a running postgres, so the clone starts by replaying WAL. Named
-    # separately from the docker run above because the two fail differently —
-    # a container that never starts is a docker problem, one that starts and
-    # never answers is a recovery still going.
-    clone_progress.stage("ready")
     tw0 = time.monotonic()
     for _ in range(60):
         ready = subprocess.run(
@@ -403,7 +331,6 @@ def _launch_clone_container(
     tw1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] container_ready_wait_ms={int((tw1-tw0)*1000)} container={container_name}")
 
-    clone_progress.stage("subscriptions")
     subs_proc = subprocess.run(
         [
             "docker", "exec", container_name,
@@ -427,7 +354,6 @@ def _launch_clone_container(
                 check=False,
             )
 
-    clone_progress.stage("sequences")
     try:
         _sync_owned_sequences(container_name, opts.postgres_user, opts.postgres_db)
     except Exception:
@@ -436,8 +362,24 @@ def _launch_clone_container(
 
     repo_root = str(Path(__file__).resolve().parents[3])
     anon_file = Path(repo_root) / "configs/anonymize.sql"
+    if run_anonymize:
+        # Fail closed. A missing or statement-less script used to mean "skip
+        # masking", which publishes a clone of production data that is
+        # indistinguishable from a masked one. Opting out must be declared.
+        from . import anonymize as anon_svc
+        ready = anon_svc.readiness()
+        if not ready["ok"]:
+            subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+            raise RuntimeError(
+                "Refusing to publish a clone without anonymization: " + ready["reason"]
+            )
+        if ready["opted_out"]:
+            run_anonymize = False
+            anonymize_ran = True
+            anonymize_output = ready["reason"]
+            _timing_log(f"[CLONE_TIMING] anonymize_opted_out container={container_name}")
+
     if run_anonymize and anon_file.exists():
-        clone_progress.stage("anonymize")
         _timing_log(f"[CLONE_TIMING] anonymize_start file={anon_file}")
         ta0 = time.monotonic()
         copy_ok = False
@@ -499,7 +441,9 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     t1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={snap_path} target={clone_path}")
 
-    _give_pgdata_to_postgres(clone_path, opts.postgres_image)
+    uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+    _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
+    _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
 
     meta = {
         "name": clone_name,
@@ -524,14 +468,18 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
         pass
 
     container_name = f"{opts.container_name}-{ts}"
-    host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
-        clone_path=clone_path,
-        opts=opts,
-        container_name=container_name,
-        host_port_hint=None,
-        description=opts.description,
-        run_anonymize=run_anonymize,
-    )
+    try:
+        host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
+            clone_path=clone_path,
+            opts=opts,
+            container_name=container_name,
+            host_port_hint=None,
+            description=opts.description,
+            run_anonymize=run_anonymize,
+        )
+    except Exception:
+        _delete_subvolume_quietly(clone_path)
+        raise
 
     return {
         "snapshot": str(snap_path),
@@ -580,31 +528,6 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
     clone_name = f"{opts.main_data_dir}-clone-{ts}"
     clone_path = root / clone_name
 
-    clone_progress.begin("create", opts.display_name or clone_name)
-    try:
-        result = _clone_from_main_and_run(
-            opts, root, src_main, ts, clone_name, clone_path,
-            host_port_override, db_user, db_password,
-        )
-    except Exception as e:
-        clone_progress.finish(error=str(e).strip() or e.__class__.__name__)
-        raise
-    clone_progress.finish()
-    return result
-
-
-def _clone_from_main_and_run(
-    opts: CloneOptions,
-    root: Path,
-    src_main: Path,
-    ts: str,
-    clone_name: str,
-    clone_path: Path,
-    host_port_override: Optional[int],
-    db_user: Optional[str],
-    db_password: Optional[str],
-) -> Dict:
-    clone_progress.stage("checkpoint")
     try:
         src_container = _find_container_mounting_path(src_main)
         if src_container:
@@ -614,17 +537,14 @@ def _clone_from_main_and_run(
     except Exception as e:
         _timing_log(f"[CLONE_TIMING] pre_checkpoint_error path={src_main} err={str(e).strip()}")
 
-    clone_progress.stage("snapshot")
     t0 = time.monotonic()
     _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(src_main), str(clone_path)])
     t1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={src_main} target={clone_path}")
 
-    # Its own stage rather than part of the snapshot: the snapshot is O(1) and
-    # this walks every file in the tree, so on a large replica it is the one
-    # that takes the minutes people are waiting through.
-    clone_progress.stage("permissions")
-    _give_pgdata_to_postgres(clone_path, opts.postgres_image)
+    uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+    _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
+    _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
 
     meta = {
         "name": clone_name,
@@ -649,16 +569,22 @@ def _clone_from_main_and_run(
         pass
 
     container_name = f"{opts.container_name}-{ts}"
-    host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
-        clone_path=clone_path,
-        opts=opts,
-        container_name=container_name,
-        host_port_hint=host_port_override,
-        description=opts.description,
-    )
+    try:
+        host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
+            clone_path=clone_path,
+            opts=opts,
+            container_name=container_name,
+            host_port_hint=host_port_override,
+            description=opts.description,
+        )
+    except Exception:
+        # The subvolume holds a raw copy of production data that was never
+        # masked; leaving it behind is both a disk leak and a copy nobody
+        # accounted for.
+        _delete_subvolume_quietly(clone_path)
+        raise
 
     if db_user and db_password:
-        clone_progress.stage("user")
         _create_db_user(container_name, opts, db_user, db_password)
 
     return {
@@ -672,6 +598,158 @@ def _clone_from_main_and_run(
         "anonymize_ran": anonymize_ran,
         "anonymize_output": anonymize_output,
     }
+
+
+def _delete_subvolume_quietly(path: Path) -> None:
+    """Best-effort subvolume removal on a cleanup path, where raising would
+    replace the real error with a less useful one."""
+    try:
+        if path.exists():
+            _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(path)])
+    except subprocess.CalledProcessError as e:
+        _timing_log(f"[CLONE_TIMING] cleanup_delete_failed path={path} err={str(e).strip()}")
+
+
+def _stage_then_swap_clone_data(
+    *,
+    source_subvol,
+    host_path,
+    target_container: str,
+    host_port,
+    opts: "CloneOptions",
+    meta: Dict,
+    description: Optional[str],
+    run_anonymize: bool,
+    temp_suffix: str,
+) -> Tuple[int, str, bool, Optional[str]]:
+    """Rebuild a clone's data without putting the running clone at risk.
+
+    The replacement subvolume is fully prepared AND anonymized behind a
+    staging container on a spare port, while the clone the user is connected
+    to keeps serving. Only after that succeeds is anything destructive done.
+
+    The final step has to be a container recreate rather than a port hand-off:
+    Docker fixes a published port at creation and cannot re-bind it on a live
+    container. That is acceptable here precisely because the data is already
+    prepared and masked on disk by then, so the recreate is the cheapest and
+    least failure-prone step in the sequence.
+
+    Anything that fails before the swap leaves the existing clone untouched
+    and still serving. A failure during the swap restores the previous
+    subvolume and brings the clone back up on its original port.
+    """
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    temp_path = host_path.parent / f"{host_path.name}-{temp_suffix}-{ts}"
+    staging_container = f"{target_container}-staging-{ts}"
+
+    # ── Stage: build and validate the replacement out of the way ──
+    try:
+        t0 = time.monotonic()
+        _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(source_subvol), str(temp_path)])
+        t1 = time.monotonic()
+        _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={source_subvol} target={temp_path}")
+
+        uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+        _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(temp_path)])
+        _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(temp_path)])
+        write_snaplicator_metadata(temp_path, meta)
+
+        staging_port = _find_free_port(int(opts.host_port))
+        _, _, anonymize_ran, anonymize_output = _launch_clone_container(
+            clone_path=temp_path,
+            opts=opts,
+            container_name=staging_container,
+            host_port_hint=staging_port,
+            description=description,
+            remove_existing=True,
+            run_anonymize=run_anonymize,
+        )
+        if run_anonymize and not anonymize_ran:
+            # Belt and braces: the swap is the point of no return, so never
+            # cross it on a staged copy that was not actually masked.
+            raise RuntimeError(
+                "Staged clone reports no anonymization was applied; refusing to swap it in"
+            )
+        # Stop cleanly, or the final container inherits an unclean shutdown
+        # and starts with crash recovery.
+        subprocess.run(["docker", "stop", "-t", "60", staging_container], check=False, capture_output=True)
+        subprocess.run(["docker", "rm", "-f", staging_container], check=False, capture_output=True)
+    except Exception:
+        subprocess.run(["docker", "rm", "-f", staging_container], check=False, capture_output=True)
+        try:
+            if temp_path.exists():
+                _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(temp_path)])
+        except subprocess.CalledProcessError:
+            pass
+        _timing_log(
+            f"[CLONE_TIMING] staging_failed container={target_container} "
+            f"existing_clone_untouched=1"
+        )
+        raise
+
+    # ── Swap: the only window in which the live clone is down ──
+    backup_path = host_path.parent / f"{host_path.name}-prev-{ts}"
+    subprocess.run(["docker", "stop", "-t", "60", target_container], check=False, capture_output=True)
+    subprocess.run(["docker", "rm", "-f", target_container], check=False, capture_output=True)
+    moved_backup = False
+    swapped = False
+    ts_swap = time.monotonic()
+    try:
+        if host_path.exists():
+            _run(["sudo", "-n", "mv", str(host_path), str(backup_path)])
+            moved_backup = True
+        _run(["sudo", "-n", "mv", str(temp_path), str(host_path)])
+        swapped = True
+        final_port, container_pgdata, _, _ = _launch_clone_container(
+            clone_path=host_path,
+            opts=opts,
+            container_name=target_container,
+            host_port_hint=host_port,
+            description=description,
+            remove_existing=False,
+            # Already applied to this exact data while it was staged; running
+            # it again would re-randomize the fake ids for no benefit.
+            run_anonymize=False,
+        )
+    except Exception:
+        try:
+            if swapped and host_path.exists():
+                _run(["sudo", "-n", "mv", str(host_path), str(temp_path)])
+                swapped = False
+            if moved_backup and backup_path.exists():
+                _run(["sudo", "-n", "mv", str(backup_path), str(host_path)])
+                moved_backup = False
+        except subprocess.CalledProcessError as e:
+            _timing_log(f"[CLONE_TIMING] swap_restore_failed container={target_container} err={str(e).strip()}")
+        subprocess.run(["docker", "rm", "-f", target_container], check=False, capture_output=True)
+        try:
+            _launch_clone_container(
+                clone_path=host_path,
+                opts=opts,
+                container_name=target_container,
+                host_port_hint=host_port,
+                description=description,
+                remove_existing=False,
+                run_anonymize=False,
+            )
+            _timing_log(f"[CLONE_TIMING] swap_rolled_back container={target_container} clone_restored=1")
+        except Exception as e:
+            _timing_log(f"[CLONE_TIMING] swap_rollback_failed container={target_container} err={str(e).strip()}")
+        try:
+            if temp_path.exists():
+                _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(temp_path)])
+        except subprocess.CalledProcessError:
+            pass
+        raise
+
+    _timing_log(f"[CLONE_TIMING] swap_downtime_ms={int((time.monotonic()-ts_swap)*1000)} container={target_container}")
+
+    if backup_path.exists():
+        try:
+            _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(backup_path)])
+        except subprocess.CalledProcessError:
+            pass
+    return final_port, container_pgdata, anonymize_ran, anonymize_output
 
 
 def refresh_clone_in_place(
@@ -736,124 +814,29 @@ def refresh_clone_in_place(
     except Exception as e:
         _timing_log(f"[CLONE_TIMING] pre_checkpoint_error path={src_main} err={str(e).strip()}")
 
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    next_path = host_path.parent / f"{host_path.name}-next-{ts}"
-    next_container = f"{target_container}-next-{ts}"
-    backup_path: Optional[Path] = None
+    meta = dict(existing_meta or {})
+    meta.update({
+        "name": host_path.name,
+        "path": str(host_path),
+        "source_main_path": str(src_main),
+        "root_data_dir": str(root),
+        "main_data_dir": opts.main_data_dir,
+        "refreshed_at": datetime.now().isoformat(),
+        "created_by": "snaplicator-api",
+        "description": description,
+    })
 
-    # ── Build the replacement beside the clone, not on top of it ──────
-    #
-    # Everything slow happens here — the snapshot, the ownership walk, the
-    # recovery a snapshot of a running postgres always needs, and the
-    # anonymisation that rewrites every column somebody listed. The clone
-    # people are connected to serves throughout, because none of it touches
-    # the subvolume it is running on.
-    #
-    # It also makes failure free. Nothing has been taken away yet, so an
-    # error here is undone by deleting what was being built; the previous
-    # code moved the live data aside first and had to try to put it back.
-    try:
-        t0 = time.monotonic()
-        _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(src_main), str(next_path)])
-        t1 = time.monotonic()
-        _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={src_main} target={next_path}")
-
-        _give_pgdata_to_postgres(next_path, opts.postgres_image)
-
-        meta = dict(existing_meta or {})
-        meta.update({
-            "name": host_path.name,
-            "path": str(host_path),
-            "source_main_path": str(src_main),
-            "root_data_dir": str(root),
-            "main_data_dir": opts.main_data_dir,
-            "refreshed_at": datetime.now().isoformat(),
-            "created_by": "snaplicator-api",
-            "description": description,
-        })
-        write_snaplicator_metadata(next_path, meta)
-
-        # On a port of its own, because a container's published port is fixed
-        # when it is created and the real one is still held by the clone that
-        # is still serving.
-        _, _, anonymize_ran, anonymize_output = _launch_clone_container(
-            clone_path=next_path,
-            opts=opts,
-            container_name=next_container,
-            host_port_hint=None,
-            description=description,
-        )
-        # Stopped rather than killed, and that is what makes the swap quick:
-        # fast shutdown checkpoints, so the start below finds a data
-        # directory that needs no recovery at all.
-        _stop_container(next_container)
-    except Exception:
-        subprocess.run(["docker", "rm", "-f", next_container], check=False, capture_output=True)
-        _delete_subvolume_quietly(next_path)
-        raise
-
-    # ── The switch ───────────────────────────────────────────────────
-    #
-    # The only part anyone waits through. Seconds, not minutes: the
-    # replacement is built, recovered and anonymised already, and all that is
-    # left is to let go of the port and take it again under the same name.
-    refresh_success = False
-    try:
-        _stop_container(target_container)
-        subprocess.run(["docker", "rm", "-f", target_container], check=False, capture_output=True)
-        subprocess.run(["docker", "rm", "-f", next_container], check=False, capture_output=True)
-
-        # Back to the path it had. Everything outside this function knows the
-        # clone by that path — its metadata, its snapshots, the container's
-        # own mount — and a refresh is not a move.
-        if host_path.exists():
-            backup_path = host_path.parent / f"{host_path.name}-prev-{ts}"
-            _run(["sudo", "-n", "mv", str(host_path), str(backup_path)])
-        _run(["sudo", "-n", "mv", str(next_path), str(host_path)])
-
-        host_port, container_pgdata, _, _ = _launch_clone_container(
-            clone_path=host_path,
-            opts=opts,
-            container_name=target_container,
-            host_port_hint=host_port,
-            description=description,
-            remove_existing=False,
-            run_anonymize=False,  # already done, and out of the waiting
-        )
-        refresh_success = True
-    except Exception:
-        # The clone is down and its data is one directory away. Put the old
-        # data back and start it again: a refresh that failed should leave
-        # the clone that was working still working.
-        #
-        # The relaunch is attempted whatever the restore did, including when
-        # there was nothing to restore — the failure may have been the launch
-        # itself, and leaving a clone stopped because its refresh did not take
-        # is a worse outcome than the refresh not taking.
-        try:
-            if backup_path and backup_path.exists():
-                if host_path.exists():
-                    _run(["sudo", "-n", "mv", str(host_path), str(next_path)])
-                _run(["sudo", "-n", "mv", str(backup_path), str(host_path)])
-                backup_path = None
-        except Exception as restore_err:
-            _timing_log(f"[CLONE_TIMING] refresh_restore_failed path={host_path} err={str(restore_err).strip()}")
-        try:
-            if host_path.exists():
-                _launch_clone_container(
-                    clone_path=host_path,
-                    opts=opts,
-                    container_name=target_container,
-                    host_port_hint=host_port,
-                    description=description,
-                    run_anonymize=False,
-                )
-        except Exception as relaunch_err:
-            _timing_log(f"[CLONE_TIMING] refresh_relaunch_failed container={target_container} err={str(relaunch_err).strip()}")
-        raise
-
-    if backup_path and backup_path.exists() and refresh_success:
-        _delete_subvolume_quietly(backup_path)
+    host_port, container_pgdata, anonymize_ran, anonymize_output = _stage_then_swap_clone_data(
+        source_subvol=src_main,
+        host_path=host_path,
+        target_container=target_container,
+        host_port=host_port,
+        opts=opts,
+        meta=meta,
+        description=description,
+        run_anonymize=True,
+        temp_suffix="refresh",
+    )
 
     return {
         "refreshed_container": target_container,
@@ -894,84 +877,39 @@ def reset_clone_to_snapshot(
 
     snapshot_meta = read_snaplicator_metadata(snapshot_path)
 
-    # Told, not cut off — see _stop_container. A reset replaces the data under
-    # a clone people are connected to, just as a refresh does.
-    _stop_container(container_name)
-    subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+    existing_meta = clone_detail.get("metadata") or {}
+    meta = dict(existing_meta)
+    # Reset does not take a description; preserve the clone's existing one
+    # (falling back to the snapshot's description for legacy clones).
+    description = None
+    desc_candidate = meta.get("description")
+    if not desc_candidate and isinstance(snapshot_meta, dict):
+        desc_candidate = snapshot_meta.get("description")
+    if isinstance(desc_candidate, str) and desc_candidate.strip():
+        description = desc_candidate.strip()
 
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    temp_path = host_path.parent / f"{host_path.name}-reset-{ts}"
-    backup_path: Optional[Path] = None
+    meta.update({
+        "name": host_path.name,
+        "path": str(host_path),
+        "root_data_dir": str(root),
+        "main_data_dir": opts.main_data_dir,
+        "description": description,
+        "reset_at": datetime.now().isoformat(),
+        "reset_from_snapshot": snapshot_name,
+        "created_by": "snaplicator-api",
+    })
 
-    try:
-        _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(snapshot_path), str(temp_path)])
-        _give_pgdata_to_postgres(temp_path, opts.postgres_image)
-
-        existing_meta = clone_detail.get("metadata") or {}
-        meta = dict(existing_meta)
-        # Reset no longer takes a description; preserve the clone's existing one
-        # (falling back to the snapshot's description for legacy clones).
-        description = None
-        if description is None:
-            desc_candidate = meta.get("description")
-            if not desc_candidate and isinstance(snapshot_meta, dict):
-                desc_candidate = snapshot_meta.get("description")
-            if isinstance(desc_candidate, str) and desc_candidate.strip():
-                description = desc_candidate.strip()
-
-        now_iso = datetime.now().isoformat()
-        meta.update({
-            "name": host_path.name,
-            "path": str(host_path),
-            "root_data_dir": str(root),
-            "main_data_dir": opts.main_data_dir,
-            "description": description,
-            "reset_at": now_iso,
-            "reset_from_snapshot": snapshot_name,
-            "created_by": "snaplicator-api",
-        })
-        write_snaplicator_metadata(temp_path, meta)
-
-        if host_path.exists():
-            backup_path = host_path.parent / f"{host_path.name}-prev-{ts}"
-            _run(["sudo", "-n", "mv", str(host_path), str(backup_path)])
-        _run(["sudo", "-n", "mv", str(temp_path), str(host_path)])
-
-    except Exception:
-        try:
-            if temp_path.exists():
-                _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(temp_path)])
-        except subprocess.CalledProcessError:
-            pass
-        if backup_path and backup_path.exists() and not host_path.exists():
-            try:
-                _run(["sudo", "-n", "mv", str(backup_path), str(host_path)])
-            except subprocess.CalledProcessError:
-                pass
-        raise
-
-    anonymize_ran = False
-    anonymize_output = None
-    reset_success = False
-    try:
-        host_port, container_pgdata, anonymize_ran, anonymize_output = _launch_clone_container(
-            clone_path=host_path,
-            opts=opts,
-            container_name=container_name,
-            host_port_hint=host_port_hint,
-            description=description,
-            remove_existing=False,
-            run_anonymize=(snapshot_meta.get("type") != "clone_snapshot"),
-        )
-        reset_success = True
-    finally:
-        if backup_path and backup_path.exists():
-            if reset_success:
-                try:
-                    _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(backup_path)])
-                except subprocess.CalledProcessError:
-                    pass
-            # On failure, keep backup for manual recovery
+    host_port, container_pgdata, anonymize_ran, anonymize_output = _stage_then_swap_clone_data(
+        source_subvol=snapshot_path,
+        host_path=host_path,
+        target_container=container_name,
+        host_port=host_port_hint,
+        opts=opts,
+        meta=meta,
+        description=description,
+        run_anonymize=(snapshot_meta.get("type") != "clone_snapshot") if isinstance(snapshot_meta, dict) else True,
+        temp_suffix="reset",
+    )
 
     return {
         "reset_container": container_name,

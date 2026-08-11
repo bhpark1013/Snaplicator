@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { cn } from '@/lib/utils'
+import { cn, formatBytes } from '@/lib/utils'
 
 export interface SnapMeta {
     source_clone_display_name?: string | null
@@ -20,6 +20,16 @@ export interface SnapshotItem {
     readonly: boolean
     description?: string | null
     metadata?: SnapMeta | null
+}
+
+// One entry of GET /snapshots/usage (or /clones/{id}/usage): btrfs exclusive
+// bytes = space only this subvolume references (freed if deleted).
+export interface UsageEntry {
+    total_bytes?: number | null
+    exclusive_bytes?: number | null
+    measured_at?: string | null
+    stale?: boolean
+    refreshing?: boolean
 }
 
 // A drop/insert target in the lineage graph. Everything reduces to re-pointing
@@ -261,6 +271,8 @@ interface LineageGraphProps {
     items: SnapshotItem[]
     mode: 'list' | 'insert'
     highlightName?: string | null
+    // per-snapshot disk usage keyed by snapshot name (async-loaded, optional)
+    usage?: Record<string, UsageEntry | undefined>
     // list mode
     onNodeClick?: (s: SnapshotItem) => void
     onMove?: (name: string, slot: Slot) => void
@@ -280,6 +292,7 @@ export function LineageGraph({
     items,
     mode,
     highlightName,
+    usage,
     onNodeClick,
     onMove,
     moveTarget,
@@ -470,6 +483,23 @@ export function LineageGraph({
                                 {ts && (
                                     <span className="flex-none tabular-nums text-zinc-500">· {ts}</span>
                                 )}
+                                {(() => {
+                                    const u = usage?.[n.snap.name]
+                                    if (!u) return null
+                                    if (u.exclusive_bytes != null) {
+                                        return (
+                                            <span
+                                                className="flex-none tabular-nums text-zinc-500"
+                                                title={`Exclusive (freed if deleted): ${formatBytes(u.exclusive_bytes)}${u.total_bytes != null ? ` · total ${formatBytes(u.total_bytes)}` : ''}${u.measured_at ? ` · measured ${formatTs(u.measured_at)}` : ''}`}
+                                            >
+                                                · {formatBytes(u.exclusive_bytes)}
+                                            </span>
+                                        )
+                                    }
+                                    return u.refreshing
+                                        ? <span className="flex-none text-zinc-600" title="Measuring disk usage…">· …</span>
+                                        : null
+                                })()}
                             </div>
                             <span
                                 className={cn(

@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Path, Body
 from pydantic import BaseModel
 from ...core.config import settings
 from ...services.btrfs import list_snapshots, create_snapshot, delete_snapshot, update_snapshot_lineage, reorder_snapshots, set_snapshot_retention
+from ...services import usage as usage_svc
 from ...services.docker_pg import clone_from_snapshot_and_run, clone_from_main_and_run, CloneOptions
 import subprocess  # type: ignore[name-defined]
 
@@ -40,6 +41,28 @@ def get_snapshots():
 		raise HTTPException(status_code=403, detail=str(e))
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Failed to list snapshots: {e}")
+
+
+@router.get("/usage")
+def get_snapshots_usage():
+	"""Per-snapshot disk usage from the cache — never measures inline. A page
+	view re-measures entries older than VIEW_TTL (cooldown against the UI's
+	5s polling); entries without cached bytes come back with refreshing=true
+	and the UI polls until the measurements land (~10s per subvolume)."""
+	try:
+		snaps = list_snapshots(settings.root_data_dir, settings.main_data_dir)
+		by_path = usage_svc.get_usage(
+			[s["path"] for s in snaps], max_age=usage_svc.VIEW_TTL,
+		)
+		items = {s["name"]: by_path.get(s["path"], {}) for s in snaps}
+		return {
+			"items": items,
+			"refreshing": any(v.get("refreshing") for v in items.values()),
+		}
+	except FileNotFoundError as e:
+		raise HTTPException(status_code=404, detail=str(e))
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Failed to get snapshot usage: {e}")
 
 
 @router.post("")

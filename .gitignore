@@ -9,3 +9,10 @@ configs/anonymize.sql
 configs/replication_check.sql
 mcp-server/.venv/
 .omc/
+
+# A backup of .env carries the same credentials as the original —
+# .env.20260428, .env.bak and friends. The sample files are the exceptions,
+# and they are named here because the pattern would otherwise swallow them.
+.env.*
+!.env.example
+!.env.test

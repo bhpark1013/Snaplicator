@@ -443,7 +443,12 @@ def list_clone_subvolumes_with_containers(root_data_dir: str, main_data_dir: str
         name = entry.name
         if not name.startswith(prefix):
             continue
-        if "-snapshot-" in name:
+        # Scratch subvolumes a refresh/reset creates while it stages the
+        # replacement, and the previous copy it keeps until the swap sticks.
+        # They share the clone prefix but are never clones themselves.
+        if "-snapshot-" in name or any(
+            m in name for m in ("-refresh-", "-reset-", "-prev-", "-staging-")
+        ):
             skipped_snapshot_like += 1
             continue
         p = Path(entry.path)
@@ -645,18 +650,29 @@ def get_clone_detail(root_data_dir: str, main_data_dir: str, identifier: str) ->
 
 
 def get_clone_usage_summary(root_data_dir: str, main_data_dir: str, identifier: str) -> Dict[str, Any]:
+    """Non-blocking: usage comes from the cache (usage.py). A view re-measures
+    entries older than VIEW_TTL; a missing entry returns usage_bytes=None with
+    refreshing=True and the caller polls until the background measurement
+    lands (~10s per subvolume)."""
     detail = get_clone_detail(root_data_dir, main_data_dir, identifier)
     clone_path = Path(detail["path"])
     if not clone_path.exists() or not _is_btrfs_subvolume(clone_path):
         raise FileNotFoundError(f"Clone path not found or not a btrfs subvolume: {clone_path}")
 
-    usage_b = _get_subvolume_usage_bytes(clone_path)
+    from . import usage as usage_svc
+    entry = usage_svc.get_usage(
+        [str(clone_path)], max_age=usage_svc.VIEW_TTL,
+    ).get(str(clone_path)) or {}
     fs_size_b, fs_used_b = _get_fs_totals_bytes(Path(root_data_dir))
     return {
         "clone": detail.get("name"),
         "path": detail.get("path"),
         "container_name": detail.get("container_name"),
-        "usage_bytes": usage_b,
+        "usage_bytes": entry.get("exclusive_bytes"),
+        "total_bytes": entry.get("total_bytes"),
+        "measured_at": entry.get("measured_at"),
+        "stale": entry.get("stale"),
+        "refreshing": entry.get("refreshing"),
         "fs_size_bytes": fs_size_b,
         "fs_used_bytes": fs_used_b,
         "calculated_at": datetime.now().isoformat(),

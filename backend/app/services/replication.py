@@ -779,6 +779,17 @@ def install_capture_triggers(
     a migration runs with SET search_path. A function-level SET search_path
     is not an option — it would corrupt the captured search_path value.
     """
+    # First, before anything that runs DDL: retire the legacy auto-add event
+    # trigger. It adds every new table to the publication unconditionally, so
+    # against a FOR ALL TABLES publication it raises and takes the CREATE
+    # TABLE with it — including the CREATE TABLE below, which would leave
+    # install unable to bootstrap itself. The trigger set this installs is
+    # dropped and recreated at the end as before.
+    _run_publisher_sql(
+        publisher_connstr,
+        "DROP EVENT TRIGGER IF EXISTS _snaplicator_auto_pub_add;",
+    )
+
     log_table_sql = f"""
 CREATE TABLE IF NOT EXISTS public.{CAPTURE_LOG_TABLE} (
     id bigserial PRIMARY KEY,

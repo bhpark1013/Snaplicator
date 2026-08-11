@@ -208,6 +208,14 @@ cp configs/.env.test configs/.env
 `configs/.env.test` documents every required section (replica container, primary DB connection, subscription/publication names, FDW credentials, etc.), so walk through it line by line and fill in the blanks for your environment.
 
 ### 2. Publisher setup
+
+**The `PRIMARY_USER` account must be a superuser** (on RDS: a member of
+`rds_superuser`). Snaplicator captures DDL with event triggers, and
+`CREATE EVENT TRIGGER` is superuser-only — PostgreSQL provides no GRANT for
+it. Adding new tables to the publication additionally requires owning those
+tables. Point Snaplicator at an account that has both; a narrowly-scoped
+replication role will fail at install.
+
 Create the publication on the primary instance:
 ```sql
 CREATE PUBLICATION snaplicator_pub FOR TABLES IN SCHEMA public;
