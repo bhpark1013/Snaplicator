@@ -1512,6 +1512,159 @@ def get_recent_replication_errors(
         return []
 
 
+# Precedence matters and is not arbitrary. The trigger records a row as
+# applied BEFORE it executes it, so a statement that then fails or defers is
+# in two tables at once. The later fact is the true one, hence failed and
+# deferred outrank applied.
+_DDL_STATUS_SQL = """
+WITH seed AS (
+    SELECT coalesce((SELECT last_applied_id
+                       FROM public._snaplicator_ddl_watermark WHERE id = 1), 0) AS id
+),
+fail AS (
+    SELECT DISTINCT ON (log_id) log_id, error, failed_at
+      FROM public._snaplicator_ddl_failures ORDER BY log_id, id DESC
+),
+defr AS (
+    SELECT DISTINCT ON (log_id) log_id, executed_at, error, deferred_at
+      FROM public._snaplicator_ddl_deferred ORDER BY log_id, id DESC
+),
+skip AS (%(skip_cte)s)
+SELECT l.id::text
+    || '|' || CASE
+         WHEN f.log_id IS NOT NULL                     THEN 'failed'
+         WHEN d.log_id IS NOT NULL AND d.error IS NOT NULL       THEN 'deferred_failed'
+         WHEN d.log_id IS NOT NULL AND d.executed_at IS NOT NULL THEN 'deferred_done'
+         WHEN d.log_id IS NOT NULL                     THEN 'deferred'
+         WHEN s.log_id IS NOT NULL                     THEN 'skipped'
+         WHEN a.id IS NOT NULL                         THEN 'applied'
+         WHEN l.id <= (SELECT id FROM seed)            THEN 'seed'
+         ELSE 'pending'
+       END
+    || '|' || l.command_tag
+    || '|' || coalesce(l.object_identity, '')
+    || '|' || coalesce(l.schema_name, '')
+    || '|' || to_char(l.captured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ')
+    || '|' || coalesce(to_char(coalesce(f.failed_at, d.executed_at, d.deferred_at)
+                                 AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'), '')
+    || '|' || encode(convert_to(coalesce(f.error, d.error, s.reason, ''), 'UTF8'), 'base64')
+    || '|' || encode(convert_to(l.ddl_text, 'UTF8'), 'base64')
+  FROM public._snaplicator_ddl_log l
+  LEFT JOIN public._snaplicator_ddl_applied a ON a.id = l.id
+  LEFT JOIN fail f ON f.log_id = l.id
+  LEFT JOIN defr d ON d.log_id = l.id
+  LEFT JOIN skip s ON s.log_id = l.id
+ ORDER BY l.id DESC;
+"""
+
+# The skipped table arrived after the others. An install created before it
+# does not have one, and asking for a column of a missing table is a syntax
+# error, not an empty result — so the CTE is swapped out entirely.
+_SKIP_CTE_PRESENT = (
+    "SELECT DISTINCT ON (log_id) log_id, reason "
+    "FROM public._snaplicator_ddl_skipped ORDER BY log_id, id DESC"
+)
+_SKIP_CTE_ABSENT = "SELECT NULL::bigint AS log_id, NULL::text AS reason WHERE false"
+
+_DDL_STATUSES = (
+    "applied", "deferred", "deferred_done", "deferred_failed",
+    "failed", "skipped", "seed", "pending",
+)
+
+
+def get_ddl_apply_rows(
+    subscriber_container: str,
+    subscriber_user: str,
+    subscriber_password: str | None,
+    subscriber_db: str,
+    limit: int = 100,
+    status: str | None = None,
+) -> Dict:
+    """Every captured DDL statement with what the subscriber did about it.
+
+    One row per log entry, newest first. `status` filters to a single
+    outcome; None returns all. Counts are over the whole log, not the page.
+    """
+    if status is not None and status not in _DDL_STATUSES:
+        raise ValueError(f"unknown status {status!r}; expected one of {', '.join(_DDL_STATUSES)}")
+
+    def _q(sql: str) -> str:
+        return _run_subscriber_sql(
+            subscriber_container, subscriber_user, subscriber_password,
+            subscriber_db, sql,
+        )
+
+    if _q("SELECT to_regclass('public._snaplicator_ddl_log') IS NOT NULL;").strip() != "t":
+        # Same keys as the installed answer. A caller that has to branch on
+        # which keys exist ends up asserting "installed" twice.
+        return {
+            "installed": False, "skipped_tracked": False,
+            "seed": 0, "counts": {}, "total": 0, "rows": [],
+        }
+
+    has_skip = _q(
+        "SELECT to_regclass('public._snaplicator_ddl_skipped') IS NOT NULL;"
+    ).strip() == "t"
+
+    body = _DDL_STATUS_SQL % {
+        "skip_cte": _SKIP_CTE_PRESENT if has_skip else _SKIP_CTE_ABSENT,
+    }
+    # Counts come from the same query the rows do, wrapped — two hand-written
+    # queries would drift the moment the CASE gains a branch.
+    counts_sql = (
+        "SELECT status || '=' || cnt FROM (SELECT split_part(t.row, '|', 2) AS status, "
+        "count(*)::text AS cnt FROM (" + body.rstrip().rstrip(";") +
+        ") AS t(row) GROUP BY 1) c;"
+    )
+    counts = {}
+    for line in _q(counts_sql).splitlines():
+        if "=" in line:
+            k, v = line.strip().split("=", 1)
+            counts[k] = int(v)
+
+    # Status lives in a CASE, so it cannot be a WHERE without wrapping the
+    # whole query again; the log is small enough that filtering the stream
+    # here is cheaper than the second wrap.
+    rows: List[Dict] = []
+    for line in _q(body).splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("|", 7)
+        if len(parts) != 8:
+            continue
+        rid, st, tag, obj, schema, captured, at, rest = parts
+        err_b64, ddl_b64 = rest.split("|", 1) if "|" in rest else (rest, "")
+        if status and st != status:
+            continue
+        rows.append({
+            "id": int(rid),
+            "status": st,
+            "command_tag": tag,
+            "object_identity": obj or None,
+            "schema_name": schema or None,
+            "captured_at": captured,
+            "resolved_at": at or None,
+            "error": base64.b64decode(err_b64).decode("utf-8") or None,
+            "ddl_text": base64.b64decode(ddl_b64).decode("utf-8"),
+        })
+        if len(rows) >= limit:
+            break
+
+    seed = int(_q(
+        "SELECT coalesce((SELECT last_applied_id FROM public._snaplicator_ddl_watermark "
+        "WHERE id = 1), 0);"
+    ).strip() or 0)
+
+    return {
+        "installed": True,
+        "skipped_tracked": has_skip,
+        "seed": seed,
+        "counts": counts,
+        "total": sum(counts.values()),
+        "rows": rows,
+    }
+
+
 def get_ddl_apply_status(
     subscriber_container: str,
     subscriber_user: str,
