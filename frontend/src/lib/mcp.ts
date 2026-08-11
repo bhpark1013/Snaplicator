@@ -3,7 +3,7 @@ export const MCP_BASE_URL = 'http://100.93.143.119:8765/mcp'
 
 // Endpoint scoped so that mutating clone tools (refresh / reset / delete /
 // create-snapshot) may only target the given clone — matched by host port.
-// See mcp-server/server.py:_assert_clone_mutable.
+// See backend/app/mcp_server.py:_assert_clone_mutable.
 export function mcpScopedUrl(port: number | string): string {
     return `${MCP_BASE_URL}?clones=${port}`
 }

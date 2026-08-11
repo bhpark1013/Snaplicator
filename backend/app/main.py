@@ -22,6 +22,7 @@ from .services import bootstrap as bootstrap_svc
 from .services import policy as policy_svc
 from .services import publication as publication_svc
 from .services import usage as usage_svc
+from . import mcp_server
 from .services.replication import (
     auto_sync_new_tables,
     compare_published_schemas,
@@ -380,7 +381,12 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(ddl_sync_loop()),
         asyncio.create_task(usage_refresh_loop()),
     ]
-    yield
+    # The MCP server is this API with a second protocol on it, not a second
+    # program: same process, same settings, same lifetime. A mounted ASGI app
+    # does not get its own lifespan run for it, and the session manager is
+    # what tracks open MCP sessions — so it is entered here or not at all.
+    async with mcp_server.mcp.session_manager.run():
+        yield
     for task in tasks:
         task.cancel()
     for task in tasks:
@@ -391,6 +397,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Snaplicator API", version="0.1.0", lifespan=lifespan)
+
+# Mounted at /mcp, so the app's own route is the mount root — otherwise
+# clients would have to ask for /mcp/mcp.
+mcp_server.mcp.settings.streamable_http_path = "/"
+app.mount("/mcp", mcp_server.mcp.streamable_http_app())
 
 app.add_middleware(
     CORSMiddleware,

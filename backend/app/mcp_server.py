@@ -1,10 +1,23 @@
-"""Snaplicator MCP Server - exposes Snaplicator REST API as MCP tools."""
+"""Snaplicator MCP Server - exposes Snaplicator REST API as MCP tools.
+
+Served by the API process itself, mounted at /mcp (see main.py). Running it
+standalone still works — `python -m app.mcp_server` — and is what a stdio
+client wants; the transport differs, the tools do not.
+
+The tools reach the API over HTTP even when they are inside it. A direct
+call into the service layer would be one hop shorter and a second contract
+to keep: every endpoint's validation, error mapping and settings resolution
+would have to be duplicated or bypassed. The hop is to localhost.
+"""
 import os
 import json
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
 
-BASE_URL = os.environ.get("SNAPLICATOR_URL", "http://localhost:8888")
+# Same default the API binds to, so the mounted case needs no configuration.
+BASE_URL = os.environ.get(
+    "SNAPLICATOR_URL", f"http://127.0.0.1:{os.environ.get('BACKEND_PORT', '8888')}"
+)
 
 # Mutating clone tools may only target clones on this connection's allowlist.
 # Resolution order, per request:

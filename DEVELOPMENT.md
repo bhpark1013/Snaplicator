@@ -49,7 +49,10 @@ one owns.
 - `backend/`: FastAPI services plus Docker/btrfs orchestration
 - `frontend/`: management UI (Vite + React, powered by `pnpm`)
 - `cli/`: `snaplicator` CLI — psql-style remote client for the REST API
-- `mcp-server/`: MCP server that wraps the REST API for agentic clients
+- `backend/app/mcp_server.py`: MCP server that wraps the REST API for agentic
+  clients. Mounted into the API process at `/mcp`, so a running install serves
+  it on the backend port with no second process to start. `python -m
+  app.mcp_server` from `backend/` still runs it standalone over stdio.
 - `replication/replica-init/`: container init scripts (schema clone, extensions, FDW, subscription)
 - `scripts/`: helper utilities for running the replica container and managing snapshots/clones
 - `configs/`: `.env`, `anonymize.sql`, `fdw.yaml`, and misc SQL helpers

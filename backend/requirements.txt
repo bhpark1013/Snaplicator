@@ -1,5 +1,12 @@
 fastapi==0.115.0
-uvicorn==0.30.6
-pydantic-settings==2.4.0
+# Floor set by mcp (>=0.31.1), as with pydantic-settings below.
+uvicorn==0.31.1
+# Floor set by mcp (>=2.5.2), not by anything this app needs.
+pydantic-settings==2.5.2
 python-dotenv==1.0.1
 PyYAML==6.0.2
+# The MCP server is mounted into this app, so its dependencies are this app's.
+# Upper bound is not caution: mcp 2.0 removed mcp.server.fastmcp outright, so
+# an unpinned install does not degrade, it fails to import.
+mcp>=1.27,<2
+httpx==0.28.1

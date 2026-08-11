@@ -1,8 +1,10 @@
 {
   "mcpServers": {
     "snaplicator": {
-      "command": "/home/bhpark/Snaplicator/mcp-server/.venv/bin/python",
-      "args": ["/home/bhpark/Snaplicator/mcp-server/server.py"]
+      "command": "backend/.venv/bin/python",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "backend",
+      "comment": "stdio transport, for a client on the same machine. A running install already serves the same tools over HTTP at http://<host>:<BACKEND_PORT>/mcp — prefer that when there is one."
     }
   }
 }
