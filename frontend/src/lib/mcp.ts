@@ -1,5 +1,13 @@
-// Tailnet-only MCP endpoint (streamable HTTP) exposed by the prod Snaplicator server.
-export const MCP_BASE_URL = 'http://100.93.143.119:8765/mcp'
+// The MCP endpoint is served by the API process at /mcp, so it is reachable
+// wherever this page's own API is: through the same proxy, on the same
+// origin. Derived rather than written down, because the previous constant
+// was a tailnet IP and a port that only one install ever had — every other
+// deployment was handed a URL to nowhere.
+// Trailing slash on purpose: the mounted app's route is the mount root, and
+// asking for it without the slash earns a redirect to it — which, behind the
+// /api prefix, points at a path the proxy does not strip and the SPA
+// fallback happily answers with index.html.
+export const MCP_BASE_URL = `${window.location.origin}/api/mcp/`
 
 // Endpoint scoped so that mutating clone tools (refresh / reset / delete /
 // create-snapshot) may only target the given clone — matched by host port.

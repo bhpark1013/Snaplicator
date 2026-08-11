@@ -6,7 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
 import logging
+import os
 import time
+
+from mcp.server.transport_security import TransportSecuritySettings
 
 from .core.config import settings
 from .api.routes.health import router as health_router
@@ -401,6 +404,24 @@ app = FastAPI(title="Snaplicator API", version="0.1.0", lifespan=lifespan)
 # Mounted at /mcp, so the app's own route is the mount root — otherwise
 # clients would have to ask for /mcp/mcp.
 mcp_server.mcp.settings.streamable_http_path = "/"
+
+# The SDK answers 421 to any Host header outside its allow-list, which
+# defaults to localhost — so a client reaching this install by hostname or
+# tailnet IP is refused while the REST API beside it answers the same
+# request fine. Guarding one path and not the other protects nothing, so
+# the check is off unless a deployment asks for it.
+#
+# The list is exact-match (only a trailing ":*" wildcards the port), so
+# there is no "allow everything" value to put in it — turning the flag off
+# is the way to say that.
+_mcp_hosts = [
+    h.strip() for h in os.environ.get("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()
+]
+mcp_server.mcp.settings.transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=bool(_mcp_hosts),
+    allowed_hosts=_mcp_hosts,
+    allowed_origins=[f"http://{h}" for h in _mcp_hosts] + [f"https://{h}" for h in _mcp_hosts],
+)
 app.mount("/mcp", mcp_server.mcp.streamable_http_app())
 
 app.add_middleware(

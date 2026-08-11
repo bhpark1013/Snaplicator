@@ -12,6 +12,16 @@ server {
         proxy_set_header Host $host;
         # clone creation / snapshot restore can run for minutes
         proxy_read_timeout 3600s;
+        # /api/mcp is an MCP endpoint, and MCP replies over SSE: buffering
+        # holds the stream until the response ends, which for a stream is
+        # never. Off for the whole prefix — nothing under it benefits from
+        # being buffered, and clone progress is streamed too.
+        proxy_buffering off;
+        # A redirect the backend writes is in its own path space (/mcp/),
+        # which has no /api prefix for the proxy to strip on the way back.
+        # Rewritten here rather than left for the SPA fallback to answer
+        # with index.html.
+        proxy_redirect ~^https?://[^/]+(/.*)$ /api$1;
     }
 
     # Content-hashed by vite, so a name never means two different files and
