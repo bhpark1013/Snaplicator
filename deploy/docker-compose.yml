@@ -35,6 +35,13 @@ services:
       # manager passes these paths to `docker run -v` for replica/clone
       # containers, and the host daemon resolves them on the host.
       - ${ROOT_DATA_DIR}:${ROOT_DATA_DIR}
+      # configs/ is written at runtime, not just read: the anonymization
+      # script is edited from the UI, and the FDW yaml and its generated SQL
+      # are rewritten whenever foreign tables change. The image has a COPY of
+      # this directory, so without the mount those writes land inside the
+      # container and the next rebuild silently reverts them — masking
+      # included. Mounted before the .env line below, which stays authoritative.
+      - ../configs:/app/configs
       # One .env to rule them all: compose interpolation (this file),
       # backend Settings (dotenv), and the replica bootstrap script all
       # read the same values.
