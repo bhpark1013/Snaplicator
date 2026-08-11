@@ -2,6 +2,8 @@
 
 **A test database cloned straight from your production. No seeding. No dumps.**
 
+[**Landing page →**](https://bhpark1013.github.io/Snaplicator/) — the same story with the concepts drawn, in English, Korean and Japanese.
+
 ## The problem
 
 Setting up a test database means seeding the data again. A bug in production
