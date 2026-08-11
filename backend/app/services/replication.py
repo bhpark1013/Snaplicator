@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import re
 import subprocess
 from typing import Dict, Iterable, List, Optional
@@ -685,6 +686,36 @@ CAPTURE_LOG_PUBLICATION = "_snaplicator_ddl"
 AUTO_ADD_PREFIX = "_snaplicator_auto_add_"
 
 
+# How long one DDL statement may hold the apply worker.
+#
+# The ceiling is not ours: the publisher terminates a walsender that has gone
+# wal_sender_timeout without a reply (60s on RDS by default), and the apply
+# worker cannot reply while it is inside a statement. Past that the connection
+# dies, the whole apply transaction rolls back, and the worker restarts from
+# the same LSN and does it again — a stall with no progress and no error,
+# which is exactly the incident this budget exists to prevent.
+#
+# Half the default timeout, so a statement is cancelled by us — recoverably,
+# with the reason recorded — well before the publisher does it unrecoverably.
+DDL_APPLY_STATEMENT_TIMEOUT = os.environ.get("DDL_APPLY_STATEMENT_TIMEOUT", "30s")
+
+
+def _ddl_timeout() -> str:
+    """The budget, checked before it is pasted into SQL as a literal.
+
+    A malformed value would not fail at install — it would fail inside the
+    apply trigger, on the subscriber, at whatever hour the next DDL arrives.
+    """
+    value = (DDL_APPLY_STATEMENT_TIMEOUT or "").strip()
+    if not re.fullmatch(r"\d+(?:\s*(?:us|ms|s|min|h|d))?", value):
+        return "30s"
+    return value
+
+
+def _with_ddl_timeout(sql: str) -> str:
+    return sql.replace("__DDL_TIMEOUT__", _ddl_timeout())
+
+
 def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
@@ -1198,7 +1229,7 @@ def install_ddl_apply(
     def _sub_sql(sql: str) -> str:
         return _run_subscriber_sql(
             subscriber_container, subscriber_user, subscriber_password,
-            subscriber_db, sql,
+            subscriber_db, _with_ddl_timeout(sql),
         )
 
     # same shape as the publisher's log table — receives replicated rows
@@ -1265,6 +1296,31 @@ RETURNS boolean LANGUAGE sql IMMUTABLE AS $localonly$
 $localonly$;
 """)
 
+    # Deferring is not free, and this decides when it is affordable.
+    #
+    # The point of applying DDL in the stream is position: the statement lands
+    # between the same two rows it landed between on the primary. Moving one
+    # out of band gives that up, and for a statement that changes a table's
+    # shape the cost is not theoretical — the DML that follows references a
+    # column the replica does not have yet, and *that* failure has no
+    # exception handler anywhere. It is a native apply error, and it
+    # crash-loops the worker. Trading a stall for that is not a trade.
+    #
+    # Indexes are the case where the trade is real: nothing in the stream
+    # fails because an index is a minute late, and building one is exactly
+    # the work most likely to run past the budget. So the list is indexes
+    # and index-shaped things, and everything else fails loudly instead.
+    _sub_sql("""
+CREATE OR REPLACE FUNCTION public._snaplicator_ddl_is_deferrable(cmd_tag text, ddl text)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $deferrable$
+    SELECT cmd_tag IN ('CREATE INDEX', 'DROP INDEX', 'ALTER INDEX', 'REINDEX',
+                       'CREATE STATISTICS', 'DROP STATISTICS', 'ALTER STATISTICS')
+       -- One statement, for the same reason the skip rule wants one: a batch
+       -- is stored as a single row, and half of it may not be an index.
+       AND btrim(ddl) !~ ';\\s*\\S';
+$deferrable$;
+""")
+
     _sub_sql("""
 CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_skipped (
     id bigserial PRIMARY KEY,
@@ -1286,6 +1342,12 @@ CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_deferred (
     executed_at timestamptz,
     error text
 );
+-- Two things land here now and they are not the same event: CONCURRENTLY
+-- cannot run in the apply transaction at all, while a statement over the
+-- budget could have and did not finish in time. IF NOT EXISTS because the
+-- table predates the column on every install that already has one.
+ALTER TABLE public._snaplicator_ddl_deferred
+    ADD COLUMN IF NOT EXISTS reason text;
 """)
 
     _sub_sql(
@@ -1336,8 +1398,9 @@ BEGIN
         INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
         VALUES (NEW.id, NEW.ddl_text, 'ownership/privileges are not replicated', NEW.search_path);
     ELSIF NEW.ddl_text ~* 'CONCURRENTLY' THEN
-        INSERT INTO public._snaplicator_ddl_deferred (log_id, ddl_text, search_path)
-        VALUES (NEW.id, NEW.ddl_text, NEW.search_path);
+        INSERT INTO public._snaplicator_ddl_deferred (log_id, ddl_text, search_path, reason)
+        VALUES (NEW.id, NEW.ddl_text, NEW.search_path,
+                'CONCURRENTLY cannot run inside the apply transaction');
     ELSE
         saved_sp := current_setting('search_path', true);
         BEGIN
@@ -1345,13 +1408,37 @@ BEGIN
                 PERFORM set_config('search_path', NEW.search_path, true);
             END IF;
             EXECUTE NEW.ddl_text;
-        EXCEPTION WHEN OTHERS THEN
-            -- loud skip: never re-raise (would crash-loop the apply worker)
-            INSERT INTO public._snaplicator_ddl_failures
-                (log_id, ddl_text, error, search_path)
-            VALUES (NEW.id, NEW.ddl_text, SQLERRM, NEW.search_path);
-            RAISE WARNING 'snaplicator: ddl apply failed for log id %: %',
-                NEW.id, SQLERRM;
+        EXCEPTION
+            WHEN query_canceled THEN
+                -- Over budget, not wrong. The publisher would have killed the
+                -- connection a moment later and rolled the whole apply
+                -- transaction back, leaving the worker to replay this from the
+                -- same LSN forever. Cancelling first is what makes it a
+                -- recorded event instead of a silent stall.
+                IF public._snaplicator_ddl_is_deferrable(NEW.command_tag, NEW.ddl_text) THEN
+                    INSERT INTO public._snaplicator_ddl_deferred
+                        (log_id, ddl_text, search_path, reason)
+                    VALUES (NEW.id, NEW.ddl_text, NEW.search_path,
+                            'over the ' || '__DDL_TIMEOUT__' || ' apply budget');
+                    RAISE WARNING 'snaplicator: ddl log id % over budget, deferred: %',
+                        NEW.id, NEW.command_tag;
+                ELSE
+                    INSERT INTO public._snaplicator_ddl_failures
+                        (log_id, ddl_text, error, search_path)
+                    VALUES (NEW.id, NEW.ddl_text,
+                            'exceeded the __DDL_TIMEOUT__ apply budget; not deferrable ('
+                            || NEW.command_tag || ') because the DML after it may '
+                            || 'depend on it', NEW.search_path);
+                    RAISE WARNING 'snaplicator: ddl log id % over budget and not deferrable: %',
+                        NEW.id, NEW.command_tag;
+                END IF;
+            WHEN OTHERS THEN
+                -- loud skip: never re-raise (would crash-loop the apply worker)
+                INSERT INTO public._snaplicator_ddl_failures
+                    (log_id, ddl_text, error, search_path)
+                VALUES (NEW.id, NEW.ddl_text, SQLERRM, NEW.search_path);
+                RAISE WARNING 'snaplicator: ddl apply failed for log id %: %',
+                    NEW.id, SQLERRM;
         END;
         PERFORM set_config('search_path', coalesce(saved_sp, 'public'), true);
     END IF;
@@ -1372,10 +1459,30 @@ ALTER TABLE public.{CAPTURE_LOG_TABLE}
     ENABLE ALWAYS TRIGGER _snaplicator_ddl_apply;
 """)
 
+    # The budget has to be armed here, not in the trigger.
+    #
+    # statement_timeout is armed once, when a top-level statement begins.
+    # The trigger runs *inside* one — the apply worker's INSERT of the log
+    # row — so a set_config there changes the GUC and nothing else: the
+    # timer for the statement already running was set from the old value.
+    # Measured, not assumed: an in-trigger 2s budget let a 21s index build
+    # run to completion.
+    #
+    # The apply worker connects as the subscription owner, and there is no
+    # per-subscription GUC, so the role in this database is the narrowest
+    # place that reaches it. That scope is the cost: every session of this
+    # role in this database gets the same ceiling, including the manager's
+    # own replication-check query. It fails visibly if it hits it.
+    _sub_sql(
+        f"ALTER ROLE {subscriber_user} IN DATABASE {subscriber_db} "
+        f"SET statement_timeout = '{_ddl_timeout()}';"
+    )
+
     return {
         "installed": True,
         "log_table": CAPTURE_LOG_TABLE,
         "initial_watermark": int(initial_watermark),
+        "apply_budget": _ddl_timeout(),
     }
 
 
@@ -1536,10 +1643,7 @@ fail AS (
     SELECT DISTINCT ON (log_id) log_id, error, failed_at
       FROM public._snaplicator_ddl_failures ORDER BY log_id, id DESC
 ),
-defr AS (
-    SELECT DISTINCT ON (log_id) log_id, executed_at, error, deferred_at
-      FROM public._snaplicator_ddl_deferred ORDER BY log_id, id DESC
-),
+defr AS (%(defr_cte)s),
 skip AS (%(skip_cte)s)
 SELECT l.id::text
     || '|' || CASE
@@ -1558,7 +1662,8 @@ SELECT l.id::text
     || '|' || to_char(l.captured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ')
     || '|' || coalesce(to_char(coalesce(f.failed_at, d.executed_at, d.deferred_at)
                                  AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'), '')
-    || '|' || encode(convert_to(coalesce(f.error, d.error, s.reason, ''), 'UTF8'), 'base64')
+    || '|' || encode(convert_to(
+           coalesce(f.error, d.error, d.reason, s.reason, ''), 'UTF8'), 'base64')
     || '|' || encode(convert_to(l.ddl_text, 'UTF8'), 'base64')
   FROM public._snaplicator_ddl_log l
   LEFT JOIN public._snaplicator_ddl_applied a ON a.id = l.id
@@ -1576,6 +1681,14 @@ _SKIP_CTE_PRESENT = (
     "FROM public._snaplicator_ddl_skipped ORDER BY log_id, id DESC"
 )
 _SKIP_CTE_ABSENT = "SELECT NULL::bigint AS log_id, NULL::text AS reason WHERE false"
+
+# `reason` arrived with budget-deferral; an install from before it has the
+# table but not the column, and selecting a missing column is a syntax error
+# rather than a null.
+_DEFR_CTE = (
+    "SELECT DISTINCT ON (log_id) log_id, executed_at, error, deferred_at, %s AS reason "
+    "FROM public._snaplicator_ddl_deferred ORDER BY log_id, id DESC"
+)
 
 _DDL_STATUSES = (
     "applied", "deferred", "deferred_done", "deferred_failed",
@@ -1616,9 +1729,15 @@ def get_ddl_apply_rows(
     has_skip = _q(
         "SELECT to_regclass('public._snaplicator_ddl_skipped') IS NOT NULL;"
     ).strip() == "t"
+    has_reason = _q(
+        "SELECT count(*) > 0 FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = '_snaplicator_ddl_deferred' "
+        "AND column_name = 'reason';"
+    ).strip() == "t"
 
     body = _DDL_STATUS_SQL % {
         "skip_cte": _SKIP_CTE_PRESENT if has_skip else _SKIP_CTE_ABSENT,
+        "defr_cte": _DEFR_CTE % ("reason" if has_reason else "NULL::text"),
     }
     # Counts come from the same query the rows do, wrapped — two hand-written
     # queries would drift the moment the CASE gains a branch.
@@ -1780,7 +1899,7 @@ SELECT count(*) FROM public.{CAPTURE_LOG_TABLE} l
 
     _run_subscriber_sql(
         subscriber_container, subscriber_user, subscriber_password, subscriber_db,
-        f"""
+        _with_ddl_timeout(f"""
 DO $catchup$
 DECLARE
     r record;
@@ -1815,8 +1934,9 @@ BEGIN
         END IF;
 
         IF r.ddl_text ~* 'CONCURRENTLY' THEN
-            INSERT INTO public._snaplicator_ddl_deferred (log_id, ddl_text, search_path)
-            VALUES (r.id, r.ddl_text, r.search_path);
+            INSERT INTO public._snaplicator_ddl_deferred (log_id, ddl_text, search_path, reason)
+            VALUES (r.id, r.ddl_text, r.search_path,
+                    'CONCURRENTLY cannot run inside the apply transaction');
             CONTINUE;
         END IF;
 
@@ -1826,18 +1946,37 @@ BEGIN
                 PERFORM set_config('search_path', r.search_path, true);
             END IF;
             EXECUTE r.ddl_text;
-        EXCEPTION WHEN OTHERS THEN
-            INSERT INTO public._snaplicator_ddl_failures
-                (log_id, ddl_text, error, search_path)
-            VALUES (r.id, r.ddl_text, SQLERRM, r.search_path);
-            RAISE WARNING 'snaplicator: ddl catch-up failed for log id %: %',
-                r.id, SQLERRM;
+        EXCEPTION
+            WHEN query_canceled THEN
+                IF public._snaplicator_ddl_is_deferrable(r.command_tag, r.ddl_text) THEN
+                    INSERT INTO public._snaplicator_ddl_deferred
+                        (log_id, ddl_text, search_path, reason)
+                    VALUES (r.id, r.ddl_text, r.search_path,
+                            'over the ' || '__DDL_TIMEOUT__' || ' apply budget');
+                    RAISE WARNING 'snaplicator: ddl catch-up id % over budget, deferred: %',
+                        r.id, r.command_tag;
+                ELSE
+                    INSERT INTO public._snaplicator_ddl_failures
+                        (log_id, ddl_text, error, search_path)
+                    VALUES (r.id, r.ddl_text,
+                            'exceeded the __DDL_TIMEOUT__ apply budget; not deferrable ('
+                            || r.command_tag || ') because the DML after it may '
+                            || 'depend on it', r.search_path);
+                    RAISE WARNING 'snaplicator: ddl catch-up id % over budget, not deferrable: %',
+                        r.id, r.command_tag;
+                END IF;
+            WHEN OTHERS THEN
+                INSERT INTO public._snaplicator_ddl_failures
+                    (log_id, ddl_text, error, search_path)
+                VALUES (r.id, r.ddl_text, SQLERRM, r.search_path);
+                RAISE WARNING 'snaplicator: ddl catch-up failed for log id %: %',
+                    r.id, SQLERRM;
         END;
         PERFORM set_config('search_path', coalesce(saved_sp, 'public'), true);
     END LOOP;
 END;
 $catchup$;
-""",
+"""),
     )
     return {"applied": count}
 
