@@ -307,8 +307,12 @@ To clone directly from the main replica, open the frontend and use "Clone from M
 ---
 
 ## Anonymization behavior
-- `configs/anonymize.sql` runs automatically **only** when cloning from the live main replica.
-- Snapshot-derived clones skip the script. If you need sanitized data, either run the script manually or sanitize before capturing the snapshot.
+- `configs/anonymize.sql` runs on clones built from the live main replica **and**
+  on clones built from a main snapshot.
+- It is skipped only for a clone built from a *clone* snapshot: that data was
+  already scrubbed when the clone it came from was made.
+- A missing or statement-only script does not mean "skip masking" — clone
+  creation is refused until a script exists or the opt-out is declared.
 
 ---
 

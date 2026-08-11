@@ -862,6 +862,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
 
 <span class="k">UPDATE</span> user_account <span class="k">SET</span> email = <span class="s">'dev+'</span> || id || <span class="s">'@example.local'</span>;
 <span class="k">UPDATE</span> device_info  <span class="k">SET</span> push_token = <span class="s">'invalid-dev-token'</span>, is_push_enabled = false;</pre>
+        <p style="margin-top:.75rem" data-i18n="g.p3c">If you are not sure how to write it, ask your agent to write it and to upload it for you (<code>set_anonymize_sql</code>).</p>
         <p style="margin-top:.75rem" data-i18n="g.p3b">If the script fails, the clone is destroyed rather than served — a <span class="nb">half-scrubbed</span> copy is never handed to anyone. A clone with no script at all is production data given to whoever asked for it, so the file&rsquo;s absence is reported, not assumed.</p>
       </div></li>
 
@@ -878,7 +879,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       <li id="g5"><div>
         <h3 data-i18n="g.h5">Take a snapshot</h3>
         <p data-i18n="g.p5">A named instant of the replica, taken in O(1). This is what your agents reset to, so take a fresh one whenever &lsquo;current&rsquo; has moved on.</p>
-        <pre class="term"><span class="k">create_snapshot</span>(name: <span class="s">"before-migration-42"</span>)
+        <pre class="term"><span class="k">create_snapshot</span>(description: <span class="s">"before-migration-42"</span>)
 <span class="k">list_snapshots</span>()</pre>
       </div></li>
 
@@ -896,7 +897,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
 {
   <span class="s">"mcpServers"</span>: {
     <span class="s">"snaplicator"</span>: {
-      <span class="s">"url"</span>: <span class="s">"http://snaplicator-host:8765/mcp?clones=5455"</span>
+      <span class="s">"url"</span>: <span class="s">"http://snaplicator-host/api/mcp/?clones=5455"</span>
     }
   }
 }</pre>
@@ -924,8 +925,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
     <p style="margin-top:.8rem" data-i18n="g.exlead3">Snaplicator closes it in <a href="#g4">step 4</a>: event triggers write every CREATE, ALTER and DROP to an outbox table, that table is itself a member of the publication, and so the DDL arrives as ordinary replicated rows and is replayed here. What is left over is below.</p>
     <dl class="alts">
       <div>
-        <dt data-i18n="g.ex1t">A clone made from a snapshot is not anonymized</dt>
-        <dd data-i18n="g.ex1">The script runs only on clones spawned from the live replica. One taken from an existing snapshot skips it — scrub that clone yourself before it leaves your hands.</dd>
+        <dt data-i18n="g.ex1t">A clone of a clone is not scrubbed again</dt>
+        <dd data-i18n="g.ex1">The script runs on clones built from the live replica and on clones built from a snapshot of it. It is skipped for one built from a snapshot of a clone, because that data was already scrubbed when the clone was made.</dd>
       </div>
       <div>
         <dt data-i18n="g.ex2t">CREATE INDEX CONCURRENTLY</dt>
@@ -1035,6 +1036,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'g.p2b':'스키마를 복제하고 구독을 만든 다음, 고른 테이블을 복사합니다. 오래 걸리는 단계는 여기 하나뿐이고 처음 한 번만 겪습니다. 끝나면 그때부터는 변경분이 계속 흘러들어옵니다.',
       'g.h3':'무엇을 지울지 정하기',
       'g.p3':'예제를 <code>configs/anonymize.sql</code>로 복사하거나 UI에서 편집하세요. 살아 있는 리플리카에서 만드는 모든 클론 안에서, 포트를 넘겨주기 전에 돌아갑니다.',
+      'g.p3c':'어떻게 작성해야할지 모르겠다면 에이전트의 도움을 받아서 작성하고 업로드까지 요청하세요 (<code>set_anonymize_sql</code>).',
       'g.p3b':'스크립트가 실패하면 클론을 넘기지 않고 없애 버립니다. 반만 지워진 사본이 누구 손에도 가지 않게요. 스크립트가 아예 없는 클론은 프로덕션 데이터를 그대로 건네는 것이라, 파일이 없다는 사실을 넘겨짚지 않고 알려 줍니다.',
       'g.h4':'스키마도 따라오게 하기',
       'g.p4':'논리 복제는 행만 나릅니다. Snaplicator는 프라이머리에 이벤트 트리거를 걸어 CREATE·ALTER·DROP을 전부 아웃박스 테이블에 적고, 그 테이블 자체를 publication에 넣습니다. 그래서 DDL이 평범한 복제 행으로 도착해 여기서 다시 실행됩니다.',
@@ -1049,8 +1051,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'g.tiplabel':'클론을 최신으로 유지하기',
       'g.tip':'클론은 한 시점에 멈춰 있고, 그 덕분에 테스트가 매번 같은 결과를 냅니다. 더 최신이 필요하면 스냅샷을 새로 찍고 <code>refresh_clone</code>을 쓰세요. 새것을 옆에 만들어 두고 바꿔치기하기 때문에 끊기는 건 0.5초 남짓입니다.',
       'g.extitle':'유의할 점',
-      'g.ex1t':'스냅샷에서 만든 클론은 익명화되지 않습니다',
-      'g.ex1':'스크립트는 살아 있는 리플리카에서 만드는 클론에서만 돕니다. 이미 있는 스냅샷에서 뜬 클론은 건너뛰니, 그 클론이 남의 손에 가기 전에 직접 지우세요.',
+      'g.ex1t':'클론의 스냅샷에서 만든 클론은 다시 지우지 않습니다',
+      'g.ex1':'스크립트는 살아 있는 리플리카에서 만드는 클론에서도, 그 리플리카의 스냅샷에서 만드는 클론에서도 돕니다. 건너뛰는 건 클론의 스냅샷에서 만든 클론뿐입니다. 그 데이터는 클론을 만들 때 이미 지웠으니까요.',
       'g.ex2t':'CREATE INDEX CONCURRENTLY',
       'g.ex2':'적용 워커의 트랜잭션 안에서는 실행할 수 없습니다. 그래서 실패하는 대신 <code>_snaplicator_ddl_deferred</code>에 넣어 두고 트랜잭션 밖에서 돌립니다.',
       'g.ex3t':'여기서 실패한 DDL',
@@ -1150,6 +1152,7 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'g.p2b':'スキーマを複製し、サブスクリプションを作り、選んだテーブルをコピーします。唯一の遅い工程で、一度きりです。完了後は変更が流れ込み続けます。',
       'g.h3':'何を消すかを決める',
       'g.p3':'例を <code>configs/anonymize.sql</code> にコピーするか、UI で編集してください。稼働中のレプリカから作るすべてのクローンの中で、ポートを渡す前に実行されます。',
+      'g.p3c':'書き方が分からなければ、エージェントに作成とアップロードまで頼んでください（<code>set_anonymize_sql</code>）。',
       'g.p3b':'スクリプトが失敗した場合、クローンは渡されずに破棄されます。中途半端に消えたコピーが誰の手にも渡らないようにです。スクリプトが無いクローンは本番データをそのまま渡すことなので、ファイルが無いことは推測せず報告します。',
       'g.h4':'スキーマも追従させる',
       'g.p4':'論理レプリケーションが運ぶのは行だけです。Snaplicator はプライマリにイベントトリガーを置き、CREATE・ALTER・DROP をすべてアウトボックステーブルに書き、そのテーブル自体を publication に入れます。だから DDL は普通の複製行として届き、ここで実行し直されます。',
@@ -1164,8 +1167,8 @@ curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/
       'g.tiplabel':'クローンを最新に保つ',
       'g.tip':'クローンは一点に止まり、だからこそテストが再現可能です。新しいデータが要るときは新しいスナップショットを取り <code>refresh_clone</code> を使います。置き換えは隣に作ってから切り替わるので、断は 0.5 秒ほどです。',
       'g.extitle':'留意点',
-      'g.ex1t':'スナップショットから作ったクローンは匿名化されません',
-      'g.ex1':'スクリプトは稼働中のレプリカから作るクローンでのみ走ります。既存のスナップショットから取ったクローンは飛ばすので、人手に渡る前に自分で消してください。',
+      'g.ex1t':'クローンのスナップショットから作ったクローンは再度マスクしません',
+      'g.ex1':'スクリプトは稼働中のレプリカから作るクローンでも、そのレプリカのスナップショットから作るクローンでも走ります。飛ばすのはクローンのスナップショットから作ったクローンだけです。そのデータはクローンを作った時点で既に消してあるからです。',
       'g.ex2t':'CREATE INDEX CONCURRENTLY',
       'g.ex2':'適用ワーカーのトランザクション内では実行できません。そこで失敗させる代わりに <code>_snaplicator_ddl_deferred</code> に積み、トランザクションの外で実行します。',
       'g.ex3t':'ここで失敗した DDL',
