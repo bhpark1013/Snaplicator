@@ -234,16 +234,26 @@ class TestFailureIsolation:
 			"WHERE ddl_text LIKE '%owned_t%';",
 		) == "0"
 
-		# GRANT is the same story: a privilege for a role that is not here
+		# GRANT is the same story told one step earlier: capture drops it on
+		# tg_tag, so it is never logged and never travels. The apply side keeps
+		# a GRANT clause in its skip rule anyway, for log rows written by an
+		# install whose capture filter differs from this one.
 		psql_conn(pub, "GRANT SELECT ON owned_t TO owner_only_here;")
+		assert psql_conn(
+			pub,
+			f"SELECT count(*) FROM {LOG_TABLE} WHERE ddl_text ILIKE 'GRANT%owned_t%';",
+		) == "0"
+		# a privilege for a role that is not here must not surface as a break
+		psql_conn(pub, "INSERT INTO seed (id, val, req) VALUES (4, 'after grant', 1);")
 		wait_until(
-			lambda: psql_conn(
-				sub,
-				"SELECT count(*) FROM public._snaplicator_ddl_skipped "
-				"WHERE ddl_text ILIKE 'GRANT%owned_t%';",
-			) == "1",
-			desc="grant skipped",
+			lambda: psql_conn(sub, "SELECT count(*) FROM seed WHERE id = 4;") == "1",
+			desc="stream past the grant",
 		)
+		assert psql_conn(
+			sub,
+			"SELECT count(*) FROM public._snaplicator_ddl_failures "
+			"WHERE ddl_text ILIKE 'GRANT%';",
+		) == "0"
 
 	def test_batch_carrying_ownership_is_not_swallowed(self, pg_pair):
 		"""ddl_text is current_query(), and capture dedupes per (txid, query
