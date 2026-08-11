@@ -695,9 +695,12 @@ AUTO_ADD_PREFIX = "_snaplicator_auto_add_"
 # the same LSN and does it again — a stall with no progress and no error,
 # which is exactly the incident this budget exists to prevent.
 #
-# Half the default timeout, so a statement is cancelled by us — recoverably,
-# with the reason recorded — well before the publisher does it unrecoverably.
-DDL_APPLY_STATEMENT_TIMEOUT = os.environ.get("DDL_APPLY_STATEMENT_TIMEOUT", "30s")
+# Under the publisher's 60s, so a statement is cancelled by us — recoverably,
+# with the reason recorded — before the publisher does it unrecoverably. The
+# margin is ten seconds rather than thirty because this ceiling is shared:
+# every session of the subscriber role in this database inherits it, and the
+# replication-check query is one of them.
+DDL_APPLY_STATEMENT_TIMEOUT = os.environ.get("DDL_APPLY_STATEMENT_TIMEOUT", "50s")
 
 
 def _ddl_timeout() -> str:
