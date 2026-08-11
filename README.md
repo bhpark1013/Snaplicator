@@ -1,8 +1,27 @@
-# Snaplicator
+<p align="center">
+  <a href="https://bhpark1013.github.io/Snaplicator/">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/docs/logo-dark.svg">
+      <img src="https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/docs/logo-light.svg" alt="Snaplicator" width="88" height="88">
+    </picture>
+  </a>
+</p>
 
-**A test database cloned straight from your production. No seeding. No dumps.**
+<h1 align="center">Snaplicator</h1>
 
-[**Landing page →**](https://bhpark1013.github.io/Snaplicator/) — the same story with the concepts drawn, in English, Korean and Japanese.
+<p align="center">
+  A test database cloned straight from your production. No seeding. No dumps.
+</p>
+
+<p align="center">
+  <a href="https://bhpark1013.github.io/Snaplicator/"><b>Read the landing page &rarr;</b></a>
+</p>
+
+## 만든 이유
+
+테스트 DB 구성을 위해 매번 데이터를 시딩해야하고, production에 버그 발생하면 test환경에서는 재현이 안되고, QA시 매번 특정 시나리오에서 테스트해야하는 상황이 번거로워서 만들었습니다.
+
+실시간으로 primary db의 dml 및 ddl을 복제하고, 복제된 DB에 특정 상태에 스냅샷을 찍어 매번 같은 데이터로 테스트할 수 있습니다.
 
 ## The problem
 
