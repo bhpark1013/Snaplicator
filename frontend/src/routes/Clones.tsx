@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, Check, Copy, Loader2, Star, Upload, X } from 'lucide-react'
 
+import { cloneLabel } from '@/lib/cloneLabel'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import {
@@ -105,7 +106,9 @@ export function Clones() {
     const [message, setMessage] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
 
-    const [deleting, setDeleting] = useState<string | null>(null)
+    // The clone, not its container name: the dialog has to say which clone
+    // this is, and the container name is not what the reader called it.
+    const [deleting, setDeleting] = useState<CloneItem | null>(null)
     const [deletingBusy, setDeletingBusy] = useState(false)
 
     const [createOpen, setCreateOpen] = useState(false)
@@ -378,8 +381,8 @@ export function Clones() {
         return () => { window.clearInterval(poll); setCloneProgress(null) }
     }
 
-    const onDelete = (containerName: string) => {
-        setDeleting(containerName)
+    const onDelete = (clone: CloneItem) => {
+        setDeleting(clone)
         setMessage(null)
         setError(null)
     }
@@ -389,10 +392,14 @@ export function Clones() {
         setDeletingBusy(true)
         const tid = toast.loading('Deleting clone…')
         try {
-            const r = await fetch(`${base}/clones/${encodeURIComponent(deleting)}`, { method: 'DELETE' })
+            // The API is addressed by container name; the reader is told the
+            // clone's name. The two are not the same string and only one of
+            // them belongs on screen.
+            const target = deleting.container_name || deleting.name
+            const r = await fetch(`${base}/clones/${encodeURIComponent(target)}`, { method: 'DELETE' })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
-            const res = await r.json()
-            toast.update(tid, 'success', `Deleted clone (${res.subvolume_deleted ? 'subvolume removed' : 'done'})`)
+            await r.json()
+            toast.update(tid, 'success', `Deleted ${cloneLabel(deleting)}`)
             loadClones()
             setDeleting(null)
         } catch (e: any) {
@@ -420,7 +427,7 @@ export function Clones() {
         setError(null)
         setClonesError(null)
         const tid = toast.loading('Refreshing clone from main…')
-        const stopProgress = followProgress(tid, targetName)
+        const stopProgress = followProgress(tid, cloneLabel(refreshFor))
         try {
             const r = await fetch(`${base}/clones/${encodeURIComponent(targetName)}/refresh`, {
                 method: 'POST',
@@ -429,7 +436,7 @@ export function Clones() {
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
-            toast.update(tid, 'success', `Refreshed ${res.refreshed_container}`)
+            toast.update(tid, 'success', `Refreshed ${cloneLabel(refreshFor)}`)
             setRefreshFor(null)
             loadClones()
         } catch (e: any) {
@@ -490,7 +497,7 @@ export function Clones() {
                             title={running ? 'running' : 'stopped'}
                         />
                         <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
-                            {(c.display_name ?? c.description)?.trim() ? (c.display_name ?? c.description) : <span className="text-muted-foreground">(unnamed clone)</span>}
+                            {c.display_name?.trim() || c.description?.trim() ? cloneLabel(c) : <span className="text-muted-foreground">{cloneLabel(c)}</span>}
                         </span>
                     </div>
                     <div className="flex min-w-0 items-center gap-1.5">
@@ -520,7 +527,7 @@ export function Clones() {
                     >
                         {refreshingClone === targetName ? 'Refreshing...' : 'Refresh'}
                     </Button>
-                    <Button variant="destructive" onClick={(e) => { e.stopPropagation(); onDelete(targetName) }} disabled={deletingBusy}>
+                    <Button variant="destructive" onClick={(e) => { e.stopPropagation(); onDelete(c) }} disabled={deletingBusy}>
                         Delete
                     </Button>
                 </div>
@@ -805,7 +812,7 @@ export function Clones() {
                         The container and its btrfs subvolume will be deleted together.
                     </DialogDescription>
                     <p className="mt-2 text-[13px]">
-                        Target: <strong className="font-semibold">{deleting}</strong>
+                        Target: <strong className="font-semibold">{cloneLabel(deleting)}</strong>
                     </p>
                     <DialogFooter>
                         <Button onClick={() => setDeleting(null)} disabled={deletingBusy}>Cancel</Button>
@@ -824,7 +831,7 @@ export function Clones() {
                         The name and description are kept, and any changes made inside this clone are discarded.
                     </DialogDescription>
                     <p className="mt-2 text-[13px]">
-                        Target: <strong className="font-semibold">{refreshFor?.display_name?.trim() || refreshFor?.container_name || refreshFor?.name}</strong>
+                        Target: <strong className="font-semibold">{cloneLabel(refreshFor)}</strong>
                     </p>
                     <DialogFooter>
                         <Button onClick={() => setRefreshFor(null)} disabled={refreshingClone !== null}>Cancel</Button>

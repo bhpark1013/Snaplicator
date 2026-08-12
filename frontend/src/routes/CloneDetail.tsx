@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Check, Copy, Eye, EyeOff, Pencil } from 'lucide-react'
 
+import { cloneLabel } from '@/lib/cloneLabel'
 import { Button } from '@/components/ui/button'
 import { Card, CardTitle } from '@/components/ui/card'
 import {
@@ -208,7 +209,7 @@ export function CloneDetail() {
             })
             if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
             const res = await r.json()
-            toast.update(tid, 'success', `Refreshed ${res.refreshed_container}`)
+            toast.update(tid, 'success', `Refreshed ${cloneLabel(detail)}`)
             setRefreshOpen(false)
             await Promise.all([fetchDetail(), fetchCloneSnapshots()])
         } catch (e: any) {
@@ -517,7 +518,7 @@ export function CloneDetail() {
                                 </button>
                             </div>
                             <div className="text-[15px] font-medium text-zinc-100">
-                                {detail.display_name?.trim() ? detail.display_name : <span className="text-muted-foreground">(unnamed clone)</span>}
+                                {detail.display_name?.trim() ? cloneLabel(detail) : <span className="text-muted-foreground">{cloneLabel(detail)}</span>}
                             </div>
                         </div>
                         {detail.description?.trim() && (
@@ -765,7 +766,7 @@ export function CloneDetail() {
                         The container and its btrfs subvolume will be deleted together. Snapshots taken from this clone are unaffected.
                     </DialogDescription>
                     <p className="mt-2 text-[13px]">
-                        Target: <strong className="font-semibold">{detail?.display_name?.trim() || detail?.name}</strong>
+                        Target: <strong className="font-semibold">{cloneLabel(detail)}</strong>
                     </p>
                     <DialogFooter>
                         <Button onClick={() => setDeleteOpen(false)} disabled={actionBusy}>Cancel</Button>
