@@ -928,9 +928,12 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
   <!-- ═══════════════ AGENT ═══════════════ -->
   <section id="agent">
     <h2 data-i18n="a.title">Hand it to an agent</h2>
-    <p data-i18n="a.p1">Register the MCP server and the loop becomes the agent&rsquo;s own — it creates a clone, works against it, resets it, deletes it.</p>
+    <p data-i18n="a.p1">Register the MCP server and the loop becomes the agent&rsquo;s own — it creates a clone, works against it, resets it, deletes it. Register it one of two ways, depending on what you are handing over.</p>
+
+    <h3 style="margin-top:1.6rem" data-i18n="a.h1">Scoped to one clone</h3>
+    <p data-i18n="a.s1">For an agent doing a job. It may reset, refresh, snapshot and delete the clones you list, by port — and nothing else. Point it at another clone and the call is refused by name.</p>
     <div class="termwrap">
-      <pre class="term" id="mcpjson"><span class="c">// .mcp.json</span>
+      <pre class="term" id="mcpjson1"><span class="c">// .mcp.json</span>
 {
   <span class="s">"mcpServers"</span>: {
     <span class="s">"snaplicator"</span>: {
@@ -938,15 +941,41 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
     }
   }
 }</pre>
-      <button class="copy" data-copy="mcpjson" data-i18n="common.copy">copy</button>
+      <button class="copy" data-copy="mcpjson1" data-i18n="common.copy">copy</button>
     </div>
-    <p style="margin-top:.9rem" data-i18n="a.p2">The <code>clones</code> parameter limits which clones that agent may touch, so a confused one cannot reset someone else&rsquo;s.</p>
-    <pre class="term"><span class="c"># the loop, in the agent's own words</span>
+
+    <h3 style="margin-top:1.6rem" data-i18n="a.h2">Unscoped</h3>
+    <p data-i18n="a.s2">Drop the parameter and nothing is held back: every clone, every snapshot, the replication settings and the primary&rsquo;s triggers. This is the operator&rsquo;s connection — yours, not something you hand out.</p>
+    <div class="termwrap">
+      <pre class="term" id="mcpjson2"><span class="c">// .mcp.json</span>
+{
+  <span class="s">"mcpServers"</span>: {
+    <span class="s">"snaplicator"</span>: {
+      <span class="s">"url"</span>: <span class="s">"http://snaplicator-host/api/mcp/"</span>
+    }
+  }
+}</pre>
+      <button class="copy" data-copy="mcpjson2" data-i18n="common.copy">copy</button>
+    </div>
+
+    <h3 style="margin-top:1.6rem" data-i18n="a.h3">The loop</h3>
+    <pre class="term"><span class="c"># in the agent's own words</span>
 <span class="k">create_clone</span>(description: <span class="s">"try #1"</span>)   <span class="c">→ port 5455</span>
 <span class="c">… run the migration, run the suite, it fails …</span>
 <span class="k">reset_clone_to_snapshot</span>(clone_id: <span class="s">"5455"</span>, snapshot_name: <span class="s">"before-migration-42"</span>)
 <span class="c">… try #2 …</span>
 <span class="k">delete_clone</span>(clone_id: <span class="s">"5455"</span>)</pre>
+
+    <div class="note" style="margin-top:1.6rem">
+      <span class="label" data-i18n="a.warnlabel">What the scope does not cover</span>
+      <p data-i18n="a.warn">
+        <code>clones</code> is declared by the client itself, so it stops an accident, not an
+        attacker. It also only guards the tools that change an existing clone. Creating a new
+        one is never blocked, and neither is anything aimed at the primary — installing capture
+        triggers, changing the publication, or replacing <code>anonymize.sql</code>, which decides
+        what every future clone scrubs.
+      </p>
+    </div>
   </section>
 
   <!-- ═══════════════ INSTALL ═══════════════ -->
@@ -1029,8 +1058,14 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       // 'g.ex1':'큰 <code>CREATE INDEX</code>처럼 오래 걸리는 DDL은 <code>_snaplicator_ddl_deferred</code>로 옮겨두고, 동기화 루프가 apply 트랜잭션 밖에서 알아서 실행합니다. 에러가 난 DDL은 <code>_snaplicator_ddl_failures</code>에 남기고 그대로 둡니다. 재시도하지도, 적당히 덮지도 않습니다. 어긋난 게 보이는 편이 맞아 보이는데 아닌 것보다 낫기 때문입니다. 그러니 지켜보세요. 슬랙 워크스페이스에 앱을 추가하고 incoming webhook URL을 Config에 붙여넣으면, DDL 적용 실패가 실패한 구문과 함께 그 채널로 올라옵니다. 구독 이상과 스키마 드리프트도 같은 채널로 갑니다. <b>실패한 DDL을 다시 태우는 건 아직 수동입니다. 자동 재시도는 만들 예정입니다.</b>'
       'g.ex1':'큰 <code>CREATE INDEX</code>처럼 오래 걸리는 DDL은 실행하지않고 보류상태로 가거나, 실패할 수 있습니다. 다만 재실행가능한 ddl은 동기화 루프가 apply 트랜잭션 밖에서 알아서 실행합니다. 다만 일부 ddl은 수동으로 재시도해야할 수 있습니다. 직접 핸들링해야하는 건들을 위해 슬랙 워크스페이스에 앱을 추가하고 incoming webhook URL을 Config에 붙여넣으면, DDL 적용 실패가 실패한 구문과 함께 그 채널로 올라옵니다. <b>최대한 DDL이 실패하는 케이스를 핸들링하려고했으나 문제가 생기면 github issue에 추가해주시면 수정하겠습니다. </b>',
       'a.title':'에이전트에 물리기',
-      'a.p1':'MCP 서버를 등록하면 이 루프가 에이전트 것이 됩니다. 클론을 만들고, 작업하고, 되돌리고, 지웁니다.',
-      'a.p2':'<code>clones</code> 파라미터로 그 에이전트가 건드릴 수 있는 클론을 제한합니다. 헷갈린 에이전트가 남의 클론을 되돌릴 수 없습니다.',
+      'a.p1':'MCP 서버를 등록하면 이 루프가 에이전트 것이 됩니다. 클론을 만들고, 작업하고, 되돌리고, 지웁니다. 뭘 맡기느냐에 따라 등록 방법이 두 가지입니다.',
+      'a.h1':'클론 하나에만 물리기',
+      'a.s1':'일을 시킬 에이전트용입니다. 포트로 지정한 클론만 되돌리고, 새로고침하고, 스냅샷 찍고, 지울 수 있습니다. 그 밖은 안 됩니다. 다른 클론을 지목하면 이름을 짚어 거부합니다.',
+      'a.h2':'전체 권한으로 물리기',
+      'a.s2':'파라미터를 빼면 막히는 게 없습니다. 모든 클론, 모든 스냅샷, 복제 설정, primary의 트리거까지. 이건 운영자 본인 연결입니다. 남에게 주는 것이 아닙니다.',
+      'a.h3':'루프',
+      'a.warnlabel':'이 범위가 막지 않는 것',
+      'a.warn':'<code>clones</code>는 클라이언트가 스스로 붙이는 값이라, 사고를 막지 공격을 막지는 못합니다. 그리고 이미 있는 클론을 바꾸는 도구에만 걸립니다. 새 클론 만들기는 언제나 되고, primary를 향하는 것들도 마찬가지입니다. 캡처 트리거 설치, publication 변경, 그리고 앞으로 만들어질 모든 클론이 뭘 가릴지 정하는 <code>anonymize.sql</code> 교체까지.',
       'origin.label':'만든 이유',
       'origin.p1':'테스트 DB 구성을 위해 매번 데이터를 시딩해야하고, production에 버그 발생하면 test환경에서는 재현이 안되고, QA시 매번 특정 시나리오에서 테스트해야하는 상황이 번거로워서 만들었습니다.',
       'origin.p2':'실시간으로 primary db의 dml 및 ddl을 복제하고, 복제된 DB에 특정 상태에 스냅샷을 찍어 매번 같은 데이터로 테스트할 수 있습니다.',
@@ -1136,8 +1171,14 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'g.ex1t':'DDL は保留されたり、失敗したりします',
       'g.ex1':'大きな <code>CREATE INDEX</code> のような時間のかかる DDL は <code>_snaplicator_ddl_deferred</code> に移し、同期ループが apply トランザクションの外で自動的に実行します。エラーになった DDL は <code>_snaplicator_ddl_failures</code> に残し、そのままにします。再試行もしませんし、適当に覆いもしません。ずれているのが見える方が、正しく見えて実は違うものよりましだからです。なので見張ってください。Slack ワークスペースにアプリを追加し、incoming webhook の URL を Config に貼れば、DDL 適用の失敗が失敗した文とともにそのチャンネルに流れます。サブスクリプションの異常やスキーマドリフトも同じチャンネルに届きます。<b>失敗した DDL の再投入はまだ手動です。自動リトライは作る予定です。</b>',
       'a.title':'エージェントに渡す',
-      'a.p1':'MCP サーバーを登録すれば、このループはエージェントのものになります。クローンを作り、作業し、戻し、削除します。',
-      'a.p2':'<code>clones</code> パラメータで、そのエージェントが触れるクローンを制限します。混乱したエージェントが他人のクローンを戻すことはできません。',
+      'a.p1':'MCP サーバーを登録すれば、このループはエージェントのものになります。クローンを作り、作業し、戻し、削除します。何を任せるかによって、登録の仕方が 2 通りあります。',
+      'a.h1':'クローン 1 つに限定して渡す',
+      'a.s1':'仕事をさせるエージェント向けです。ポートで指定したクローンだけを、戻す・作り直す・スナップショットを取る・削除できます。それ以外はできません。別のクローンを指すと、名前を挙げて拒否します。',
+      'a.h2':'制限なしで渡す',
+      'a.s2':'パラメータを外すと、止めるものは何もありません。すべてのクローン、すべてのスナップショット、レプリケーション設定、プライマリのトリガーまで。これは運用者本人の接続です。人に渡すものではありません。',
+      'a.h3':'ループ',
+      'a.warnlabel':'このスコープが守らないもの',
+      'a.warn':'<code>clones</code> はクライアント自身が付ける値なので、事故は防いでも攻撃は防げません。そして、すでにあるクローンを変える道具にしか掛かりません。新しいクローンの作成は常に通りますし、プライマリに向かうものも同じです。キャプチャトリガーの設置、publication の変更、そしてこれから作られるすべてのクローンが何を隠すかを決める <code>anonymize.sql</code> の差し替えまで。',
       'origin.label':'作った理由',
       'origin.p1':'テスト DB を構成するたびにデータをシードしなければならず、production でバグが出ても test 環境では再現できず、QA のたびに特定のシナリオでテストしなければならないのが煩わしくて作りました。',
       'origin.p2':'primary db の DML および DDL をリアルタイムで複製し、複製された DB の特定の状態にスナップショットを取って、毎回同じデータでテストできます。',
