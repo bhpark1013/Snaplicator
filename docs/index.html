@@ -192,7 +192,8 @@
   }
   .langs button[aria-pressed="true"] { background: var(--t-mid); color: var(--paper); }
   /* Text, not the Octocat: the mark is a trademark and this needs no image. */
-  .gh { align-self: center; font-family: var(--mono); font-size: .72rem;
+  .gh { align-self: center; display: inline-flex; align-items: center; gap: .38rem;
+        font-family: var(--mono); font-size: .72rem;
         color: var(--ink-3); text-decoration: none; white-space: nowrap;
         border: 1px solid var(--rule); border-radius: 6px; padding: .32rem .6rem;
         transition: color .15s var(--ease-out), border-color .15s var(--ease-out); }
@@ -231,7 +232,6 @@
   /* Each view earns its own breathing room: the hero opens, the reference
      views sit tighter, install is short and shouldn't float in space. */
   #overview { padding-block: clamp(2.5rem, 6vw, 4.5rem) calc(var(--gap) + 1rem); }
-  #concepts { padding-block: clamp(1.75rem, 4vw, 2.75rem) var(--gap); }
   #guide    { padding-block: clamp(2rem, 5vw, 3.5rem) var(--gap); }
   #compare  { padding-block: clamp(1.75rem, 4vw, 2.75rem) var(--gap); }
   #install  { padding-block: clamp(1.75rem, 4vw, 2.75rem) clamp(2.5rem, 5vw, 3.5rem); }
@@ -447,62 +447,6 @@
   .t-note { margin: .8rem 0 0 calc(var(--trunk) + var(--stub));
             font-size: .68rem; color: var(--ink-3); }
 
-  /* ── the lab ─────────────────────────────────────────────── */
-  /* One containment layer. The outer border used to wrap rows and a verdict
-     that carry their own, which is three frames for one idea. */
-  .lab { background: var(--paper-2); border-radius: 10px;
-         margin-top: 2rem; overflow: hidden; }
-  .lab-head { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
-              padding: .85rem 1.15rem; border-bottom: 1px solid var(--rule); }
-  .lab-head h3 { margin: 0; }
-  .lab-head .hint { font-family: var(--mono); font-size: .7rem; color: var(--ink-3); margin-left: auto; }
-  .lab-body { padding: 1.15rem; display: grid; gap: 1.15rem; }
-
-  .meters { display: grid; gap: .8rem; }
-  .meter .m-top { display: flex; justify-content: space-between; align-items: baseline;
-                  font-family: var(--mono); font-size: .75rem; margin-bottom: .3rem; }
-  .meter .m-label { color: var(--ink-2); }
-  .meter .m-val { color: var(--ink); font-variant-numeric: tabular-nums; }
-  .track { height: 10px; border-radius: 999px; background: var(--paper-3); overflow: hidden;
-           border: 1px solid var(--rule); }
-  .fill { height: 100%; transition: width .45s cubic-bezier(.2,.7,.3,1); }
-  .fill.base { background: var(--t-deep); }
-  .fill.snap { background: var(--t-live); }
-  .fill.naive { background: repeating-linear-gradient(135deg, var(--ink-3) 0 5px, transparent 5px 10px); }
-  .m-note { font-family: var(--mono); font-size: .7rem; color: var(--ink-3); margin-top: .25rem;
-            font-variant-numeric: tabular-nums; }
-
-  .lab-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
-  .btn { font-family: var(--mono); font-size: .76rem; padding: .42rem .8rem; cursor: pointer;
-         border-radius: 6px; border: 1px solid var(--rule); background: var(--paper);
-         color: var(--ink-2);
-         /* Named, not `all`: `all` animated the focus outline too, so keyboard
-            users got a ring that faded in over 150ms instead of appearing. */
-         transition: border-color .15s var(--ease-out), color .15s var(--ease-out),
-                     background-color .15s var(--ease-out); }
-  .btn:hover:not(:disabled) { border-color: var(--t-mid); color: var(--t-mid); }
-  .btn:disabled { opacity: .4; cursor: not-allowed; }
-  .btn.primary { background: var(--t-mid); border-color: var(--t-mid); color: var(--paper); }
-  .btn.primary:hover:not(:disabled) { filter: brightness(1.08); color: var(--paper); }
-
-  .clones { display: grid; gap: .4rem; }
-  .clone-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
-               border: 1px solid var(--rule); border-radius: 7px; padding: .5rem .7rem;
-               background: var(--paper); font-family: var(--mono); font-size: .75rem;
-               animation: pop .25s ease backwards; }
-  @keyframes pop { from { opacity: 0; transform: translateY(-3px) } }
-  .clone-row .cname { color: var(--t-live-ink); }
-  .clone-row .cport { color: var(--ink-3); }
-  .clone-row .cw { margin-left: auto; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-  .clone-row .mini { font-size: .68rem; padding: .2rem .45rem; }
-  .empty { font-family: var(--mono); font-size: .75rem; color: var(--ink-3);
-           border: 1px dashed var(--rule); border-radius: 7px; padding: .8rem; text-align: center; }
-
-  .verdict { font-family: var(--mono); font-size: .78rem; padding: .7rem .9rem;
-             border-radius: 7px; background: var(--t-live-bg);
-             border: 1px solid color-mix(in srgb, var(--t-live) 30%, transparent); color: var(--ink-2); }
-  .verdict b { color: var(--t-live-ink); }
-
   /* ── steps / loop / notes ────────────────────────────────── */
   .steps { list-style: none; padding: 0; margin: 1.6rem 0 0; counter-reset: s; }
   /* minmax(0,1fr), not 1fr: a grid track's automatic minimum is its content's
@@ -568,7 +512,6 @@
       <span class="sigil">$</span><span class="bin">Snaplicator</span>
       <nav id="nav">
         <button data-view="overview" data-i18n="nav.overview">--overview</button>
-        <button data-view="concepts" data-i18n="nav.concepts">--concepts</button>
         <button data-view="guide"    data-i18n="nav.guide">--guide</button>
         <button data-view="agent"    data-i18n="nav.agent">--agent</button>
         <button data-view="install"  data-i18n="nav.install">--install</button>
@@ -580,7 +523,7 @@
       <button data-lang="ja">JA</button>
     </div>
     <a class="gh" href="https://github.com/bhpark1013/Snaplicator"
-       target="_blank" rel="noopener">GitHub</a>
+       target="_blank" rel="noopener">GitHub<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>
   </div>
 </header>
 
@@ -765,82 +708,6 @@
       <a href="https://www.postgresql.org/docs/current/logical-replication-restrictions.html">Postgres: logical replication restrictions</a> ·
       <a href="https://supabase.com/docs/guides/database/postgres/setup-replication-external">Supabase: replicate to another Postgres</a>
     </p>
-    </div>
-  </section>
-
-  <!-- ═══════════════ CONCEPTS ═══════════════ -->
-  <section id="concepts">
-    <figure class="tree">
-      <div class="t-node"><b>primary</b><em data-i18n="gr.primary">yours, untouched</em></div>
-      <div class="t-link t-link--long"><i data-i18n="gr.e1">logical replication</i></div>
-      <div class="t-node t1"><b>replica</b><em data-i18n="gr.replica">costs one slot on the primary</em></div>
-      <div class="t-link"><i data-i18n="gr.e2">freeze</i></div>
-      <div class="t-node t2 t-stack">
-        <span class="sheet"></span><span class="sheet"></span>
-        <span class="t-face"><b>snapshot</b><em data-i18n="gr.snapshot">O(1), then only what diverges</em></span>
-      </div>
-      <div class="t-fan">
-        <i class="t-fan-label" data-i18n="gr.e3">start</i>
-        <div class="t-node t3"><b>clone</b><span class="port">:5433</span></div>
-        <div class="t-node t3"><b>clone</b><span class="port">:5434</span></div>
-        <div class="t-node t3"><b>clone</b><span class="port">:5435</span></div>
-      </div>
-      <figcaption class="t-note" data-i18n="gr.clone">seconds each, and ~0 GB until you write</figcaption>
-    </figure>
-
-    <h2 class="after-figure" data-i18n="con.title">Replica, snapshot, clone</h2>
-    <p class="col sub" data-i18n="con.lead">
-      Each is made from the one before it, and nothing upstream notices when a clone is destroyed.
-    </p>
-
-    <div class="lab">
-      <div class="lab-head">
-        <h3 data-i18n="lab.title"><span class="nb">Copy-on-write</span>, at your fingertips</h3>
-        <span class="hint" data-i18n="lab.hint">illustrative model — 300 GB base</span>
-      </div>
-      <div class="lab-body">
-        <p style="margin:0;font-size:.9rem" data-i18n="lab.intro">
-          A clone shares every block with its snapshot and allocates only what it changes.
-        </p>
-
-        <div class="lab-actions">
-          <button class="btn primary" id="addClone" data-i18n="lab.add">+ Add clone</button>
-          <button class="btn" id="writeAll" data-i18n="lab.write">Write 2 GB in each</button>
-          <button class="btn" id="resetAll" data-i18n="lab.reset">Reset all to snapshot</button>
-          <button class="btn" id="clearAll" data-i18n="lab.clear">Delete all</button>
-        </div>
-
-        <div class="clones" id="cloneList"></div>
-
-        <div class="meters">
-          <div class="meter">
-            <div class="m-top">
-              <span class="m-label" data-i18n="lab.m1">Disk used with Snaplicator</span>
-              <span class="m-val" id="valSnap">300.0 GB</span>
-            </div>
-            <div class="track"><div class="fill snap" id="barSnap" style="width:10%"></div></div>
-            <div class="m-note" id="noteSnap"></div>
-          </div>
-          <div class="meter">
-            <div class="m-top">
-              <span class="m-label" data-i18n="lab.m2">Disk used if each were a full copy</span>
-              <span class="m-val" id="valNaive">300.0 GB</span>
-            </div>
-            <div class="track"><div class="fill naive" id="barNaive" style="width:10%"></div></div>
-            <div class="m-note" id="noteNaive"></div>
-          </div>
-        </div>
-
-        <div class="verdict" id="verdict"></div>
-      </div>
-    </div>
-
-    <div class="note">
-      <span class="label" data-i18n="con.notelabel">The part that makes it work</span>
-      <p data-i18n="con.note">
-        The pool is btrfs, so this is the filesystem’s behaviour, not a trick. Ten clones of a
-        300 GB replica are 300 GB plus whatever the ten of them wrote.
-      </p>
     </div>
   </section>
 
@@ -1084,23 +951,10 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'fit.n1':'primary에 <code>wal_level=logical</code>을 켜거나 복제 슬롯을 만들 수 없을 때.',
       'fit.n2':'이미 primary db로 Neon을 사용하고 있을 때.',
       'cmp.head':'다른 CoW 지원 postgres database와 다른 점',
-      'gr.primary':'원본, 그대로','gr.replica':'프라이머리의 복제 슬롯 하나','gr.snapshot':'O(1) · 그 뒤로 달라진 만큼만','gr.clone':'하나에 몇 초 · 쓰기 전까지 약 0 GB',
-      'gr.e1':'논리 복제','gr.e2':'얼리기','gr.e3':'띄우기',
       'common.copy':'복사',
       'hero.eyebrow':'AI를 위한 테스트 DB',
       'hero.title':'프로덕션 데이터로 빠르게 테스트하세요',
       'hero.macnote':'sudo 없이 실행하세요. 리눅스 머신부터 만듭니다.',
-      'con.title':'리플리카, 스냅샷, 클론',
-      'con.lead':'셋은 앞의 것에서 차례로 만들어집니다. 클론을 부숴도 위쪽은 아무 영향이 없습니다.',
-      'lab.title':'<span class="nb">Copy-on-write</span>, 직접 만져 보기',
-      'lab.hint':'예시 수치입니다 · 기준 300 GB',
-      'lab.intro':'클론은 자기가 나온 스냅샷과 블록을 그대로 같이 쓰고, 바뀐 부분만 새로 잡습니다.',
-      'lab.add':'+ 클론 추가','lab.write':'각각 2 GB 쓰기','lab.reset':'전부 스냅샷으로 되돌리기','lab.clear':'전부 삭제',
-      'lab.m1':'실제로 쓰는 디스크','lab.m2':'전부 통째로 복사했다면',
-      'lab.empty':'아직 클론이 없습니다. 리플리카만 있는 상태입니다.',
-      'lab.verdict0':'클론을 만들어서 차이를 보세요.',
-      'con.notelabel':'이게 되는 이유',
-      'con.note':'풀이 btrfs라서 그렇습니다. Snaplicator가 부리는 재주가 아닙니다. 300 GB 리플리카에서 클론 10개를 떠도 300 GB에 그 10개가 쓴 만큼만 더해집니다.',
 
 
 
@@ -1111,15 +965,6 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
 
 
       'i.title':'설치',
-      'lab.verdict':'디스크 <b>{saved}</b> 덜 씁니다 · 클론 {n}개 · {x}배 차이',
-      'lab.notesnap':'기준 {base} GB + 클론 {n}개가 쓴 {w}',
-      'lab.notenaive':'{base} GB × {n}',
-      'lab.resetShort':'되돌리기','lab.deleteShort':'삭제',
-      'lab.a11yWrite':'clone-{n}에 {w} GB 쓰기',
-      'lab.a11yReset':'스냅샷으로 되돌리기',
-      'lab.a11yResetN':'clone-{n}을 스냅샷으로 되돌리기',
-      'lab.a11yDelete':'클론 삭제',
-      'lab.a11yDeleteN':'clone-{n} 삭제',
       'cmp.c0':' ','cmp.c1':'프로덕션 행을 따라감','cmp.c2':'스키마도 따라감','cmp.c3':'스냅샷 · 브랜칭',
       'cmp.neon1':'논리 복제','cmp.neon2':'직접 맞춰야 함','cmp.neon3':'<span class="nb">copy-on-write</span> 브랜치',
       'cmp.sb1':'브랜치는 데이터 없이 시작','cmp.sb2':'마이그레이션 파일에서','cmp.sb3':'자기네 클라우드만',
@@ -1197,22 +1042,10 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'fit.n1':'primary で <code>wal_level=logical</code> を有効にできない、レプリケーションスロットを作れないとき。',
       'fit.n2':'すでに primary db として Neon を使っているとき。',
       'cmp.head':'他の CoW 対応 postgres database と何が違いますか?',
-      'gr.primary':'本番はそのまま','gr.replica':'プライマリのスロット 1 つ','gr.snapshot':'O(1) · 以後は差分だけ','gr.clone':'1 つ数秒 · 書き込むまで約 0 GB',
-      'gr.e1':'論理レプリケーション','gr.e2':'凍結','gr.e3':'起動',
       'common.copy':'コピー',
       'hero.eyebrow':'AI のためのテスト DB',
       'hero.title':'本番をそのまま複製したテスト DB。',
-      'hero.macnote':'sudo なしで実行してください。まず Linux マシンを作ります。','con.title':'レプリカ、スナップショット、クローン',
-      'con.lead':'それぞれ 1 つ前のものから作られます。クローンを壊しても上流は何も起きません。',
-      'lab.title':'<span class="nb">Copy-on-write</span> を手元で',
-      'lab.hint':'説明用モデル — ベース 300 GB',
-      'lab.intro':'クローンは元のスナップショットと全ブロックを共有し、変更した分だけ確保します。',
-      'lab.add':'+ クローン追加','lab.write':'各 2 GB 書き込み','lab.reset':'全てスナップショットへ','lab.clear':'全て削除',
-      'lab.m1':'Snaplicator でのディスク使用量','lab.m2':'すべて完全コピーだった場合',
-      'lab.empty':'クローンなし — レプリカのみ',
-      'lab.verdict0':'クローンを追加して差を確かめてください。',
-      'con.notelabel':'これを成り立たせているもの',
-      'con.note':'プールが btrfs だからで、Snaplicator の小細工ではありません。300 GB のレプリカのクローン 10 個は、300 GB + その 10 個が書いた分です。',
+      'hero.macnote':'sudo なしで実行してください。まず Linux マシンを作ります。',
 
 
 
@@ -1222,15 +1055,6 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
 
 
       'i.title':'インストール',
-      'lab.verdict':'<b>{saved}</b> 未割り当て · クローン {n} 個 · ディスク {x} 分の 1',
-      'lab.notesnap':'ベース {base} GB + クローン {n} 個が書いた {w}',
-      'lab.notenaive':'{base} GB × {n}',
-      'lab.resetShort':'戻す','lab.deleteShort':'削除',
-      'lab.a11yWrite':'clone-{n} に {w} GB 書き込む',
-      'lab.a11yReset':'スナップショットへ戻す',
-      'lab.a11yResetN':'clone-{n} をスナップショットへ戻す',
-      'lab.a11yDelete':'クローンを削除',
-      'lab.a11yDeleteN':'clone-{n} を削除',
       'cmp.c0':' ','cmp.c1':'本番の行に追従','cmp.c2':'スキーマも追従','cmp.c3':'スナップショット・ブランチ',
       'cmp.neon1':'論理レプリケーション','cmp.neon2':'自分で合わせ続ける','cmp.neon3':'<span class="nb">copy-on-write</span> ブランチ',
       'cmp.sb1':'ブランチはデータ無しで始まる','cmp.sb2':'マイグレーションファイルから','cmp.sb3':'自社クラウドのみ',
@@ -1287,7 +1111,7 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
   }
 
   /* ── views ─────────────────────────────────────────────── */
-  var VIEWS = ['overview', 'concepts', 'guide', 'agent', 'install'];
+  var VIEWS = ['overview', 'guide', 'agent', 'install'];
   function show(view, push) {
     if (VIEWS.indexOf(view) < 0) view = 'overview';
     VIEWS.forEach(function (v) {
@@ -1321,7 +1145,6 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
     if (t) { e.preventDefault(); t.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   });
 
-  /* ── concept cards ─────────────────────────────────────── */
 
   /* ── copy buttons ──────────────────────────────────────── */
   document.addEventListener('click', function (e) {
@@ -1333,107 +1156,6 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       setTimeout(function () { b.textContent = was; }, 1200);
     });
   });
-
-  /* ── the <span class="nb"><span class="nb">copy-on-write</span></span> lab ─────────────────────────────────
-     A model, not a measurement — the numbers are stated as such
-     in the header. What it has to make true is the shape: the
-     Snaplicator bar grows only when something is written, and the
-     <span class="nb">full-copy</span> bar grows on every clone. */
-  var BASE = 300, WRITE = 2, CAP = 2400;
-  var clones = [], nextPort = 5455, seq = 0;
-
-  function t(key, fallback) {
-    var lang = document.documentElement.lang;
-    var d = DICT[lang];
-    return (d && d[key]) || fallback;
-  }
-  function gb(n) { return n.toFixed(1) + ' GB'; }
-  /* Word order differs enough between these three that the numbers have to be
-     placed by the translation, not concatenated around it. */
-  function fill(tpl, vals) {
-    return tpl.replace(/\{(\w+)\}/g, function (_, k) { return vals[k]; });
-  }
-
-  function render() {
-    var list = document.getElementById('cloneList');
-    if (!list) return;
-    list.innerHTML = '';
-    if (!clones.length) {
-      var e = document.createElement('div');
-      e.className = 'empty';
-      e.textContent = t('lab.empty', 'No clones — just the replica');
-      list.appendChild(e);
-    }
-    clones.forEach(function (c) {
-      var row = document.createElement('div');
-      row.className = 'clone-row';
-      row.innerHTML =
-        '<span class="cname">clone-' + c.n + '</span>' +
-        '<span class="cport">:' + c.port + '</span>' +
-        '<span class="cw">+' + gb(c.written) + '</span>';
-      var w = document.createElement('button');
-      w.className = 'btn mini'; w.textContent = '+' + WRITE + ' GB';
-      w.setAttribute('aria-label', fill(t('lab.a11yWrite', 'Write {w} GB in clone-{n}'), { w: WRITE, n: c.n }));
-      w.onclick = function () { c.written += WRITE; render(); };
-      var r = document.createElement('button');
-      /* Was ⟲ (U+27F2), which the monospace fallback has no glyph for — it
-         drew a box. Words are wider and better: they say what they do. */
-      r.className = 'btn mini'; r.textContent = t('lab.resetShort', 'reset');
-      /* Glyph-only, so the name has to be supplied — otherwise a screen
-         reader announces the character and nothing else. */
-      r.title = t('lab.a11yReset', 'Reset to snapshot');
-      r.setAttribute('aria-label', fill(t('lab.a11yResetN', 'Reset clone-{n} to the snapshot'), { n: c.n }));
-      r.onclick = function () { c.written = 0; render(); };
-      var d = document.createElement('button');
-      d.className = 'btn mini'; d.textContent = t('lab.deleteShort', 'delete');
-      d.title = t('lab.a11yDelete', 'Delete clone');
-      d.setAttribute('aria-label', fill(t('lab.a11yDeleteN', 'Delete clone-{n}'), { n: c.n }));
-      d.onclick = function () { clones = clones.filter(function (x) { return x !== c; }); render(); };
-      row.appendChild(w); row.appendChild(r); row.appendChild(d);
-      list.appendChild(row);
-    });
-
-    var written = clones.reduce(function (n, c) { return n + c.written; }, 0);
-    var snapTotal = BASE + written;
-    var naiveTotal = BASE * (1 + clones.length);
-
-    document.getElementById('valSnap').textContent = gb(snapTotal);
-    document.getElementById('valNaive').textContent = gb(naiveTotal);
-    document.getElementById('barSnap').style.width = Math.min(100, snapTotal / CAP * 100) + '%';
-    document.getElementById('barNaive').style.width = Math.min(100, naiveTotal / CAP * 100) + '%';
-    document.getElementById('noteSnap').textContent = fill(
-      t('lab.notesnap', '{base} GB base + {w} written across {n} clone(s)'),
-      { base: BASE, w: gb(written), n: clones.length });
-    document.getElementById('noteNaive').textContent = clones.length
-      ? fill(t('lab.notenaive', '{n} × {base} GB'), { n: clones.length + 1, base: BASE })
-      : BASE + ' GB';
-
-    var v = document.getElementById('verdict');
-    if (!clones.length) {
-      v.textContent = t('lab.verdict0', 'Add a clone to see the difference.');
-    } else {
-      v.innerHTML = fill(
-        t('lab.verdict', '<b>{saved}</b> never allocated · {n} clone(s) · {x}× less disk'),
-        { saved: gb(naiveTotal - snapTotal), n: clones.length,
-          x: (naiveTotal / snapTotal).toFixed(1) });
-    }
-    [].forEach.call(document.querySelectorAll('#writeAll,#resetAll,#clearAll'), function (b) {
-      b.disabled = clones.length === 0;
-    });
-  }
-
-  document.getElementById('addClone').onclick = function () {
-    if (clones.length >= 8) return;
-    clones.push({ n: ++seq, port: nextPort++, written: 0 });
-    render();
-  };
-  document.getElementById('writeAll').onclick = function () {
-    clones.forEach(function (c) { c.written += WRITE; }); render();
-  };
-  document.getElementById('resetAll').onclick = function () {
-    clones.forEach(function (c) { c.written = 0; }); render();
-  };
-  document.getElementById('clearAll').onclick = function () { clones = []; render(); };
 
   /* ── boot ──────────────────────────────────────────────── */
   collect();
