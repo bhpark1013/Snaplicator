@@ -171,6 +171,9 @@
           border: 1px solid color-mix(in srgb, var(--t-live) 40%, transparent);
           background: color-mix(in srgb, var(--t-live) 15%, transparent); }
   .mark svg { width: 14px; height: 14px; color: var(--t-live-ink); }
+  a.mark, .home { text-decoration: none; cursor: pointer; }
+  a.mark:hover svg { color: var(--t-live); }
+  .home:hover .bin { color: var(--t-live-ink); }
 
   .cmdline .sigil { color: var(--t-live-ink); padding-right: .5ch; }
   .cmdline .bin { color: var(--ink); padding-right: .5ch; }
@@ -506,10 +509,11 @@
 
 <header>
   <div class="wrap bar">
-    <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 12a9 3 0 0 0 5 2.69"/><path d="M21 9.3V5"/><path d="M3 5v14a9 3 0 0 0 6.47 2.88"/><path d="M12 12v4h4"/><path d="M13 20a5 5 0 0 0 9-3 4.5 4.5 0 0 0-4.5-4.5c-1.33 0-2.54.54-3.41 1.41L12 16"/></svg></span>
+    <a class="mark" href="#overview" data-view="overview"
+       aria-label="Snaplicator — overview"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 12a9 3 0 0 0 5 2.69"/><path d="M21 9.3V5"/><path d="M3 5v14a9 3 0 0 0 6.47 2.88"/><path d="M12 12v4h4"/><path d="M13 20a5 5 0 0 0 9-3 4.5 4.5 0 0 0-4.5-4.5c-1.33 0-2.54.54-3.41 1.41L12 16"/></svg></a>
     <div class="cmdline">
-      <span class="sigil">$</span><span class="bin">Snaplicator</span>
+      <a class="home" href="#overview" data-view="overview"><span class="sigil">$</span><span class="bin">Snaplicator</span></a>
       <nav id="nav">
         <button data-view="overview" data-i18n="nav.overview">--overview</button>
         <button data-view="guide"    data-i18n="nav.guide">--guide</button>
@@ -1107,7 +1111,6 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
     });
     try { localStorage.setItem('snap.lang', lang); } catch (e) {}
-    render();
   }
 
   /* ── views ─────────────────────────────────────────────── */
@@ -1131,9 +1134,15 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
     }
     window.scrollTo({ top: 0, behavior: 'instant' in document.documentElement.style ? 'instant' : 'auto' });
   }
-  document.getElementById('nav').addEventListener('click', function (e) {
-    var b = e.target.closest('button[data-view]');
-    if (b) show(b.dataset.view, true);
+  /* Bound to the bar, not the nav: the mark and the wordmark are the way
+     home on every other site, so they carry data-view too. They stay real
+     links — href works for middle-click and for copying the address — and
+     only the plain click is taken over. */
+  document.querySelector('header .bar').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-view]');
+    if (!b) return;
+    if (b.tagName === 'A') e.preventDefault();
+    show(b.dataset.view, true);
   });
   window.addEventListener('popstate', function () { show(location.hash.slice(1), false); });
 
