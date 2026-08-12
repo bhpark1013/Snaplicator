@@ -883,6 +883,35 @@ def get_schema_errors(limit: int = 200) -> str:
 
 
 @tool()
+def get_ddl_apply(limit: int = 100, status: str | None = None) -> str:
+    """Every captured DDL statement and what this replica did about it.
+
+    This is where a stalled replica explains itself. `sync_log` says a DDL
+    apply failed; this says which statement, with the error. Counts come back
+    alongside the rows, so `counts.failed > 0` is the check worth making
+    before trusting the schema here.
+
+    Three outcomes are worth telling apart: `applied` ran here, `deferred` is
+    waiting to run out of band (CONCURRENTLY cannot run inside the apply
+    transaction, and a statement over the time budget is moved here rather
+    than left to stall the stream), `failed` ran and raised. A failed
+    statement is left alone — not retried, not patched over — so it stays
+    visible here until someone acts on it.
+
+    Args:
+        limit: Maximum rows to return (1-1000)
+        status: Filter to one outcome — applied | deferred | deferred_done |
+            deferred_failed | failed | skipped | seed | pending
+    """
+    from urllib.parse import quote
+
+    q = f"/replication/ddl-apply?limit={limit}"
+    if status:
+        q += f"&status={quote(status)}"
+    return json.dumps(_get(q), ensure_ascii=False)
+
+
+@tool()
 def get_extension_parity() -> str:
     """The primary's extensions against what this replica can offer.
 

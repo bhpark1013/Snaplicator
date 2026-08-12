@@ -109,13 +109,14 @@ until the disk is gone, so drop it if you stop using Snaplicator.
 
 ## How it differs
 
-|  | Rows follow production | Schema follows | Snapshots / branching | Your own infrastructure |
-|---|---|---|---|---|
-| **Neon** | ○ logical replication | ✕ yours to keep in step | ○ copy-on-write branches | ✕ open source, but scoped to experiments |
-| **Supabase** | ✕ branches start with no data | ○ from your migration files | △ their cloud only | ○ documented — but without branching |
-| **Aurora cloning** | ✕ a clone is fixed when taken | ○ same storage as the source | △ 15, then it is a full copy | ✕ AWS Aurora only |
-| **DBLab** | △ managed primaries are re-copied on a schedule | △ only at the next full refresh | ○ ZFS or LVM thin clones | ○ |
-| **Snaplicator** | ○ logical replication, managed included | ○ event triggers replay DDL here | ○ btrfs copy-on-write | ○ one machine you own |
+|  | Rows follow production | Schema follows | Snapshots / branching | Your own infrastructure | Your production stays put |
+|---|---|---|---|---|---|
+| **Neon** | ○ logical replication | ✕ yours to keep in step | ○ copy-on-write branches | ✕ open source, but scoped to experiments | △ branch a copy hosted by Neon |
+| **Supabase** | ✕ branches start with no data | ○ from your migration files | △ their cloud only | ○ documented — but without branching | ✕ Supabase-hosted projects only |
+| **Aurora cloning** | ✕ a clone is fixed when taken | ○ same storage as the source | △ 15, then it is a full copy | ✕ AWS Aurora only | ○ clones the cluster you already run |
+| **DBLab** | △ managed primaries are re-copied on a schedule | △ only at the next full refresh | ○ ZFS or LVM thin clones | ○ | ○ sits beside it |
+| **Xata** | ○ logical replication (pgstream) | ○ event triggers replay DDL | ○ copy-on-write branches | △ self-hosted, on Kubernetes | ✕ the copy lives on the Xata platform |
+| **Snaplicator** | ○ logical replication, managed included | ○ event triggers replay DDL here | ○ btrfs copy-on-write | ○ one machine you own | ○ sits beside it |
 
 The schema column is the one that matters. Postgres is explicit — *"The
 database schema and DDL commands are not replicated"* — so following a managed
@@ -129,6 +130,7 @@ as fresh as the last dump.
 [Supabase self-hosting](https://supabase.com/docs/guides/self-hosting) ·
 [Aurora cloning](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Managing.Clone.html) ·
 [DBLab data sources](https://postgres.ai/docs/dblab-howtos/administration/data) ·
+[Xata](https://github.com/xataio/xata) ·
 [Postgres: logical replication restrictions](https://www.postgresql.org/docs/current/logical-replication-restrictions.html)</sub>
 
 ## Install

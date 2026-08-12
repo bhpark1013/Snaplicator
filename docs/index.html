@@ -128,7 +128,7 @@
      the h1 at the full wrap, the footer wider still — all sharing a left edge
      and none sharing a right one. Every block now fills the column and the
      column is the measure, so there is exactly one of each. */
-  .wrap { max-width: 52rem; margin: 0 auto; padding: 0 clamp(1.15rem, 4vw, 3rem); }
+  .wrap { max-width: 64rem; margin: 0 auto; padding: 0 clamp(1.15rem, 3vw, 2.25rem); }
   .col { max-width: var(--measure); }
 
   /* ── header / menu ───────────────────────────────────────── */
@@ -323,6 +323,17 @@
     font-family: var(--mono); font-size: .7rem; color: var(--ink-3); padding: 0 .8rem;
   }
   .cmd button.copy:hover { color: var(--t-mid); background: var(--t-mid-bg); }
+
+  /* A block worth copying whole — the button sits over the frame rather than
+     in it, so the block keeps the shape every other .term on the page has. */
+  .termwrap { position: relative; }
+  .termwrap button.copy {
+    position: absolute; top: .5rem; right: .5rem;
+    border: 1px solid var(--rule); border-radius: 6px; background: var(--paper);
+    font-family: var(--mono); font-size: .7rem; color: var(--ink-3);
+    padding: .2rem .5rem; cursor: pointer;
+  }
+  .termwrap button.copy:hover { color: var(--t-mid); border-color: var(--t-mid); }
   .cmd-note { font-family: var(--mono); font-size: .73rem; color: var(--ink-3); margin-top: .55rem; }
   /* Three commands now, so each says which one it is. The label sits above
      its own box rather than after it, because you pick before you copy. */
@@ -513,6 +524,11 @@
   .steps > li::before { content: counter(s, decimal-leading-zero); font-family: var(--mono);
                         font-size: .76rem; color: var(--ink-3); padding-top: .2rem; }
   .steps p { margin: 0; font-size: .93rem; }
+  /* .steps p zeroes every margin, which also flattened the note under a
+     command block to nothing. A note inside a step keeps its own spacing —
+     and its own face, because this one is sentences, not a caption. */
+  .steps .cmd-note { margin-top: .85rem; font-family: var(--sans);
+                     font-size: .85rem; line-height: 1.65; }
   .steps pre.term { margin-top: .8rem; }
 
   .note { border-left: 2px solid var(--t-mid); padding-left: 1rem; margin-top: 1.7rem; }
@@ -554,6 +570,7 @@
         <button data-view="overview" data-i18n="nav.overview">--overview</button>
         <button data-view="concepts" data-i18n="nav.concepts">--concepts</button>
         <button data-view="guide"    data-i18n="nav.guide">--guide</button>
+        <button data-view="agent"    data-i18n="nav.agent">--agent</button>
         <button data-view="install"  data-i18n="nav.install">--install</button>
       </nav>
     </div>
@@ -665,6 +682,7 @@
             <th data-i18n="cmp.c2">Schema follows</th>
             <th data-i18n="cmp.c3">Snapshots / branching</th>
             <th data-i18n="cmp.c4">Your own infrastructure</th>
+            <th data-i18n="cmp.c5">Your production stays put</th>
           </tr>
         </thead>
         <tbody>
@@ -674,6 +692,7 @@
             <td><i class="m x" aria-hidden="true">✕</i><span data-i18n="cmp.neon2">yours to keep in step</span></td>
             <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.neon3"><span class="nb">copy-on-write</span> branches</span></td>
             <td><i class="m x" aria-hidden="true">✕</i><span data-i18n="cmp.neon4">open source, but scoped to experiments</span></td>
+            <td><i class="m t" aria-hidden="true">△</i><span data-i18n="cmp.neon5">branch a copy hosted by Neon</span></td>
           </tr>
           <tr>
             <th scope="row">Supabase</th>
@@ -681,6 +700,7 @@
             <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sb2">from your migration files</span></td>
             <td><i class="m t" aria-hidden="true">△</i><span data-i18n="cmp.sb3">their cloud only</span></td>
             <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sb4">documented — but without branching</span></td>
+            <td><i class="m x" aria-hidden="true">✕</i><span data-i18n="cmp.sb5">Supabase-hosted projects only</span></td>
           </tr>
           <tr>
             <th scope="row">Aurora cloning</th>
@@ -688,6 +708,7 @@
             <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.aur2">same storage as the source</span></td>
             <td><i class="m t" aria-hidden="true">△</i><span data-i18n="cmp.aur3">15, then it is a full copy</span></td>
             <td><i class="m x" aria-hidden="true">✕</i><span data-i18n="cmp.aur4">AWS Aurora only</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.aur5">clones the cluster you already run</span></td>
           </tr>
           <tr>
             <th scope="row">DBLab</th>
@@ -695,6 +716,15 @@
             <td><i class="m t" aria-hidden="true">△</i><span data-i18n="cmp.dbl2">only at the next full refresh</span></td>
             <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.dbl3">ZFS or LVM thin clones</span></td>
             <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.dbl4">your hardware</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.dbl5">sits beside it</span></td>
+          </tr>
+          <tr>
+            <th scope="row">Xata</th>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.xat1">logical replication (pgstream)</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.xat2">event triggers replay DDL</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.xat3"><span class="nb">copy-on-write</span> branches</span></td>
+            <td><i class="m t" aria-hidden="true">△</i><span data-i18n="cmp.xat4">self-hosted, on Kubernetes</span></td>
+            <td><i class="m x" aria-hidden="true">✕</i><span data-i18n="cmp.xat5">the copy lives on the Xata platform</span></td>
           </tr>
           <tr class="ours">
             <th scope="row">Snaplicator</th>
@@ -702,6 +732,7 @@
             <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sn2">event triggers replay DDL here</span></td>
             <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sn3">btrfs <span class="nb">copy-on-write</span></span></td>
             <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sn4">one machine you own</span></td>
+            <td><i class="m o" aria-hidden="true">○</i><span data-i18n="cmp.sn5">sits beside it</span></td>
           </tr>
         </tbody>
       </table>
@@ -714,25 +745,14 @@
         <dd data-i18n="cmp.p1">Both are excellent, and if you already run on them, use their branching — a branch there <em>is</em> your data. Neon will also follow an RDS or Cloud SQL primary over logical replication rather than hosting it, and then two things change: the data lands in Neon&rsquo;s cloud, and the schema becomes yours to keep in step — their guide requires that <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q></dd>
       </div>
       <div>
-        <dt data-i18n="cmp.t2">Aurora fast cloning</dt>
-        <dd data-i18n="cmp.p2"><span class="nb">Copy-on-write</span> at the storage layer, and genuinely fast — but a clone is a DB cluster, and a cluster needs an instance, so every clone bills compute. AWS also caps it: <q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora only, not plain RDS Postgres.</dd>
-      </div>
-      <div>
         <dt data-i18n="cmp.t3">DBLab (Postgres.ai)</dt>
         <dd data-i18n="cmp.p3">The closest thing to this, older and more capable — it will clone 10 TiB in under two seconds. The difference is how the copy keeps up. Its physical mode <q>is not available for managed cloud Postgres services such as Amazon RDS</q>; against those it is dump/restore on a schedule. Snaplicator subscribes over logical replication, so a managed primary is followed rather than <span class="nb">re-copied</span>.</dd>
       </div>
+      <div>
+        <dt data-i18n="cmp.sblabel">If you run on Supabase</dt>
+        <dd data-i18n="cmp.sbnote">Branches there start with no data, by design. If you want that data, leave Supabase as your primary and put Snaplicator beside it — and there is almost nothing to prepare, because <code>wal_level</code> is already <code>logical</code>, so unlike other managed services there is no parameter to change and no reboot.</dd>
+      </div>
     </dl>
-
-
-    <div class="note">
-      <span class="label" data-i18n="cmp.sblabel">If you run on Supabase</span>
-      <p data-i18n="cmp.sbnote">
-        Branches there start with no production data by design, and Supabase can act as a
-        <span class="nb">logical-replication</span> publisher — <code>wal_level</code> is already <code>logical</code>.
-        Two caveats from their own guide: use the direct connection string rather than the pooler,
-        and the subscriber needs IPv6 or their IPv4 <span class="nb">add-on</span>.
-      </p>
-    </div>
 
     <p class="sources">
       <span data-i18n="cmp.srclabel">Checked against:</span>
@@ -741,6 +761,7 @@
       <a href="https://supabase.com/docs/guides/deployment/branching">Supabase branching</a> ·
       <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Managing.Clone.html">Aurora cloning</a> ·
       <a href="https://postgres.ai/docs/dblab-howtos/administration/data">DBLab data sources</a> ·
+      <a href="https://github.com/xataio/xata">Xata</a> ·
       <a href="https://www.postgresql.org/docs/current/logical-replication-restrictions.html">Postgres: logical replication restrictions</a> ·
       <a href="https://supabase.com/docs/guides/database/postgres/setup-replication-external">Supabase: replicate to another Postgres</a>
     </p>
@@ -825,87 +846,91 @@
 
   <!-- ═══════════════ GUIDE ═══════════════ -->
   <section id="guide">
-    <h2 data-i18n="g.title">From nothing to an agent with its own database</h2>
-
-    <div class="subnav">
-      <a href="#g1" data-i18n="g.n1">1. Install</a>
-      <a href="#g2" data-i18n="g.n2">2. First copy</a>
-      <a href="#g3" data-i18n="g.n3">3. Anonymization</a>
-      <a href="#g4" data-i18n="g.n4">4. Schema</a>
-      <a href="#g5" data-i18n="g.n5">5. Snapshot</a>
-      <a href="#g6" data-i18n="g.n6">6. Clone</a>
-      <a href="#g7" data-i18n="g.n7">7. The agent</a>
-      <a href="#gx" data-i18n="g.n8">Edge cases</a>
-    </div>
+    <h2 data-i18n="g.title">Setup</h2>
 
     <ol class="steps">
       <li id="g1"><div>
-        <h3 data-i18n="g.h1">Install and point it at the primary</h3>
-        <p data-i18n="g.p1">It provisions the btrfs pool, starts the management plane and opens the UI. Answer the prompt with a connection URI — of an account that may do the two things below — or <code>demo</code> for a sample database.</p>
-        <pre class="term"><span class="c"># Linux</span>
-curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash
+        <h3 data-i18n="g.h1">Install</h3>
+        <p data-i18n="g.p1">One line. It then asks for a connection URI to your primary — or type <code>demo</code> to start on a sample database instead.</p>
+        <div class="tabs">
+          <div class="tablist" role="tablist">
+            <button role="tab" type="button" data-os="linux" aria-selected="true">Linux</button>
+            <button role="tab" type="button" data-os="mac" aria-selected="false">macOS</button>
+          </div>
+          <div role="tabpanel" data-os="linux">
+            <div class="cmd">
+              <span class="p">$</span>
+              <span class="l" id="cmdg1">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
+              <button class="copy" data-copy="cmdg1" data-i18n="common.copy">copy</button>
+            </div>
+          </div>
+          <div role="tabpanel" data-os="mac" hidden>
+            <div class="cmd">
+              <span class="p">$</span>
+              <span class="l" id="cmdg2">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</span>
+              <button class="copy" data-copy="cmdg2" data-i18n="common.copy">copy</button>
+            </div>
+            <p class="cmd-note" data-i18n="g.macnote">btrfs is a Linux filesystem, so there is nothing on a Mac to install onto. The installer builds a Linux machine with OrbStack and continues inside it — no sudo. If OrbStack is not there it offers to install it; commercial use needs a paid licence, and your own Linux VM (Colima, Lima, UTM) works exactly the same.</p>
+          </div>
+        </div>
+      </div></li>
 
-<span class="c"># macOS — no sudo; creates an OrbStack Linux machine and continues inside it</span>
-curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</pre>
-
-        <p style="margin-top:.9rem" data-i18n="g.p1b">It asks for a superuser, which is a lot to ask, so here is why. Schema changes are captured with <b>event triggers</b>, and <code>CREATE EVENT TRIGGER</code> is superuser-only — PostgreSQL provides no <code>GRANT</code> for it, so no narrower role can install one. Putting a newly created table into the publication additionally needs ownership of that table. Both are properties of PostgreSQL, not shortcuts taken here.</p>
-
-        <pre class="term" data-i18n="g.p1pre"><span class="c"># everything it creates on your primary — all named _snaplicator*</span>
+      <li id="g2"><div>
+        <h3 data-i18n="g.h2">Give it the primary&rsquo;s URI</h3>
+        <p data-i18n="g.p2">It has to be a superuser. Schema changes are captured with event triggers, and <code>CREATE EVENT TRIGGER</code> is superuser-only in PostgreSQL — there is no <code>GRANT</code> for it. Putting a newly created table into the publication also needs ownership of that table.</p>
+        <pre class="term" data-i18n="g.p2pre"><span class="c"># what it creates on your primary — all named _snaplicator*</span>
 _snaplicator_ddl_log          table        one row per CREATE / ALTER / DROP
 _snaplicator_capture_ddl      trigger      writes that row
 _snaplicator_capture_drop     trigger      the same, for drops
 _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publication
 &lt;publication&gt;                 publication  created, or one you already have
 &lt;slot&gt;                        slot         opened by the replica, as any has</pre>
-
-        <p style="margin-top:.75rem" data-i18n="g.p1c">Your rows are read and never written — the replica is downstream and has no path back. You still set <code>wal_level=logical</code> and the replication role yourself; the installer checks both before it changes anything. Removing all of it is listed statement by statement in the README.</p>
-      </div></li>
-
-      <li id="g2"><div>
-        <h3 data-i18n="g.h2">Choose tables, then run the first copy</h3>
-        <p data-i18n="g.p2">In the UI, with size and row count beside every table. Nothing is copied until you say so — pick what your agent actually touches, and add more later.</p>
-        <p style="margin-top:.6rem" data-i18n="g.p2b">The schema is cloned, a subscription is created, and Postgres copies those tables. This is the one slow step and it happens once. After it, the replica streams changes continuously.</p>
+        <p style="margin-top:.75rem" data-i18n="g.p2b">Your rows are read, never written. <code>wal_level=logical</code> and the replication role are still yours to set — the installer checks both before it changes anything. Every statement to remove it again is in the README.</p>
       </div></li>
 
       <li id="g3"><div>
-        <h3 data-i18n="g.h3">Decide what gets scrubbed</h3>
-        <p data-i18n="g.p3">Copy the example to <code>configs/anonymize.sql</code>, or edit it from the UI. It runs inside every clone built from the live replica, before the port is handed out.</p>
-        <pre class="term"><span class="c">cp configs/anonymize-example.sql configs/anonymize.sql</span>
-
-<span class="k">UPDATE</span> user_account <span class="k">SET</span> email = <span class="s">'dev+'</span> || id || <span class="s">'@example.local'</span>;
-<span class="k">UPDATE</span> device_info  <span class="k">SET</span> push_token = <span class="s">'invalid-dev-token'</span>, is_push_enabled = false;</pre>
-        <p style="margin-top:.75rem" data-i18n="g.p3c">If you are not sure how to write it, ask your agent to write it and to upload it for you (<code>set_anonymize_sql</code>).</p>
-        <p style="margin-top:.75rem" data-i18n="g.p3b">If the script fails, the clone is destroyed rather than served — a <span class="nb">half-scrubbed</span> copy is never handed to anyone. A clone with no script at all is production data given to whoever asked for it, so the file&rsquo;s absence is reported, not assumed.</p>
+        <h3 data-i18n="g.h3">Pick the tables</h3>
+        <p data-i18n="g.p3">The UI lists every table with its size and row count. Nothing is copied until you choose. You can add more later.</p>
       </div></li>
 
       <li id="g4"><div>
-        <h3 data-i18n="g.h4">Let the schema follow too</h3>
-        <p data-i18n="g.p4">Logical replication carries rows only. Snaplicator puts event triggers on the primary that write every CREATE, ALTER and DROP into an outbox table — and that table is itself in the publication, so the DDL arrives as ordinary replicated rows and is replayed here.</p>
-        <pre class="term"><span class="k">install_trigger</span>()
-<span class="k">get_trigger_status</span>()</pre>
-        <p style="margin-top:.75rem" data-i18n="g.p4b">A table created on the primary is added to the publication automatically, so it starts replicating without you touching anything. Capture is deliberately wide; what to skip is decided when it is replayed.</p>
+        <h3 data-i18n="g.h4">Done — replication starts</h3>
+        <p data-i18n="g.p4">The first copy is the one slow step, and it happens once. After that the replica follows the primary on its own, rows and schema both.</p>
       </div></li>
 
-      <li class="turn"><p data-i18n="g.lead">Everything above happens once. Everything below, the agent repeats on its own.</p></li>
-
       <li id="g5"><div>
-        <h3 data-i18n="g.h5">Take a snapshot</h3>
-        <p data-i18n="g.p5">A named instant of the replica, taken in O(1). This is what your agents reset to, so take a fresh one whenever &lsquo;current&rsquo; has moved on.</p>
-        <pre class="term"><span class="k">create_snapshot</span>(description: <span class="s">"before-migration-42"</span>)
-<span class="k">list_snapshots</span>()</pre>
+        <h3 data-i18n="g.h5">Create a clone</h3>
+        <p data-i18n="g.p5">A writable Postgres on its own port. The reply carries the connection string, and that string is the whole handoff.</p>
+        <pre class="term"><span class="k">create_clone</span>(description: <span class="s">"agent-a / migration-42"</span>)
+<span class="c">→ postgres://snaplicator:…@host:5455/appdb</span></pre>
+        <p style="margin-top:.9rem" data-i18n="g.p5b">Anonymization is set here. Write it into <code>configs/anonymize.sql</code> or edit it from the UI — it runs inside every clone before the port is handed out. If it fails, the clone is destroyed instead of served. If you are not sure how to write it, ask your agent to write it and upload it for you (<code>set_anonymize_sql</code>).</p>
+        <pre class="term"><span class="k">UPDATE</span> user_account <span class="k">SET</span> email = <span class="s">'dev+'</span> || id || <span class="s">'@example.local'</span>;
+<span class="k">UPDATE</span> device_info  <span class="k">SET</span> push_token = <span class="s">'invalid-dev-token'</span>, is_push_enabled = false;</pre>
       </div></li>
 
       <li id="g6"><div>
-        <h3 data-i18n="g.h6">Create a clone</h3>
-        <p data-i18n="g.p6">A writable Postgres on its own port, built from that snapshot. The reply carries the connection string — that string is the whole handoff.</p>
-        <pre class="term"><span class="k">create_clone</span>(description: <span class="s">"agent-a / migration-42"</span>)
-<span class="c">→ postgres://snaplicator:…@host:5455/appdb</span></pre>
+        <h3 data-i18n="g.h6">Take a snapshot</h3>
+        <p data-i18n="g.p6">A snapshot is a named instant of the replica, taken in O(1) and costing no disk until something writes. Clones start from it and reset back to it, so every run begins on the same data. Take a new one when you want newer data.</p>
+        <pre class="term"><span class="k">create_snapshot</span>(description: <span class="s">"before-migration-42"</span>)
+<span class="k">reset_clone_to_snapshot</span>(clone_id: <span class="s">"5455"</span>, snapshot_name: <span class="s">"before-migration-42"</span>)</pre>
       </div></li>
+    </ol>
 
-      <li id="g7"><div>
-        <h3 data-i18n="g.h7">Wire it into the agent</h3>
-        <p data-i18n="g.p7">Register the MCP server and the loop becomes the agent&rsquo;s own. The <code>clones</code> query parameter scopes which clones it may touch, so a confused agent cannot reset someone else&rsquo;s.</p>
-        <pre class="term"><span class="c">// .mcp.json</span>
+    <h2 id="gx" style="margin-top:var(--gap)" data-i18n="g.extitle">Worth knowing</h2>
+    <dl class="alts">
+      <div>
+        <dt data-i18n="g.ex1t">DDL can be deferred, or fail</dt>
+        <dd data-i18n="g.ex1">Slow DDL such as a large <code>CREATE INDEX</code> is moved to <code>_snaplicator_ddl_deferred</code>, and the sync loop runs it outside the apply transaction on its own. DDL that errors is written to <code>_snaplicator_ddl_failures</code> and left there — not retried, not patched over, because a schema you can see is wrong beats one that looks right and is not. Watch for it: add a Slack app to your workspace and paste its incoming-webhook URL into Config, and every DDL apply failure is posted to that channel, with the failing statements. Subscription trouble and schema drift go to the same place. <b>Retrying a failed DDL is still manual — automatic retry is planned.</b></dd>
+      </div>
+    </dl>
+  </section>
+
+  <!-- ═══════════════ AGENT ═══════════════ -->
+  <section id="agent">
+    <h2 data-i18n="a.title">Hand it to an agent</h2>
+    <p data-i18n="a.p1">Register the MCP server and the loop becomes the agent&rsquo;s own — it creates a clone, works against it, resets it, deletes it.</p>
+    <div class="termwrap">
+      <pre class="term" id="mcpjson"><span class="c">// .mcp.json</span>
 {
   <span class="s">"mcpServers"</span>: {
     <span class="s">"snaplicator"</span>: {
@@ -913,50 +938,15 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
     }
   }
 }</pre>
-        <pre class="term"><span class="c"># the loop, in the agent's own words</span>
+      <button class="copy" data-copy="mcpjson" data-i18n="common.copy">copy</button>
+    </div>
+    <p style="margin-top:.9rem" data-i18n="a.p2">The <code>clones</code> parameter limits which clones that agent may touch, so a confused one cannot reset someone else&rsquo;s.</p>
+    <pre class="term"><span class="c"># the loop, in the agent's own words</span>
 <span class="k">create_clone</span>(description: <span class="s">"try #1"</span>)   <span class="c">→ port 5455</span>
-<span class="c">… run migration, run the suite, it fails …</span>
+<span class="c">… run the migration, run the suite, it fails …</span>
 <span class="k">reset_clone_to_snapshot</span>(clone_id: <span class="s">"5455"</span>, snapshot_name: <span class="s">"before-migration-42"</span>)
 <span class="c">… try #2 …</span>
 <span class="k">delete_clone</span>(clone_id: <span class="s">"5455"</span>)</pre>
-      </div></li>
-    </ol>
-
-    <div class="note">
-      <span class="label" data-i18n="g.tiplabel">Keeping clones current</span>
-      <p data-i18n="g.tip">
-        A clone is a fixed point — that is what makes a test repeatable. For newer data, take a
-        newer snapshot and <code>refresh_clone</code>. The replacement is built beside the old one
-        and swapped in once it is serving, so clients see about half a second.
-      </p>
-    </div>
-
-    <h2 id="gx" style="margin-top:var(--gap)" data-i18n="g.extitle">Things to know</h2>
-    <p data-i18n="g.exlead1">Postgres states the limit plainly: <q>The database schema and DDL commands are not replicated.</q> A subscription carries row changes and nothing else. Add a column on the primary and the replica does not have it; the first change that mentions that column fails to apply, and replication stops there rather than carrying on with a schema that no longer matches.</p>
-    <p style="margin-top:.8rem" data-i18n="g.exlead2">That is why a copy of a managed primary is normally taken again on a schedule — dumping and restoring is easier than keeping two schemas in step by hand. The price is that the copy is only ever as fresh as the last dump, schema included.</p>
-    <p style="margin-top:.8rem" data-i18n="g.exlead3">Snaplicator closes it in <a href="#g4">step 4</a>: event triggers write every CREATE, ALTER and DROP to an outbox table, that table is itself a member of the publication, and so the DDL arrives as ordinary replicated rows and is replayed here. What is left over is below.</p>
-    <dl class="alts">
-      <div>
-        <dt data-i18n="g.ex1t">A clone of a clone is not scrubbed again</dt>
-        <dd data-i18n="g.ex1">The script runs on clones built from the live replica and on clones built from a snapshot of it. It is skipped for one built from a snapshot of a clone, because that data was already scrubbed when the clone was made.</dd>
-      </div>
-      <div>
-        <dt data-i18n="g.ex2t">CREATE INDEX CONCURRENTLY</dt>
-        <dd data-i18n="g.ex2">It cannot run inside the apply worker&rsquo;s transaction, so it is queued to <code>_snaplicator_ddl_deferred</code> and run outside it rather than failing.</dd>
-      </div>
-      <div>
-        <dt data-i18n="g.ex3t">A DDL statement that fails here</dt>
-        <dd data-i18n="g.ex3">It is written to <code>_snaplicator_ddl_failures</code> and left there — not retried, not patched over. A schema you can see is wrong beats one that looks right and is not.</dd>
-      </div>
-      <div>
-        <dt data-i18n="g.ex4t">Schema changes made before you installed</dt>
-        <dd data-i18n="g.ex4">A watermark stops anything older than the trigger install from being replayed. The schema is cloned once at setup and the triggers take it from there.</dd>
-      </div>
-      <div>
-        <dt data-i18n="g.ex5t">Knowing it is actually keeping up</dt>
-        <dd data-i18n="g.ex5"><code>configs/replication_check.sql</code> runs on both the primary and the replica and the two results are compared. It is forced <span class="nb">read-only</span>: writes and DDL are rejected on save, and it executes inside a READ ONLY transaction.</dd>
-      </div>
-    </dl>
   </section>
 
   <!-- ═══════════════ INSTALL ═══════════════ -->
@@ -1017,9 +1007,30 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
   var DICT = {
     ko: {
       'i.setup':'설치','i.sample':'붙일 DB가 없다면, 샘플로 먼저',
-      'g.exlead1':'Postgres 문서가 한계를 그대로 적어 놓았습니다. <q>The database schema and DDL commands are not replicated.</q> 구독이 나르는 건 행 변경뿐입니다. 프라이머리에 컬럼을 하나 추가하면 리플리카에는 그 컬럼이 없고, 그 컬럼이 걸린 첫 변경에서 적용이 실패해 복제가 거기서 멈춥니다. 어긋난 스키마로 계속 가는 대신 멈추는 것입니다.',
-      'g.exlead2':'그래서 매니지드 프라이머리의 사본은 보통 주기적으로 다시 뜹니다. 두 스키마를 손으로 맞춰 두는 것보다 덤프 떠서 복원하는 편이 쉬우니까요. 대가는 사본이 마지막 덤프 시점만큼만 최신이라는 것입니다. 스키마까지 포함해서요.',
-      'g.exlead3':'Snaplicator는 이걸 <a href="#g4">4번</a>에서 닫습니다. 이벤트 트리거가 CREATE·ALTER·DROP을 전부 아웃박스 테이블에 적고, 그 테이블 자체가 publication의 멤버라서 DDL이 평범한 복제 행으로 실려 와 여기서 다시 실행됩니다. 그러고도 남는 것들이 아래입니다.',
+      'g.title':'설치 가이드',
+      'g.h1':'설치',
+      'g.p1':'아래 명령어 한줄로 설치를 시작할 수 있습니다. 샘플로 시작해보고싶다면 demo를 입력해주세요.',
+      'g.macnote':'내부적으로 btrfs라는 파일시스템을 사용하기 때문에,맥에서 사용하려면 OrbStack으로 리눅스 머신을 하나 만들고 그 안에서 이어서 설치합니다. OrbStack이 없으면 설치할지 물어봅니다.',
+      'g.h2':'primary URI 넣기',
+      'g.p2':'superuser 계정을 포함한 postgres uri가 필요합니다. 스키마 변경은 event trigger로 잡는데, PostgreSQL에서 <code>CREATE EVENT TRIGGER</code>는 superuser만 실행할 수 있고, 새로 만들어진 테이블을 publication에 넣으려면 그 테이블의 소유자여야 하기 떄문입니다.',
+      'g.p2pre':'<span class="c"># 프로덕션에 만들어지는 것 전부 — 이름이 모두 _snaplicator*</span>\n_snaplicator_ddl_log          테이블      CREATE / ALTER / DROP 한 건당 한 행\n_snaplicator_capture_ddl      트리거      그 행을 씁니다\n_snaplicator_capture_drop     트리거      같은 일, DROP용\n_snaplicator_auto_add_&lt;pub&gt;   트리거      새 테이블이 publication에 합류\n&lt;publication&gt;                 publication 새로 만들거나, 쓰던 것을 고름\n&lt;slot&gt;                        슬롯        복제본이 여는 것, 여느 복제와 같음',
+      'g.p2b':'행은 읽기만 하고 쓰지 않습니다. <code>wal_level=logical</code>과 복제 롤은 직접 설정해야 하고, 설치 스크립트가 뭘 바꾸기 전에 둘 다 확인합니다. 전부 걷어내는 구문은 README에 그대로 적어뒀습니다.',
+      'g.h3':'테이블 선택',
+      'g.p3':'테스트 db에 복제할 테이블 및 스키마를 선택합니다. 복제 후에도 테이블을 추가할 수 있습니다.',
+      'g.h4':'복제가 진행됩니다.',
+      'g.p4':'최초 복사 후 replica가 primary의 데이터 및 스키마를 계속 복제합니다.',
+      'g.h5':'클론 만들기',
+      'g.p5':'각자 포트를 가진, 쓰기 가능한 Postgres입니다. 개발환경에서는 클론에 연결해서 사용합니다.',
+      'g.p5b':'클론 생성시 익명화가 진행되어야합니다. 프로덕션 DB의 데이터로 테스트하면 문자/이메일 전송같은 일이 발생할 수 있기 떄문입니다. UI에서 sql 퍼일을 업로드합니다. 어떻게 써야 할지 모르겠다면 에이전트에게 작성과 업로드까지 맡기세요 (<code>set_anonymize_sql</code>).',
+      'g.h6':'스냅샷 찍기',
+      'g.p6':'스냅샷은 클론의 한 시점에 이름을 붙인 것입니다. 예를들어 "bhpark1013 사용자 버그 발생 상태" 같은 상황을 스냅샷을 찍어두면, 테스트시 데이터가 바뀌어도 다시 그 상태로 돌아와서 테스트 해 볼 수 있습니다.',
+      'g.extitle':'알아둘 것',
+      'g.ex1t':'DDL을 복제하도록 설계되어있지만, 특정 상황에서는 실패할 수 있습니다',
+      // 'g.ex1':'큰 <code>CREATE INDEX</code>처럼 오래 걸리는 DDL은 <code>_snaplicator_ddl_deferred</code>로 옮겨두고, 동기화 루프가 apply 트랜잭션 밖에서 알아서 실행합니다. 에러가 난 DDL은 <code>_snaplicator_ddl_failures</code>에 남기고 그대로 둡니다. 재시도하지도, 적당히 덮지도 않습니다. 어긋난 게 보이는 편이 맞아 보이는데 아닌 것보다 낫기 때문입니다. 그러니 지켜보세요. 슬랙 워크스페이스에 앱을 추가하고 incoming webhook URL을 Config에 붙여넣으면, DDL 적용 실패가 실패한 구문과 함께 그 채널로 올라옵니다. 구독 이상과 스키마 드리프트도 같은 채널로 갑니다. <b>실패한 DDL을 다시 태우는 건 아직 수동입니다. 자동 재시도는 만들 예정입니다.</b>'
+      'g.ex1':'큰 <code>CREATE INDEX</code>처럼 오래 걸리는 DDL은 실행하지않고 보류상태로 가거나, 실패할 수 있습니다. 다만 재실행가능한 ddl은 동기화 루프가 apply 트랜잭션 밖에서 알아서 실행합니다. 다만 일부 ddl은 수동으로 재시도해야할 수 있습니다. 직접 핸들링해야하는 건들을 위해 슬랙 워크스페이스에 앱을 추가하고 incoming webhook URL을 Config에 붙여넣으면, DDL 적용 실패가 실패한 구문과 함께 그 채널로 올라옵니다. <b>최대한 DDL이 실패하는 케이스를 핸들링하려고했으나 문제가 생기면 github issue에 추가해주시면 수정하겠습니다. </b>',
+      'a.title':'에이전트에 물리기',
+      'a.p1':'MCP 서버를 등록하면 이 루프가 에이전트 것이 됩니다. 클론을 만들고, 작업하고, 되돌리고, 지웁니다.',
+      'a.p2':'<code>clones</code> 파라미터로 그 에이전트가 건드릴 수 있는 클론을 제한합니다. 헷갈린 에이전트가 남의 클론을 되돌릴 수 없습니다.',
       'origin.label':'만든 이유',
       'origin.p1':'테스트 DB 구성을 위해 매번 데이터를 시딩해야하고, production에 버그 발생하면 test환경에서는 재현이 안되고, QA시 매번 특정 시나리오에서 테스트해야하는 상황이 번거로워서 만들었습니다.',
       'origin.p2':'실시간으로 primary db의 dml 및 ddl을 복제하고, 복제된 DB에 특정 상태에 스냅샷을 찍어 매번 같은 데이터로 테스트할 수 있습니다.',
@@ -1030,52 +1041,14 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'feat.h2':'데이터베이스 브랜칭',
       'feat.p2':'DB의 특정 상태를 저장하고, 테스트 및 QA시 해당 상태로 지속적으로 원상복구하며 테스트할 수 있습니다.',
       'fit.yes':'이럴 때 쓰세요',
-      'fit.y1':'프로덕션이 RDS, Azure Database for PostgreSQL, Cloud SQL, 또는 직접 굴리는 서버에 있고 옮길 생각이 없을 때.',
-      'fit.y2':'진짜 프로덕션 데이터로 테스트해야 하는데, 그 데이터가 우리 인프라 밖으로 나가면 안 될 때.',
-      'fit.y3':'에이전트가 문제없이 production data로 테스트해야할 때.',
+      'fit.y1':'프로덕션이 RDS, Azure Database for PostgreSQL, Cloud SQL 같이 branching기능을 제공하지 않는 서버일때',
+      'fit.y2':'프로덕션에서 발생한 버그를 개발환경에서 재현하고 싶을때',
+      'fit.y3':'에이전트가 production data로 빠르게 테스트하게 하고싶을때',
       'fit.y4':'스키마 변경을 매번 테스트 db에 반영하는게 귀찮을때',
       'fit.no':'이럴 때는 쓰지 마세요',
       'fit.n1':'primary에 <code>wal_level=logical</code>을 켜거나 복제 슬롯을 만들 수 없을 때.',
       'fit.n2':'이미 primary db로 Neon을 사용하고 있을 때.',
-      'cmp.head':'다른 CoW 지원 postgres database와 뭐가 다른가요?',
-      'g.title':'아무것도 없는 상태에서 에이전트 전용 DB까지',
-      'g.n1':'1. 설치','g.n2':'2. 초기 복제','g.n3':'3. 익명화','g.n4':'4. 스키마',
-      'g.n5':'5. 스냅샷','g.n6':'6. 클론','g.n7':'7. 에이전트','g.n8':'예외 케이스',
-      'g.h1':'설치하고 프라이머리 지정하기',
-      'g.p1':'btrfs 풀을 잡고 관리 서버를 띄운 다음 UI를 엽니다. 프롬프트에는 아래 두 가지를 할 수 있는 계정의 접속 URI를 넣으면 됩니다. 붙일 DB가 없으면 <code>demo</code>라고 답하세요.',
-      'g.p1b':'슈퍼유저를 요구합니다. 큰 요구라서 이유를 적습니다. 스키마 변경은 <b>이벤트 트리거</b>로 잡는데, <code>CREATE EVENT TRIGGER</code>는 슈퍼유저 전용이고 PostgreSQL에 이걸 위한 <code>GRANT</code>가 없습니다. 더 좁은 권한으로는 설치 자체가 안 됩니다. 새로 만든 테이블을 publication에 넣으려면 그 테이블의 소유권도 필요합니다. 둘 다 PostgreSQL의 성질이지 여기서 편하려고 잡은 게 아닙니다.',
-      'g.p1pre':'<span class="c"># 프로덕션에 만들어지는 것 전부 — 이름이 모두 _snaplicator*</span>\n_snaplicator_ddl_log          테이블      CREATE / ALTER / DROP 한 건당 한 행\n_snaplicator_capture_ddl      트리거      그 행을 씁니다\n_snaplicator_capture_drop     트리거      같은 일, DROP용\n_snaplicator_auto_add_&lt;pub&gt;   트리거      새 테이블이 publication에 합류\n&lt;publication&gt;                 publication 새로 만들거나, 쓰던 것을 고름\n&lt;slot&gt;                        슬롯        복제본이 여는 것, 여느 복제와 같음',
-      'g.p1c':'여러분의 행은 읽기만 하고 쓰지 않습니다. 복제본은 하류에 있고 거슬러 올라올 경로가 없습니다. <code>wal_level=logical</code>과 복제 역할은 직접 설정해야 하고, 설치 프로그램이 무언가 바꾸기 전에 둘 다 확인합니다. 전부 지우는 방법은 README에 문장 단위로 적어 뒀습니다.',
-      'g.h2':'테이블 고르고 첫 복사 돌리기',
-      'g.p2':'UI에서 테이블마다 용량과 행 수를 보면서 고릅니다. 고르기 전까지는 아무것도 복사하지 않습니다. 에이전트가 실제로 건드리는 것만 고르고, 나중에 더 넣으세요.',
-      'g.p2b':'스키마를 복제하고 구독을 만든 다음, 고른 테이블을 복사합니다. 오래 걸리는 단계는 여기 하나뿐이고 처음 한 번만 겪습니다. 끝나면 그때부터는 변경분이 계속 흘러들어옵니다.',
-      'g.h3':'무엇을 지울지 정하기',
-      'g.p3':'예제를 <code>configs/anonymize.sql</code>로 복사하거나 UI에서 편집하세요. 살아 있는 리플리카에서 만드는 모든 클론 안에서, 포트를 넘겨주기 전에 돌아갑니다.',
-      'g.p3c':'어떻게 작성해야할지 모르겠다면 에이전트의 도움을 받아서 작성하고 업로드까지 요청하세요 (<code>set_anonymize_sql</code>).',
-      'g.p3b':'스크립트가 실패하면 클론을 넘기지 않고 없애 버립니다. 반만 지워진 사본이 누구 손에도 가지 않게요. 스크립트가 아예 없는 클론은 프로덕션 데이터를 그대로 건네는 것이라, 파일이 없다는 사실을 넘겨짚지 않고 알려 줍니다.',
-      'g.h4':'스키마도 따라오게 하기',
-      'g.p4':'논리 복제는 행만 나릅니다. Snaplicator는 프라이머리에 이벤트 트리거를 걸어 CREATE·ALTER·DROP을 전부 아웃박스 테이블에 적고, 그 테이블 자체를 publication에 넣습니다. 그래서 DDL이 평범한 복제 행으로 도착해 여기서 다시 실행됩니다.',
-      'g.p4b':'프라이머리에 테이블을 만들면 publication에 자동으로 들어가서, 손대지 않아도 복제가 시작됩니다. 캡처는 일부러 넓게 잡고, 무엇을 건너뛸지는 다시 실행할 때 정합니다.',
-      'g.lead':'여기까지는 한 번만 하면 됩니다. 아래부터는 에이전트가 알아서 반복합니다.',
-      'g.h5':'스냅샷 찍기',
-      'g.p5':'리플리카에 이름을 붙여 그 시점을 남깁니다. <span class="nb">O(1)이라</span> 순식간입니다. 에이전트가 돌아올 자리이니, 데이터가 밀렸다 싶으면 새로 찍으세요.',
-      'g.h6':'클론 만들기',
-      'g.p6':'그 스냅샷에서 만든, 자기 포트를 가진 쓰기 가능한 Postgres입니다. 응답에 접속 문자열이 오는데, 넘길 건 그거 하나면 됩니다.',
-      'g.h7':'에이전트에 물리기',
-      'g.p7':'MCP 서버를 등록하면 이 루프가 에이전트 것이 됩니다. <code>clones</code> 파라미터로 건드릴 수 있는 클론을 정해 두면, 헷갈린 에이전트가 남의 클론을 되돌릴 수 없습니다.',
-      'g.tiplabel':'클론을 최신으로 유지하기',
-      'g.tip':'클론은 한 시점에 멈춰 있고, 그 덕분에 테스트가 매번 같은 결과를 냅니다. 더 최신이 필요하면 스냅샷을 새로 찍고 <code>refresh_clone</code>을 쓰세요. 새것을 옆에 만들어 두고 바꿔치기하기 때문에 끊기는 건 0.5초 남짓입니다.',
-      'g.extitle':'유의할 점',
-      'g.ex1t':'클론의 스냅샷에서 만든 클론은 다시 지우지 않습니다',
-      'g.ex1':'스크립트는 살아 있는 리플리카에서 만드는 클론에서도, 그 리플리카의 스냅샷에서 만드는 클론에서도 돕니다. 건너뛰는 건 클론의 스냅샷에서 만든 클론뿐입니다. 그 데이터는 클론을 만들 때 이미 지웠으니까요.',
-      'g.ex2t':'CREATE INDEX CONCURRENTLY',
-      'g.ex2':'적용 워커의 트랜잭션 안에서는 실행할 수 없습니다. 그래서 실패하는 대신 <code>_snaplicator_ddl_deferred</code>에 넣어 두고 트랜잭션 밖에서 돌립니다.',
-      'g.ex3t':'여기서 실패한 DDL',
-      'g.ex3':'<code>_snaplicator_ddl_failures</code>에 적어 두고 그대로 둡니다. 다시 시도하지도, 몰래 메우지도 않습니다. 틀린 게 보이는 스키마가, 맞아 보이는데 아닌 스키마보다 낫습니다.',
-      'g.ex4t':'설치 전에 있었던 스키마 변경',
-      'g.ex4':'워터마크가 트리거 설치보다 오래된 것은 다시 실행하지 않게 막습니다. 스키마는 설치할 때 한 번 통째로 복제하고, 그 뒤는 트리거가 이어받습니다.',
-      'g.ex5t':'정말 따라오고 있는지 확인하기',
-      'g.ex5':'<code>configs/replication_check.sql</code>을 프라이머리와 리플리카 양쪽에서 돌려 결과를 맞춰 봅니다. 읽기 전용이 강제됩니다. 저장할 때 쓰기와 DDL은 거부되고, 실행도 READ ONLY 트랜잭션 안에서 됩니다.',
+      'cmp.head':'다른 CoW 지원 postgres database와 다른 점',
       'gr.primary':'원본, 그대로','gr.replica':'프라이머리의 복제 슬롯 하나','gr.snapshot':'O(1) · 그 뒤로 달라진 만큼만','gr.clone':'하나에 몇 초 · 쓰기 전까지 약 0 GB',
       'gr.e1':'논리 복제','gr.e2':'얼리기','gr.e3':'띄우기',
       'common.copy':'복사',
@@ -1118,27 +1091,53 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'cmp.aur1':'클론은 뜬 시점에 고정','cmp.aur2':'원본과 같은 스토리지','cmp.aur3':'15개까지, 그 뒤로는 전체 복사',
       'cmp.dbl1':'매니지드는 주기적으로 다시 받음','cmp.dbl2':'다음 전체 갱신 때만','cmp.dbl3':'ZFS 또는 LVM 씬 클론',
       'cmp.sn1':'논리 복제, 매니지드 포함','cmp.sn2':'이벤트 트리거가 DDL을 재실행','cmp.sn3':'btrfs <span class="nb">copy-on-write</span>',
-      'cmp.t1':'Neon과 Supabase 브랜칭',
-      'cmp.p1':'둘 다 훌륭하고, 이미 거기서 돌고 있다면 그쪽 브랜칭을 쓰세요. 거기 브랜치는 <em>곧</em> 내 데이터입니다. Neon은 RDS나 Cloud SQL 프라이머리를 호스팅하는 대신 논리 복제로 따라가 주기도 합니다. 그러면 두 가지가 달라집니다. 데이터가 Neon 클라우드에 놓이고, 스키마는 직접 맞춰 둬야 합니다. 자기네 가이드가 이렇게 요구하니까요. <q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q>',
-      'cmp.t2':'Aurora 패스트 클로닝',
-      'cmp.p2':'스토리지 계층의 <span class="nb">copy-on-write</span>이고 실제로 빠릅니다. 다만 클론 하나가 DB 클러스터고 클러스터에는 인스턴스가 붙어야 해서, 살려 두는 내내 컴퓨트 요금이 나갑니다. 개수 제한도 있습니다. <q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 전용이라 일반 RDS Postgres는 안 됩니다.',
+      'cmp.t1':'Neon 브랜칭',
+      'cmp.p1':'이미 Neon을 사용하고있다면 거기서 돌고 있다면 거기서 제공하는 브랜칭을 쓰시는게 좋습니다. 이건 Neon같은 브랜칭을 개발환경에서 쓰고싶은 사람들을 위한것입니다.',
       'cmp.t3':'DBLab (Postgres.ai)',
-      'cmp.p3':'이 중에 가장 가깝고, 더 오래됐고 기능도 더 많습니다. 10 TiB를 2초 안에 뜹니다. 갈리는 건 사본을 어떻게 최신으로 유지하느냐입니다. 물리 모드는 <q>is not available for managed cloud Postgres services such as Amazon RDS</q>라, 매니지드 상대로는 주기적으로 통째로 다시 받습니다. Snaplicator는 논리 복제로 구독해서 다시 받는 게 아니라 따라갑니다.',
+      'cmp.p3':'제가 이걸 만드는데 인사이트를 얻었던 OSS입니다. 여기서 Snaplicator은 논리 복제를 이용해 primary data 및 스키마를 실시간으로 싱크한다는 것입니다.',
       'cmp.sblabel':'Supabase를 쓰고 있다면',
-      'cmp.sbnote':'거기 브랜치는 설계상 프로덕션 데이터 없이 시작하고, Supabase는 논리 복제 publisher가 될 수 있습니다. <code>wal_level</code>은 이미 <code>logical</code>입니다. 자기네 가이드가 짚는 주의점 둘 — 풀러 말고 직접 연결 문자열을 쓸 것, 구독하는 쪽에 IPv6나 IPv4 애드온이 필요하다는 것.',
+      'cmp.sbnote':'거기 브랜치는 설계상 데이터 없이 시작합니다. 그 데이터가 필요하면, Supabase를 프라이머리로 그대로 두고 옆에 Snaplicator를 붙이면 됩니다. 준비할 것도 거의 없습니다. <code>wal_level</code>이 이미 <code>logical</code>이라, 다른 매니지드 서비스처럼 파라미터를 바꾸고 재시작할 일이 없기 때문입니다.',
       'cmp.c4':'우리 인프라에서',
       'cmp.neon4':'오픈소스지만 범위는 실험용','cmp.sb4':'문서화됨 — 단 브랜칭 제외',
       'cmp.aur4':'AWS Aurora 전용',
       'cmp.dbl4':'내 장비',
       'cmp.sn4':'내가 가진 머신 한 대',
+      'cmp.c5':'프로덕션은 그대로',
+      'cmp.neon5':'복제본을 Neon에 두고 브랜치','cmp.sb5':'Supabase 프로젝트여야 함',
+      'cmp.aur5':'이미 쓰는 클러스터에서',
+      'cmp.dbl5':'그대로 두고 옆에',
+      'cmp.xat1':'논리 복제 (pgstream)','cmp.xat2':'이벤트 트리거가 DDL을 재실행',
+      'cmp.xat3':'<span class="nb">copy-on-write</span> 브랜치','cmp.xat4':'자체 호스팅, 쿠버네티스 위에',
+      'cmp.xat5':'복제본이 Xata 플랫폼 위에 있음',
+      'cmp.sn5':'그대로 두고 옆에',
       'cmp.srclabel':'확인한 문서:',
       'foot.tag':'Postgres 논리 복제 + btrfs <span class="nb">copy-on-write</span>'
     },
     ja: {
       'i.setup':'インストール','i.sample':'つなぐ DB が無ければ、サンプルで',
-      'g.exlead1':'Postgres の文書は限界をそのまま書いています。<q>The database schema and DDL commands are not replicated.</q> サブスクリプションが運ぶのは行の変更だけです。プライマリに列を 1 つ足すとレプリカにはその列が無く、その列に関わる最初の変更で適用に失敗し、レプリケーションはそこで止まります。ずれたスキーマのまま進む代わりに止まるわけです。',
-      'g.exlead2':'だからマネージドのプライマリのコピーは、ふつう定期的に取り直します。2 つのスキーマを手で合わせ続けるより、ダンプして復元するほうが楽だからです。代償は、コピーが最後のダンプの時点までしか新しくないこと。スキーマも含めてです。',
-      'g.exlead3':'Snaplicator はこれを <a href="#g4">4 番</a>で塞ぎます。イベントトリガーが CREATE・ALTER・DROP をすべてアウトボックステーブルに書き、そのテーブル自体が publication のメンバーなので、DDL は普通の複製行として届き、ここで実行し直されます。それでも残るものが以下です。',
+      'g.title':'導入と使い方',
+      'g.h1':'インストール',
+      'g.p1':'1 行で済みます。実行するとプライマリの接続 URI を聞かれます。まずサンプル DB で見たい場合は <code>demo</code> と入力してください。',
+      'g.macnote':'btrfs は Linux のファイルシステムなので、Mac には入れる先がありません。そこで OrbStack で Linux マシンを 1 つ作り、その中で続けてインストールします。sudo は要りません。OrbStack が無ければインストールするか尋ねます。商用利用には有料ライセンスが必要で、Colima・Lima・UTM など自前の Linux VM の中で実行しても同じように動きます。',
+      'g.h2':'プライマリの URI を入れる',
+      'g.p2':'superuser のアカウントである必要があります。スキーマ変更は event trigger で捕まえますが、PostgreSQL では <code>CREATE EVENT TRIGGER</code> は superuser しか実行できず、これを渡す <code>GRANT</code> がありません。新しく作られたテーブルを publication に入れるには、そのテーブルの所有者である必要もあります。',
+      'g.p2pre':'<span class="c"># 本番に作られるもの全部 — すべて _snaplicator* という名前</span>\n_snaplicator_ddl_log          テーブル    CREATE / ALTER / DROP 1 件につき 1 行\n_snaplicator_capture_ddl      トリガー    その行を書きます\n_snaplicator_capture_drop     トリガー    同じこと、DROP 用\n_snaplicator_auto_add_&lt;pub&gt;   トリガー    新しいテーブルが publication に加わる\n&lt;publication&gt;                 publication 新規作成、または既存のものを選択\n&lt;slot&gt;                        スロット    レプリカが開く、通常の複製と同じ',
+      'g.p2b':'行は読むだけで、書きません。<code>wal_level=logical</code> とレプリケーションロールは自分で設定する必要があり、インストーラーは何かを変える前に両方を確認します。すべて取り除くための文は README にそのまま載せてあります。',
+      'g.h3':'テーブルを選ぶ',
+      'g.p3':'UI にテーブルごとの容量と行数が並びます。選ぶまでは何もコピーしません。あとから追加もできます。',
+      'g.h4':'これで完了。レプリケーションが始まります',
+      'g.p4':'最初のコピーだけ時間がかかり、それも一度きりです。あとはレプリカが自分でプライマリに追従します。データもスキーマも。',
+      'g.h5':'クローンを作る',
+      'g.p5':'それぞれ自分のポートを持つ、書き込める Postgres です。応答に接続文字列が入っていて、渡すものはそれだけです。',
+      'g.p5b':'匿名化はここで設定します。<code>configs/anonymize.sql</code> に書くか UI で編集すると、ポートを渡す前にすべてのクローンの中で実行されます。失敗した場合、クローンは渡さずに削除します。書き方が分からなければ、エージェントに作成とアップロードまで任せてください (<code>set_anonymize_sql</code>)。',
+      'g.h6':'スナップショットを取る',
+      'g.p6':'スナップショットはレプリカのある時点に名前を付けたものです。O(1) で取られ、何かを書くまでディスクを使いません。クローンはここから始まり、ここに戻ります。だから毎回同じデータから始められます。より新しいデータが要るなら取り直すだけです。',
+      'g.extitle':'知っておくこと',
+      'g.ex1t':'DDL は保留されたり、失敗したりします',
+      'g.ex1':'大きな <code>CREATE INDEX</code> のような時間のかかる DDL は <code>_snaplicator_ddl_deferred</code> に移し、同期ループが apply トランザクションの外で自動的に実行します。エラーになった DDL は <code>_snaplicator_ddl_failures</code> に残し、そのままにします。再試行もしませんし、適当に覆いもしません。ずれているのが見える方が、正しく見えて実は違うものよりましだからです。なので見張ってください。Slack ワークスペースにアプリを追加し、incoming webhook の URL を Config に貼れば、DDL 適用の失敗が失敗した文とともにそのチャンネルに流れます。サブスクリプションの異常やスキーマドリフトも同じチャンネルに届きます。<b>失敗した DDL の再投入はまだ手動です。自動リトライは作る予定です。</b>',
+      'a.title':'エージェントに渡す',
+      'a.p1':'MCP サーバーを登録すれば、このループはエージェントのものになります。クローンを作り、作業し、戻し、削除します。',
+      'a.p2':'<code>clones</code> パラメータで、そのエージェントが触れるクローンを制限します。混乱したエージェントが他人のクローンを戻すことはできません。',
       'origin.label':'作った理由',
       'origin.p1':'テスト DB を構成するたびにデータをシードしなければならず、production でバグが出ても test 環境では再現できず、QA のたびに特定のシナリオでテストしなければならないのが煩わしくて作りました。',
       'origin.p2':'primary db の DML および DDL をリアルタイムで複製し、複製された DB の特定の状態にスナップショットを取って、毎回同じデータでテストできます。',
@@ -1157,44 +1156,6 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'fit.n1':'primary で <code>wal_level=logical</code> を有効にできない、レプリケーションスロットを作れないとき。',
       'fit.n2':'すでに primary db として Neon を使っているとき。',
       'cmp.head':'他の CoW 対応 postgres database と何が違いますか?',
-      'g.title':'ゼロから、エージェント専用 DB まで',
-      'g.n1':'1. インストール','g.n2':'2. 初回コピー','g.n3':'3. 匿名化','g.n4':'4. スキーマ',
-      'g.n5':'5. スナップショット','g.n6':'6. クローン','g.n7':'7. エージェント','g.n8':'例外ケース',
-      'g.h1':'インストールしてプライマリを指定する',
-      'g.p1':'btrfs プールを用意し、管理プレーンを起動し、UI を開きます。プロンプトには下の二つができるアカウントの接続 URI を入れてください。無ければ <code>demo</code> と答えてください。',
-      'g.p1b':'スーパーユーザーを要求します。大きな要求なので理由を書きます。スキーマ変更は<b>イベントトリガー</b>で捕まえますが、<code>CREATE EVENT TRIGGER</code> はスーパーユーザー専用で、PostgreSQL にはこれ用の <code>GRANT</code> がありません。より狭い権限では設置そのものができません。新しく作ったテーブルを publication に入れるには、そのテーブルの所有権も必要です。どちらも PostgreSQL の性質であって、ここで手を抜いた結果ではありません。',
-      'g.p1pre':'<span class="c"># 本番に作られるもの全部 — すべて _snaplicator* という名前</span>\n_snaplicator_ddl_log          テーブル    CREATE / ALTER / DROP 1 件につき 1 行\n_snaplicator_capture_ddl      トリガー    その行を書きます\n_snaplicator_capture_drop     トリガー    同じこと、DROP 用\n_snaplicator_auto_add_&lt;pub&gt;   トリガー    新しいテーブルが publication に加わる\n&lt;publication&gt;                 publication 新規作成、または既存のものを選択\n&lt;slot&gt;                        スロット    レプリカが開く、通常の複製と同じ',
-      'g.p1c':'あなたの行は読むだけで、書きません。レプリカは下流にあり、遡る経路がありません。<code>wal_level=logical</code> と複製ロールはご自身で設定する必要があり、インストーラは何かを変える前に両方を確認します。すべて消す手順は README に文ごとに書いてあります。',
-      'g.h2':'テーブルを選び、初回コピーを走らせる',
-      'g.p2':'UI で、各テーブルの容量と行数を見ながら選びます。指示するまで何もコピーしません。エージェントが実際に触れるものだけ選び、後から追加してください。',
-      'g.p2b':'スキーマを複製し、サブスクリプションを作り、選んだテーブルをコピーします。唯一の遅い工程で、一度きりです。完了後は変更が流れ込み続けます。',
-      'g.h3':'何を消すかを決める',
-      'g.p3':'例を <code>configs/anonymize.sql</code> にコピーするか、UI で編集してください。稼働中のレプリカから作るすべてのクローンの中で、ポートを渡す前に実行されます。',
-      'g.p3c':'書き方が分からなければ、エージェントに作成とアップロードまで頼んでください（<code>set_anonymize_sql</code>）。',
-      'g.p3b':'スクリプトが失敗した場合、クローンは渡されずに破棄されます。中途半端に消えたコピーが誰の手にも渡らないようにです。スクリプトが無いクローンは本番データをそのまま渡すことなので、ファイルが無いことは推測せず報告します。',
-      'g.h4':'スキーマも追従させる',
-      'g.p4':'論理レプリケーションが運ぶのは行だけです。Snaplicator はプライマリにイベントトリガーを置き、CREATE・ALTER・DROP をすべてアウトボックステーブルに書き、そのテーブル自体を publication に入れます。だから DDL は普通の複製行として届き、ここで実行し直されます。',
-      'g.p4b':'プライマリでテーブルを作れば自動で publication に入り、何もしなくても複製が始まります。捕捉は意図的に広く取り、何を飛ばすかは実行し直すときに決めます。',
-      'g.lead':'ここまでは一度きりです。ここから先は、エージェントが自分で繰り返します。',
-      'g.h5':'スナップショットを取る',
-      'g.p5':'レプリカの名前付きの瞬間を O(1) で残します。エージェントが戻る地点なので、データが進んだら取り直してください。',
-      'g.h6':'クローンを作る',
-      'g.p6':'そのスナップショットから作られた、専用ポートを持つ書き込み可能な Postgres です。応答に接続文字列が入っており、渡すのはそれだけです。',
-      'g.h7':'エージェントにつなぐ',
-      'g.p7':'MCP サーバーを登録すれば、ループはエージェント自身のものになります。<code>clones</code> パラメータで触れるクローンを限定すれば、混乱したエージェントが他人のクローンを戻すことはありません。',
-      'g.tiplabel':'クローンを最新に保つ',
-      'g.tip':'クローンは一点に止まり、だからこそテストが再現可能です。新しいデータが要るときは新しいスナップショットを取り <code>refresh_clone</code> を使います。置き換えは隣に作ってから切り替わるので、断は 0.5 秒ほどです。',
-      'g.extitle':'留意点',
-      'g.ex1t':'クローンのスナップショットから作ったクローンは再度マスクしません',
-      'g.ex1':'スクリプトは稼働中のレプリカから作るクローンでも、そのレプリカのスナップショットから作るクローンでも走ります。飛ばすのはクローンのスナップショットから作ったクローンだけです。そのデータはクローンを作った時点で既に消してあるからです。',
-      'g.ex2t':'CREATE INDEX CONCURRENTLY',
-      'g.ex2':'適用ワーカーのトランザクション内では実行できません。そこで失敗させる代わりに <code>_snaplicator_ddl_deferred</code> に積み、トランザクションの外で実行します。',
-      'g.ex3t':'ここで失敗した DDL',
-      'g.ex3':'<code>_snaplicator_ddl_failures</code> に記録して、そのままにします。再試行も、こっそり埋め合わせもしません。間違いが見えるスキーマのほうが、正しく見えて実は違うスキーマよりましです。',
-      'g.ex4t':'インストール前にあったスキーマ変更',
-      'g.ex4':'ウォーターマークが、トリガー設置より古いものの再実行を止めます。スキーマは設置時に一度まるごと複製し、その後はトリガーが引き継ぎます。',
-      'g.ex5t':'本当に追従しているかを確かめる',
-      'g.ex5':'<code>configs/replication_check.sql</code> をプライマリとレプリカの両方で実行し、結果を突き合わせます。読み取り専用が強制され、保存時に書き込みと DDL は拒否され、実行も READ ONLY トランザクション内で行われます。',
       'gr.primary':'本番はそのまま','gr.replica':'プライマリのスロット 1 つ','gr.snapshot':'O(1) · 以後は差分だけ','gr.clone':'1 つ数秒 · 書き込むまで約 0 GB',
       'gr.e1':'論理レプリケーション','gr.e2':'凍結','gr.e3':'起動',
       'common.copy':'コピー',
@@ -1237,17 +1198,23 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'cmp.sn1':'論理レプリケーション、マネージドも','cmp.sn2':'イベントトリガーが DDL を再実行','cmp.sn3':'btrfs <span class="nb">copy-on-write</span>',
       'cmp.t1':'Neon と Supabase のブランチ',
       'cmp.p1':'どちらも優秀で、すでにそこで動いているなら、そちらのブランチ機能を使ってください。あちらのブランチは<em>そのまま</em>自分のデータです。Neon は RDS や Cloud SQL のプライマリを、ホストする代わりに論理レプリケーションで追従することもできます。その場合、2 つが変わります。データが Neon のクラウドに置かれること、そしてスキーマは自分で合わせ続ける必要があることです。公式ガイドがこう求めています。<q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q>',
-      'cmp.t2':'Aurora ファストクローニング',
-      'cmp.p2':'ストレージ層の <span class="nb">copy-on-write</span> で、実際に速いです。ただしクローン 1 つが DB クラスターで、クラスターにはインスタンスが要るので、置いておくあいだ課金が続きます。上限もあります。<q>You can create up to 15 clones with <span class="nb">copy-on-write</span> protocol. After you have 15 clones, the next clone that you create is a full copy.</q> Aurora 専用で、通常の RDS Postgres では使えません。',
       'cmp.t3':'DBLab (Postgres.ai)',
       'cmp.p3':'この中で最も近く、歴史も長く機能も多いです。10 TiB でも 2 秒かかりません。分かれるのはコピーの鮮度の保ち方です。物理モードは <q>is not available for managed cloud Postgres services such as Amazon RDS</q> なので、マネージド相手では定期的に丸ごと取り直します。Snaplicator は論理レプリケーションで購読し、取り直さず追従します。',
       'cmp.sblabel':'Supabase を使っている場合',
-      'cmp.sbnote':'あちらのブランチは設計上、本番データを持たずに始まります。そして Supabase は論理レプリケーションの publisher になれます。<code>wal_level</code> はすでに <code>logical</code> です。公式ガイドの注意点が 2 つ — プーラーではなく直接接続の文字列を使うこと、購読側に IPv6 か IPv4 アドオンが要ること。',
+      'cmp.sbnote':'あちらのブランチは設計上、データを持たずに始まります。そのデータが要るなら、Supabase をプライマリのままにして、横に Snaplicator を置けば済みます。準備もほとんど要りません。<code>wal_level</code> がすでに <code>logical</code> なので、他のマネージドサービスのようにパラメータを変えて再起動する必要がないからです。',
       'cmp.c4':'自社インフラで',
       'cmp.neon4':'オープンソースだが範囲は実験用','cmp.sb4':'文書化済み — ただしブランチ非対応',
       'cmp.aur4':'AWS Aurora 専用',
       'cmp.dbl4':'自前の機材',
       'cmp.sn4':'自分の持つマシン 1 台',
+      'cmp.c5':'本番はそのまま',
+      'cmp.neon5':'コピーを Neon に置いてブランチ','cmp.sb5':'Supabase のプロジェクトであること',
+      'cmp.aur5':'すでに動かしているクラスターから',
+      'cmp.dbl5':'そのまま横に置く',
+      'cmp.xat1':'論理レプリケーション (pgstream)','cmp.xat2':'イベントトリガーが DDL を再実行',
+      'cmp.xat3':'<span class="nb">copy-on-write</span> ブランチ','cmp.xat4':'セルフホスト、Kubernetes 上',
+      'cmp.xat5':'コピーが Xata プラットフォーム上にある',
+      'cmp.sn5':'そのまま横に置く',
       'cmp.srclabel':'参照した資料:',
       'foot.tag':'Postgres 論理レプリケーション + btrfs <span class="nb">copy-on-write</span>'
     }
@@ -1279,7 +1246,7 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
   }
 
   /* ── views ─────────────────────────────────────────────── */
-  var VIEWS = ['overview', 'concepts', 'guide', 'install'];
+  var VIEWS = ['overview', 'concepts', 'guide', 'agent', 'install'];
   function show(view, push) {
     if (VIEWS.indexOf(view) < 0) view = 'overview';
     VIEWS.forEach(function (v) {
