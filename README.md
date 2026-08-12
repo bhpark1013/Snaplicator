@@ -10,7 +10,8 @@
 <h1 align="center">Snaplicator</h1>
 
 <p align="center">
-  A test database cloned straight from your production. No seeding. No dumps.
+  <b>Best dev DB for agents</b> — a test database cloned straight from your
+  production. No seeding. No dumps.
 </p>
 
 <p align="center">
