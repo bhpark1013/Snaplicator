@@ -319,25 +319,7 @@ export function Clones() {
         // marked active is read: the previous build's leftovers describe a
         // clone that already exists, and this runs for the length of one POST
         // that nothing else overlaps.
-        setCloneProgress(null)
-        const poll = window.setInterval(async () => {
-            try {
-                const pr = await fetch(`${base}/clones/create-progress`)
-                if (!pr.ok) return
-                const p: CloneProgress = await pr.json()
-                if (!p?.active) return
-                setCloneProgress(p)
-                const at = p.stages.findIndex((s) => s.status === 'running')
-                if (at >= 0) {
-                    toast.update(
-                        tid, 'loading',
-                        `${trimmedName}: ${p.stages[at].label} (${at + 1}/${p.stages.length})`,
-                    )
-                }
-            } catch {
-                /* the progress read is decoration; its failure is not the clone's */
-            }
-        }, 1000)
+        const stopProgress = followProgress(tid, trimmedName)
         try {
             const portNum = createPort.trim() ? parseInt(createPort.trim(), 10) : undefined
             const bodyData: Record<string, unknown> = { name: trimmedName, description: trimmedDesc, port: portNum }
@@ -364,10 +346,36 @@ export function Clones() {
             toast.update(tid, 'error', `Clone failed: ${String(e?.message || e)}`)
             setCreateError(String(e?.message || e))
         } finally {
-            window.clearInterval(poll)
-            setCloneProgress(null)
+            stopProgress()
             setMainCloning(false)
         }
+    }
+
+    // Where a long clone operation has got to, pushed into the toast that is
+    // already sitting in the corner. The POST does not return until the work
+    // is done, so the only way to say anything meanwhile is to ask a second
+    // endpoint — and the toast is where it belongs, because closing the
+    // dialog should not close the answer.
+    const followProgress = (tid: number, label: string) => {
+        setCloneProgress(null)
+        const poll = window.setInterval(async () => {
+            try {
+                const pr = await fetch(`${base}/clones/create-progress`)
+                if (!pr.ok) return
+                const p: CloneProgress = await pr.json()
+                // Only a record still marked active: a finished one describes
+                // the previous operation, not this one.
+                if (!p?.active) return
+                setCloneProgress(p)
+                const at = p.stages.findIndex((s) => s.status === 'running')
+                if (at >= 0) {
+                    toast.update(tid, 'loading', `${label}: ${p.stages[at].label} (${at + 1}/${p.stages.length})`)
+                }
+            } catch {
+                /* the progress read is decoration; its failure is not the operation's */
+            }
+        }, 1000)
+        return () => { window.clearInterval(poll); setCloneProgress(null) }
     }
 
     const onDelete = (containerName: string) => {
@@ -412,6 +420,7 @@ export function Clones() {
         setError(null)
         setClonesError(null)
         const tid = toast.loading('Refreshing clone from main…')
+        const stopProgress = followProgress(tid, targetName)
         try {
             const r = await fetch(`${base}/clones/${encodeURIComponent(targetName)}/refresh`, {
                 method: 'POST',
@@ -427,6 +436,7 @@ export function Clones() {
             toast.update(tid, 'error', `Refresh failed: ${String(e?.message || e)}`)
             setError(String(e?.message || e))
         } finally {
+            stopProgress()
             setRefreshingClone(null)
         }
     }

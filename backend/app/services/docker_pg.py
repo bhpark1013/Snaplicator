@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import os
 import re
 import subprocess
@@ -7,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
+
+from . import clone_progress
 import time
 import json
 
@@ -216,6 +219,7 @@ END$$;"""
 
 
 def _sync_owned_sequences(container_name: str, user: str, db: str) -> None:
+    clone_progress.stage("sequences")
     t0 = time.monotonic()
     try:
         proc = subprocess.run(
@@ -254,6 +258,30 @@ class CloneOptions:
     postgres_image: str = "postgres:17"
     description: Optional[str] = None
     display_name: Optional[str] = None
+
+
+
+def _tracked(what: str, name_of):
+    """Report this operation's stages, and close the record however it ends.
+
+    A decorator rather than a `with` inside each function because the failure
+    path is the one that matters: an exception between begin() and finish()
+    leaves the record active forever, and the screen watching it waits on a
+    clone that is already gone.
+    """
+    def decorate(fn):
+        @functools.wraps(fn)
+        def inner(*args, **kwargs):
+            clone_progress.begin(what, name_of(*args, **kwargs))
+            try:
+                result = fn(*args, **kwargs)
+            except BaseException as e:
+                clone_progress.finish(error=str(e).strip() or e.__class__.__name__)
+                raise
+            clone_progress.finish()
+            return result
+        return inner
+    return decorate
 
 
 def _launch_clone_container(
@@ -304,11 +332,13 @@ def _launch_clone_container(
     anonymize_ran = False
     anonymize_output: Optional[str] = None
 
+    clone_progress.stage("container")
     tr0 = time.monotonic()
     subprocess.run(cmd, check=True)
     tr1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] docker_run_ms={int((tr1-tr0)*1000)} container={container_name} port={host_port}")
 
+    clone_progress.stage("ready")
     tw0 = time.monotonic()
     for _ in range(60):
         ready = subprocess.run(
@@ -331,6 +361,7 @@ def _launch_clone_container(
     tw1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] container_ready_wait_ms={int((tw1-tw0)*1000)} container={container_name}")
 
+    clone_progress.stage("subscriptions")
     subs_proc = subprocess.run(
         [
             "docker", "exec", container_name,
@@ -381,6 +412,7 @@ def _launch_clone_container(
 
     if run_anonymize and anon_file.exists():
         _timing_log(f"[CLONE_TIMING] anonymize_start file={anon_file}")
+        clone_progress.stage("anonymize")
         ta0 = time.monotonic()
         copy_ok = False
         for _ in range(5):
@@ -437,11 +469,13 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     clone_path = root / clone_name
 
     t0 = time.monotonic()
+    clone_progress.stage("snapshot")
     _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(snap_path), str(clone_path)])
     t1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={snap_path} target={clone_path}")
 
     uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+    clone_progress.stage("permissions")
     _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
     _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
 
@@ -495,6 +529,7 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
 
 def _create_db_user(container_name: str, opts: CloneOptions, username: str, password: str) -> None:
     """Create (or update) an additional login role inside a freshly launched clone."""
+    clone_progress.stage("user")
     if not re.fullmatch(r"[A-Za-z0-9_]+", username):
         raise ValueError("Invalid username: only letters, digits and underscore are allowed")
     escaped_pw = password.replace("'", "''")
@@ -518,6 +553,7 @@ def _create_db_user(container_name: str, opts: CloneOptions, username: str, pass
     raise RuntimeError(f"Clone started but creating user '{username}' failed: {last_err}")
 
 
+@_tracked("create", lambda opts, *a, **k: opts.display_name or "new clone")
 def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int] = None, db_user: Optional[str] = None, db_password: Optional[str] = None) -> Dict:
     root = Path(opts.root_data_dir)
     src_main = root / opts.main_data_dir
@@ -529,6 +565,7 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
     clone_path = root / clone_name
 
     try:
+        clone_progress.stage("checkpoint")
         src_container = _find_container_mounting_path(src_main)
         if src_container:
             _force_checkpoint_on_container(src_container, opts.postgres_user, opts.postgres_db)
@@ -538,11 +575,13 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
         _timing_log(f"[CLONE_TIMING] pre_checkpoint_error path={src_main} err={str(e).strip()}")
 
     t0 = time.monotonic()
+    clone_progress.stage("snapshot")
     _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(src_main), str(clone_path)])
     t1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={src_main} target={clone_path}")
 
     uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+    clone_progress.stage("permissions")
     _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(clone_path)])
     _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(clone_path)])
 
@@ -645,11 +684,13 @@ def _stage_then_swap_clone_data(
     # ── Stage: build and validate the replacement out of the way ──
     try:
         t0 = time.monotonic()
+        clone_progress.stage("snapshot")
         _run(["sudo", "-n", "btrfs", "subvolume", "snapshot", str(source_subvol), str(temp_path)])
         t1 = time.monotonic()
         _timing_log(f"[CLONE_TIMING] btrfs_snapshot_ms={int((t1-t0)*1000)} source={source_subvol} target={temp_path}")
 
         uid, gid = _detect_postgres_uid_gid(opts.postgres_image)
+        clone_progress.stage("permissions")
         _run(["sudo", "-n", "chown", "-R", f"{uid}:{gid}", str(temp_path)])
         _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(temp_path)])
         write_snaplicator_metadata(temp_path, meta)
@@ -752,6 +793,7 @@ def _stage_then_swap_clone_data(
     return final_port, container_pgdata, anonymize_ran, anonymize_output
 
 
+@_tracked("refresh", lambda target_container, *a, **k: target_container)
 def refresh_clone_in_place(
     target_container: str,
     opts: CloneOptions,
@@ -806,6 +848,7 @@ def refresh_clone_in_place(
 
     # Best-effort: force checkpoint on source main container before snapshot
     try:
+        clone_progress.stage("checkpoint")
         src_container = _find_container_mounting_path(src_main)
         if src_container:
             _force_checkpoint_on_container(src_container, opts.postgres_user, opts.postgres_db)
