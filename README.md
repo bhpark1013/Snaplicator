@@ -41,11 +41,14 @@ the primary are reflected in real time as well.
 **2. Database branching.** Save a particular state of the database and keep
 restoring to that state as you test and run QA.
 
-## 만든 이유
+## Why this exists
 
-테스트 DB 구성을 위해 매번 데이터를 시딩해야하고, production에 버그 발생하면 test환경에서는 재현이 안되고, QA시 매번 특정 시나리오에서 테스트해야하는 상황이 번거로워서 만들었습니다.
+Seeding the data every time I set up a test database, a bug in production that
+would not reproduce in the test environment, and QA that meant testing the same
+scenario over and over — it was tiresome enough that I built this.
 
-실시간으로 primary db의 dml 및 ddl을 복제하고, 복제된 DB에 특정 상태에 스냅샷을 찍어 매번 같은 데이터로 테스트할 수 있습니다.
+It replicates the primary's DML and DDL in real time, and you snapshot a
+particular state of that copy, so every test runs against the same data.
 
 ## Who it is for
 
