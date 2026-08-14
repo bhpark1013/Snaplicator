@@ -518,7 +518,6 @@
         <button data-view="overview" data-i18n="nav.overview">--overview</button>
         <button data-view="guide"    data-i18n="nav.guide">--guide</button>
         <button data-view="agent"    data-i18n="nav.agent">--agent</button>
-        <button data-view="install"  data-i18n="nav.install">--install</button>
       </nav>
     </div>
     <div class="langs" id="langs">
@@ -719,6 +718,20 @@
   <section id="guide">
     <h2 data-i18n="g.title">Setup</h2>
 
+
+    <h3 data-i18n="g.preh">Before you start</h3>
+    <dl class="alts">
+      <div>
+        <dt data-i18n="g.pre1t">On your primary</dt>
+        <dd data-i18n="g.pre1">Three things, and none of them can be fixed from here. <code>wal_level</code> has to be <code>logical</code> — a server setting and a restart, or on RDS and Aurora <code>rds.logical_replication = 1</code> in the parameter group and a reboot. A replication slot has to be free, because raising <code>max_replication_slots</code> is another restart. And the account in the URI has to be able to replicate: a superuser, <code>rds_superuser</code>, or <code>ALTER ROLE &lt;user&gt; WITH REPLICATION</code>. Superuser decides one more thing — whether the schema follows too, since <code>CREATE EVENT TRIGGER</code> takes nothing less.</dd>
+      </div>
+      <div>
+        <dt data-i18n="g.pre2t">On the machine that will run it</dt>
+        <dd data-i18n="g.pre2">Linux with docker and python 3.10 or newer, run as root, and disk to give the pool. On macOS there is nothing to prepare: the installer builds the Linux machine itself.</dd>
+      </div>
+    </dl>
+    <p style="margin-top:.9rem" data-i18n="g.pre3">All of it is checked before anything is created, and a failure names the setting that is missing instead of stopping halfway through.</p>
+
     <ol class="steps">
       <li id="g1"><div>
         <h3 data-i18n="g.h1">Install</h3>
@@ -853,45 +866,6 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
     </div>
   </section>
 
-  <!-- ═══════════════ INSTALL ═══════════════ -->
-  <section id="install">
-    <h2 data-i18n="i.title">Install</h2>
-    <div class="tabs">
-      <div class="tablist" role="tablist">
-        <button role="tab" type="button" data-os="linux" aria-selected="true">Linux</button>
-        <button role="tab" type="button" data-os="mac" aria-selected="false">macOS</button>
-      </div>
-      <div role="tabpanel" data-os="linux">
-        <p class="cmd-label" data-i18n="i.setup">Install</p>
-        <div class="cmd">
-          <span class="p">$</span>
-          <span class="l" id="cmdi1">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash</span>
-          <button class="copy" data-copy="cmdi1" data-i18n="common.copy">copy</button>
-        </div>
-        <p class="cmd-label" data-i18n="i.sample">No database to hand? Start on a sample one</p>
-        <div class="cmd">
-          <span class="p">$</span>
-          <span class="l" id="cmdi2">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | sudo bash -s -- --demo</span>
-          <button class="copy" data-copy="cmdi2" data-i18n="common.copy">copy</button>
-        </div>
-      </div>
-      <div role="tabpanel" data-os="mac" hidden>
-        <p class="cmd-label" data-i18n="i.setup">Install</p>
-        <div class="cmd">
-          <span class="p">$</span>
-          <span class="l" id="cmdi3">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash</span>
-          <button class="copy" data-copy="cmdi3" data-i18n="common.copy">copy</button>
-        </div>
-        <p class="cmd-note" data-i18n="hero.macnote">No sudo — it builds a Linux machine first.</p>
-        <p class="cmd-label" data-i18n="i.sample">No database to hand? Start on a sample one</p>
-        <div class="cmd">
-          <span class="p">$</span>
-          <span class="l" id="cmdi4">curl -fsSL https://raw.githubusercontent.com/bhpark1013/Snaplicator/main/deploy/install.sh | bash -s -- --demo</span>
-          <button class="copy" data-copy="cmdi4" data-i18n="common.copy">copy</button>
-        </div>
-      </div>
-    </div>
-  </section>
 </main>
 
 <footer class="wrap">
@@ -912,6 +886,12 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
     ko: {
       'i.setup':'설치','i.sample':'붙일 DB가 없다면, 샘플로 먼저',
       'g.title':'설치 가이드',
+      'g.preh':'시작하기 전에',
+      'g.pre1t':'primary에서',
+      'g.pre1':'세 가지이고, 셋 다 여기서는 못 고칩니다. <code>wal_level</code>이 <code>logical</code>이어야 합니다. 서버 설정이라 재시작이 필요하고, RDS·Aurora라면 파라미터 그룹에서 <code>rds.logical_replication = 1</code>로 두고 재부팅해야 합니다. 복제 슬롯도 하나 남아 있어야 합니다. <code>max_replication_slots</code>를 올리는 것 역시 재시작이기 때문입니다. 그리고 URI의 계정이 복제할 수 있어야 합니다. superuser이거나, <code>rds_superuser</code>이거나, <code>ALTER ROLE &lt;user&gt; WITH REPLICATION</code>입니다. superuser 여부는 하나를 더 결정합니다. 스키마까지 따라올지입니다. <code>CREATE EVENT TRIGGER</code>는 그보다 낮은 권한을 받지 않습니다.',
+      'g.pre2t':'Snaplicator를 돌릴 머신에서',
+      'g.pre2':'docker와 python 3.10 이상이 있는 리눅스, root 실행, 그리고 풀에 내줄 디스크. 맥에서는 준비할 게 없습니다. 설치 스크립트가 리눅스 머신부터 만듭니다.',
+      'g.pre3':'전부 아무것도 만들기 전에 확인하고, 걸리면 중간에 멈추는 대신 빠진 설정을 짚어서 알려줍니다.',
       'g.h1':'설치',
       'g.p1':'아래 명령어 한줄로 설치를 시작할 수 있습니다. 샘플로 시작해보고싶다면 demo를 입력해주세요.',
       'g.macnote':'내부적으로 btrfs라는 파일시스템을 사용하기 때문에,맥에서 사용하려면 OrbStack으로 리눅스 머신을 하나 만들고 그 안에서 이어서 설치합니다. OrbStack이 없으면 설치할지 물어봅니다.',
@@ -965,16 +945,6 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'hero.eyebrow':'AI를 위한 테스트 DB',
       'hero.title':'프로덕션 데이터로 빠르게 테스트하세요',
       'hero.macnote':'sudo 없이 실행하세요. 리눅스 머신부터 만듭니다.',
-
-
-
-
-
-
-
-
-
-      'i.title':'설치',
       'cmp.c0':' ','cmp.c1':'프로덕션 행을 따라감','cmp.c2':'스키마도 따라감','cmp.c3':'스냅샷 · 브랜칭',
       'cmp.neon1':'논리 복제','cmp.neon2':'직접 맞춰야 함','cmp.neon3':'<span class="nb">copy-on-write</span> 브랜치',
       'cmp.sb1':'브랜치는 데이터 없이 시작','cmp.sb2':'마이그레이션 파일에서','cmp.sb3':'자기네 클라우드만',
@@ -1006,6 +976,12 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
     ja: {
       'i.setup':'インストール','i.sample':'つなぐ DB が無ければ、サンプルで',
       'g.title':'導入と使い方',
+      'g.preh':'始める前に',
+      'g.pre1t':'プライマリ側',
+      'g.pre1':'3 つあり、どれもここからは直せません。<code>wal_level</code> が <code>logical</code> であること。サーバー設定なので再起動が要り、RDS・Aurora ならパラメータグループで <code>rds.logical_replication = 1</code> にして再起動します。レプリケーションスロットが 1 つ空いていること。<code>max_replication_slots</code> を上げるのもまた再起動だからです。そして URI のアカウントがレプリケーションできること。superuser か、<code>rds_superuser</code> か、<code>ALTER ROLE &lt;user&gt; WITH REPLICATION</code> です。superuser かどうかはもう 1 つを決めます。スキーマも追従するかどうかです。<code>CREATE EVENT TRIGGER</code> はそれより低い権限を受け付けません。',
+      'g.pre2t':'Snaplicator を動かすマシン側',
+      'g.pre2':'docker と python 3.10 以上が入った Linux、root 実行、そしてプールに渡すディスク。Mac では準備するものはありません。インストーラーが Linux マシンから作ります。',
+      'g.pre3':'すべて何かを作る前に確認し、引っかかれば途中で止まる代わりに足りない設定を名指しで知らせます。',
       'g.h1':'インストール',
       'g.p1':'1 行で済みます。実行するとプライマリの接続 URI を聞かれます。まずサンプル DB で見たい場合は <code>demo</code> と入力してください。',
       'g.macnote':'btrfs は Linux のファイルシステムなので、Mac には入れる先がありません。そこで OrbStack で Linux マシンを 1 つ作り、その中で続けてインストールします。sudo は要りません。OrbStack が無ければインストールするか尋ねます。商用利用には有料ライセンスが必要で、Colima・Lima・UTM など自前の Linux VM の中で実行しても同じように動きます。',
@@ -1058,15 +1034,6 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'hero.eyebrow':'AI のためのテスト DB',
       'hero.title':'本番をそのまま複製したテスト DB。',
       'hero.macnote':'sudo なしで実行してください。まず Linux マシンを作ります。',
-
-
-
-
-
-
-
-
-      'i.title':'インストール',
       'cmp.c0':' ','cmp.c1':'本番の行に追従','cmp.c2':'スキーマも追従','cmp.c3':'スナップショット・ブランチ',
       'cmp.neon1':'論理レプリケーション','cmp.neon2':'自分で合わせ続ける','cmp.neon3':'<span class="nb">copy-on-write</span> ブランチ',
       'cmp.sb1':'ブランチはデータ無しで始まる','cmp.sb2':'マイグレーションファイルから','cmp.sb3':'自社クラウドのみ',
@@ -1122,7 +1089,7 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
   }
 
   /* ── views ─────────────────────────────────────────────── */
-  var VIEWS = ['overview', 'guide', 'agent', 'install'];
+  var VIEWS = ['overview', 'guide', 'agent'];
   function show(view, push) {
     if (VIEWS.indexOf(view) < 0) view = 'overview';
     VIEWS.forEach(function (v) {
