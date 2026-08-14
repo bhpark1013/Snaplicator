@@ -790,6 +790,10 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
     <h2 id="gx" style="margin-top:var(--gap)" data-i18n="g.extitle">Worth knowing</h2>
     <dl class="alts">
       <div>
+        <dt data-i18n="g.ex2t">Treat the replica as read-only — Postgres will not</dt>
+        <dd data-i18n="g.ex2">This is a logical replica, not a physical standby, so nothing here rejects a write: <code>pg_is_in_recovery()</code> is false and the login is a superuser. Write to it anyway and the row is invisible to the primary and never travels back, while the primary&rsquo;s next change to that row may quietly fail to apply — and an <code>INSERT</code> that collides with a primary key arriving later stops the apply worker outright. Snapshots carry it with them, so every clone taken afterwards inherits the difference. Write to a clone; that is what a clone is for.</dd>
+      </div>
+      <div>
         <dt data-i18n="g.ex1t">DDL can be deferred, or fail</dt>
         <dd data-i18n="g.ex1">Slow DDL such as a large <code>CREATE INDEX</code> is moved to <code>_snaplicator_ddl_deferred</code>, and the sync loop runs it outside the apply transaction on its own. DDL that errors is written to <code>_snaplicator_ddl_failures</code> and left there — not retried, not patched over, because a schema you can see is wrong beats one that looks right and is not. Watch for it: add a Slack app to your workspace and paste its incoming-webhook URL into Config, and every DDL apply failure is posted to that channel, with the failing statements. Subscription trouble and schema drift go to the same place. <b>Retrying a failed DDL is still manual — automatic retry is planned.</b></dd>
       </div>
@@ -928,6 +932,8 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'g.ex1t':'DDL을 복제하도록 설계되어있지만, 특정 상황에서는 실패할 수 있습니다',
       // 'g.ex1':'큰 <code>CREATE INDEX</code>처럼 오래 걸리는 DDL은 <code>_snaplicator_ddl_deferred</code>로 옮겨두고, 동기화 루프가 apply 트랜잭션 밖에서 알아서 실행합니다. 에러가 난 DDL은 <code>_snaplicator_ddl_failures</code>에 남기고 그대로 둡니다. 재시도하지도, 적당히 덮지도 않습니다. 어긋난 게 보이는 편이 맞아 보이는데 아닌 것보다 낫기 때문입니다. 그러니 지켜보세요. 슬랙 워크스페이스에 앱을 추가하고 incoming webhook URL을 Config에 붙여넣으면, DDL 적용 실패가 실패한 구문과 함께 그 채널로 올라옵니다. 구독 이상과 스키마 드리프트도 같은 채널로 갑니다. <b>실패한 DDL을 다시 태우는 건 아직 수동입니다. 자동 재시도는 만들 예정입니다.</b>'
       'g.ex1':'큰 <code>CREATE INDEX</code>처럼 오래 걸리는 DDL은 실행하지않고 보류상태로 가거나, 실패할 수 있습니다. 다만 재실행가능한 ddl은 동기화 루프가 apply 트랜잭션 밖에서 알아서 실행합니다. 다만 일부 ddl은 수동으로 재시도해야할 수 있습니다. 직접 핸들링해야하는 건들을 위해 슬랙 워크스페이스에 앱을 추가하고 incoming webhook URL을 Config에 붙여넣으면, DDL 적용 실패가 실패한 구문과 함께 그 채널로 올라옵니다. <b>최대한 DDL이 실패하는 케이스를 핸들링하려고했으나 문제가 생기면 github issue에 추가해주시면 수정하겠습니다. </b>',
+      'g.ex2t':'리플리카는 읽기 전용으로 다루세요. Postgres는 안 막아줍니다',
+      'g.ex2':'이건 물리 스탠바이가 아니라 논리 리플리카라서, 쓰기를 거부하는 장치가 없습니다. <code>pg_is_in_recovery()</code>는 false이고 접속 계정은 superuser입니다. 그런데 여기에 쓰면, 그 행은 primary에서 보이지 않고 돌아가지도 않습니다. 그리고 primary가 같은 행을 다음에 바꿀 때 조용히 적용에 실패할 수 있습니다. 나중에 도착할 기본키와 부딪히는 <code>INSERT</code>라면 apply 워커가 아예 멈춥니다. 스냅샷은 이 상태를 그대로 담아가기 때문에, 그 뒤에 만든 클론이 전부 어긋난 데이터를 물려받습니다. 쓰는 건 클론에 하세요. 클론이 그러라고 있는 것입니다.',
       'a.title':'에이전트에 물리기',
       'a.p1':'MCP 서버를 등록하면 이 루프가 에이전트 것이 됩니다. 클론을 만들고, 작업하고, 되돌리고, 지웁니다. 뭘 맡기느냐에 따라 등록 방법이 두 가지입니다.',
       'a.h1':'클론 하나에만 물리기',
@@ -1019,6 +1025,8 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'g.extitle':'知っておくこと',
       'g.ex1t':'DDL は保留されたり、失敗したりします',
       'g.ex1':'大きな <code>CREATE INDEX</code> のような時間のかかる DDL は <code>_snaplicator_ddl_deferred</code> に移し、同期ループが apply トランザクションの外で自動的に実行します。エラーになった DDL は <code>_snaplicator_ddl_failures</code> に残し、そのままにします。再試行もしませんし、適当に覆いもしません。ずれているのが見える方が、正しく見えて実は違うものよりましだからです。なので見張ってください。Slack ワークスペースにアプリを追加し、incoming webhook の URL を Config に貼れば、DDL 適用の失敗が失敗した文とともにそのチャンネルに流れます。サブスクリプションの異常やスキーマドリフトも同じチャンネルに届きます。<b>失敗した DDL の再投入はまだ手動です。自動リトライは作る予定です。</b>',
+      'g.ex2t':'レプリカは読み取り専用として扱ってください。Postgres は止めてくれません',
+      'g.ex2':'これは物理スタンバイではなく論理レプリカなので、書き込みを拒む仕組みがありません。<code>pg_is_in_recovery()</code> は false で、接続アカウントは superuser です。それでも書き込むと、その行はプライマリからは見えず、戻ることもありません。さらにプライマリが同じ行を次に変更したとき、静かに適用に失敗することがあります。あとから届く主キーと衝突する <code>INSERT</code> なら、apply ワーカーはそこで止まります。スナップショットはこの状態ごと持っていくので、以降に作ったクローンはすべてずれたデータを引き継ぎます。書き込みはクローンへ。クローンはそのためにあります。',
       'a.title':'エージェントに渡す',
       'a.p1':'MCP サーバーを登録すれば、このループはエージェントのものになります。クローンを作り、作業し、戻し、削除します。何を任せるかによって、登録の仕方が 2 通りあります。',
       'a.h1':'クローン 1 つに限定して渡す',
