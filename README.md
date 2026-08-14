@@ -82,11 +82,9 @@ particular state of that copy, so every test runs against the same data.
 **Neon and Supabase branching** — both are excellent, and if you already run on
 them, use their branching: a branch there *is* your data.
 
-**DBLab (Postgres.ai)** — the closest thing to this, older and more capable. The
-difference is how the copy keeps up. Its physical mode *"is not available for
-managed cloud Postgres services such as Amazon RDS"*; against those it is
-dump/restore on a schedule. Snaplicator subscribes over logical replication, so
-a managed primary is followed rather than re-copied.
+**DBLab (Postgres.ai)** — the OSS I took the idea from. What differs here is
+that Snaplicator uses logical replication to keep data and schema in sync with
+the dev DB in real time.
 
 <sub>Checked against
 [Neon branching](https://neon.com/docs/introduction/branching) ·

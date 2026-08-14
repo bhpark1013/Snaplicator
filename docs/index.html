@@ -693,7 +693,7 @@
       </div>
       <div>
         <dt data-i18n="cmp.t3">DBLab (Postgres.ai)</dt>
-        <dd data-i18n="cmp.p3">The closest thing to this, older and more capable — it will clone 10 TiB in under two seconds. The difference is how the copy keeps up. Its physical mode <q>is not available for managed cloud Postgres services such as Amazon RDS</q>; against those it is dump/restore on a schedule. Snaplicator subscribes over logical replication, so a managed primary is followed rather than <span class="nb">re-copied</span>.</dd>
+        <dd data-i18n="cmp.p3">The OSS I took the idea from. What differs here is that Snaplicator uses logical replication to keep data and schema in sync with the dev DB in real time.</dd>
       </div>
       <div>
         <dt data-i18n="cmp.sblabel">If you run on Supabase</dt>
@@ -984,7 +984,7 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'cmp.t1':'Neon 브랜칭',
       'cmp.p1':'이미 Neon을 사용하고있다면 거기서 돌고 있다면 거기서 제공하는 브랜칭을 쓰시는게 좋습니다. 이건 Neon같은 브랜칭을 개발환경에서 쓰고싶은 사람들을 위한것입니다.',
       'cmp.t3':'DBLab (Postgres.ai)',
-      'cmp.p3':'제가 이걸 만드는데 인사이트를 얻었던 OSS입니다. 여기서 Snaplicator은 논리 복제를 이용해 primary data 및 스키마를 실시간으로 싱크한다는 것입니다.',
+      'cmp.p3':'제가 이걸 만드는데 인사이트를 얻었던 OSS입니다. 여기서 다른 점은 Snaplicator은 논리 복제를 이용해 data 및 schema를 dev db와 실시간으로 싱크한다는 점 입니다.',
       'cmp.sblabel':'Supabase를 쓰고 있다면',
       'cmp.sbnote':'거기 브랜치는 설계상 데이터 없이 시작합니다. 그 데이터가 필요하면, Supabase를 프라이머리로 그대로 두고 옆에 Snaplicator를 붙이면 됩니다. 준비할 것도 거의 없습니다. <code>wal_level</code>이 이미 <code>logical</code>이라, 다른 매니지드 서비스처럼 파라미터를 바꾸고 재시작할 일이 없기 때문입니다.',
       'cmp.c4':'우리 인프라에서',
@@ -1076,7 +1076,7 @@ _snaplicator_auto_add_&lt;pub&gt;   trigger      a new table joins the publicati
       'cmp.t1':'Neon と Supabase のブランチ',
       'cmp.p1':'どちらも優秀で、すでにそこで動いているなら、そちらのブランチ機能を使ってください。あちらのブランチは<em>そのまま</em>自分のデータです。Neon は RDS や Cloud SQL のプライマリを、ホストする代わりに論理レプリケーションで追従することもできます。その場合、2 つが変わります。データが Neon のクラウドに置かれること、そしてスキーマは自分で合わせ続ける必要があることです。公式ガイドがこう求めています。<q>the tables in the source database you are replicating from must also exist in the destination database, and they must have the same table names and columns.</q>',
       'cmp.t3':'DBLab (Postgres.ai)',
-      'cmp.p3':'この中で最も近く、歴史も長く機能も多いです。10 TiB でも 2 秒かかりません。分かれるのはコピーの鮮度の保ち方です。物理モードは <q>is not available for managed cloud Postgres services such as Amazon RDS</q> なので、マネージド相手では定期的に丸ごと取り直します。Snaplicator は論理レプリケーションで購読し、取り直さず追従します。',
+      'cmp.p3':'これを作るときにヒントをもらった OSS です。違うのは、Snaplicator が論理レプリケーションを使って data と schema を dev db とリアルタイムに同期する点です。',
       'cmp.sblabel':'Supabase を使っている場合',
       'cmp.sbnote':'あちらのブランチは設計上、データを持たずに始まります。そのデータが要るなら、Supabase をプライマリのままにして、横に Snaplicator を置けば済みます。準備もほとんど要りません。<code>wal_level</code> がすでに <code>logical</code> なので、他のマネージドサービスのようにパラメータを変えて再起動する必要がないからです。',
       'cmp.c4':'自社インフラで',
