@@ -260,6 +260,16 @@ def cmd_configure(args) -> None:
     env["POSTGRES_PASSWORD"] = (args.replica_password
                                 or prev.get("POSTGRES_PASSWORD")
                                 or secrets.token_hex(16))
+    extras: List[str] = []
+    for pair in args.set or []:
+        if "=" not in pair:
+            die(f"--set takes KEY=VALUE, got: {pair}")
+        k, v = pair.split("=", 1)
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", k):
+            die(f"--set key is not an env-style name: {k}")
+        if k not in env:
+            extras.append(k)
+        env[k] = v
 
     if not is_btrfs(args.pool) and not args.force:
         die(f"{args.pool} is not on a mounted btrfs filesystem — run "
@@ -272,7 +282,7 @@ def cmd_configure(args) -> None:
             "PRIMARY_USER", "PRIMARY_PASSWORD", "PGSSLMODE",
             "PUBLICATION_NAME", "SUBSCRIPTION_NAME", "DDL_SYNC_INTERVAL",
             "DDL_APPLY_ENABLED"]
-    body = "".join(f"{k}={env[k]}\n" for k in keys)
+    body = "".join(f"{k}={env[k]}\n" for k in keys + extras)
     if ENV_FILE.exists() and ENV_FILE.read_text() != body:
         ENV_FILE.replace(ENV_FILE.with_suffix(".env.bak"))
     ENV_FILE.write_text(body)
@@ -519,6 +529,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--replica-password",
                     help="replica superuser password (default: kept from the "
                          "existing .env, else generated)")
+    sp.add_argument("--set", action="append", metavar="KEY=VALUE",
+                    help="override or add any .env key verbatim (repeatable) — "
+                         "the escape hatch for install-specific keys the "
+                         "flags above do not cover, e.g. POSTGRES_USER=…, "
+                         "NETWORK_NAME=…, MAIN_DATA_DIR=…, FDW_HOST=…. "
+                         "Applied last, so it wins over every flag.")
     sp.add_argument("--force", action="store_true",
                     help="write the .env even if --pool is not a btrfs mount")
     sp.set_defaults(fn=cmd_configure)
