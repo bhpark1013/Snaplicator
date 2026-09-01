@@ -119,6 +119,11 @@ def notify_event(kind: str, detail: dict) -> None:
         # whose diagnostic clue is truncated defeats the point of carrying it.
         if len(summary) > 1500:
             summary = summary[:1500] + "…"
-        send(f":rotating_light: snaplicator `{kind}`\n```{summary}```", kind=kind)
+        # Several installs can subscribe to the same publisher and hit the
+        # same failure minutes apart; without the subscription name the two
+        # pages are indistinguishable and the wrong replica gets debugged.
+        from ..core.config import settings
+        who = settings.subscription_name or "unknown-subscription"
+        send(f":rotating_light: snaplicator `{kind}` · `{who}`\n```{summary}```", kind=kind)
     except Exception:
         pass
