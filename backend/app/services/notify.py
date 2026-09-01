@@ -120,10 +120,14 @@ def notify_event(kind: str, detail: dict) -> None:
         if len(summary) > 1500:
             summary = summary[:1500] + "…"
         # Several installs can subscribe to the same publisher and hit the
-        # same failure minutes apart; without the subscription name the two
-        # pages are indistinguishable and the wrong replica gets debugged.
+        # same failure minutes apart. The hostname says where to go debug —
+        # it exists even before a subscription does, and for errors that are
+        # about the machine rather than replication. The subscription says
+        # which replication identity — two installs can share one host.
         from ..core.config import settings
-        who = settings.subscription_name or "unknown-subscription"
-        send(f":rotating_light: snaplicator `{kind}` · `{who}`\n```{summary}```", kind=kind)
+        import socket
+        host = socket.gethostname() or "unknown-host"
+        sub = settings.subscription_name or "no-subscription"
+        send(f":rotating_light: snaplicator `{kind}` · `{host}` · `{sub}`\n```{summary}```", kind=kind)
     except Exception:
         pass
