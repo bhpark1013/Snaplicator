@@ -137,3 +137,35 @@ def current() -> Optional[Dict]:
             for s in _state["stages"]
         ]
         return out
+
+
+# ── deletions in flight ──────────────────────────────────────────────
+#
+# A delete is shorter than a build but long enough to watch: the container is
+# force-removed, then the subvolume. Until the second step lands the clone is
+# still in every listing, looking healthy — which is how one got deleted while
+# its own build was still anonymizing. Recording the names here lets listings
+# say "this one is going away" instead of nothing. Same reasoning as above for
+# keeping it in memory: if the process dies, so did the delete it describes.
+
+_deleting: Dict[str, float] = {}
+
+
+def delete_begin(*names: Optional[str]) -> None:
+    now = time.time()
+    with _lock:
+        for n in names:
+            if n:
+                _deleting[n] = now
+
+
+def delete_finish(*names: Optional[str]) -> None:
+    with _lock:
+        for n in names:
+            if n:
+                _deleting.pop(n, None)
+
+
+def deleting_names() -> List[str]:
+    with _lock:
+        return list(_deleting.keys())

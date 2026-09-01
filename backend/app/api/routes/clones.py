@@ -46,12 +46,16 @@ class UpdateCloneMetaBody(BaseModel):
 def get_clones():
 	try:
 		clones = list_clone_subvolumes_with_containers(settings.root_data_dir, settings.main_data_dir)
+		deleting = set(clone_progress.deleting_names())
 		if isinstance(clones, list):
 			for c in clones:
 				if isinstance(c, dict):
 					c["db_user"] = settings.postgres_user
 					c["db_password"] = settings.postgres_password
 					c["db_name"] = settings.postgres_db
+					c["deleting"] = bool(deleting) and (
+						c.get("name") in deleting or c.get("container_name") in deleting
+					)
 		return clones
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Failed to list clones: {e}")
@@ -67,6 +71,37 @@ def get_create_progress():
 	caller's own clock: the two clocks are not the same one.
 	"""
 	return clone_progress.current() or {"active": False, "stages": []}
+
+
+@router.get("/deleting")
+def get_deleting():
+	"""The clones a DELETE is still working through.
+
+	Cheap on purpose — read from memory, no docker, no filesystem — so a
+	screen can poll it every couple of seconds without adding to the load
+	that makes the full listing slow.
+	"""
+	return {"names": clone_progress.deleting_names()}
+
+
+def _delete_aliases(ident: str) -> list[str]:
+	"""The other names the same clone goes by.
+
+	A delete arrives addressed to the container
+	(snaplicator_replica-<ts>) but the listing keeps showing the subvolume
+	(replica-clone-<ts>) after the container is already gone — so the
+	in-flight record has to carry both, or the row loses its badge halfway
+	through the delete.
+	"""
+	names = [ident]
+	base_c = str(settings.container_name or "")
+	base_s = f"{settings.main_data_dir}-clone-" if settings.main_data_dir else ""
+	if base_c and base_s:
+		if ident.startswith(f"{base_c}-"):
+			names.append(base_s + ident[len(base_c) + 1:])
+		elif ident.startswith(base_s):
+			names.append(f"{base_c}-{ident[len(base_s):]}")
+	return names
 
 
 @router.post("")
@@ -352,7 +387,12 @@ def remove_clone(container_name: str = Path(..., description="Docker container n
 	try:
 		if not settings.root_data_dir:
 			raise HTTPException(status_code=400, detail="Missing ROOT_DATA_DIR")
-		res = delete_clone(settings.root_data_dir, settings.main_data_dir, container_name)
+		aliases = _delete_aliases(container_name)
+		clone_progress.delete_begin(*aliases)
+		try:
+			res = delete_clone(settings.root_data_dir, settings.main_data_dir, container_name)
+		finally:
+			clone_progress.delete_finish(*aliases)
 		return res
 	except HTTPException:
 		raise

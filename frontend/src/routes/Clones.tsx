@@ -90,6 +90,7 @@ interface CloneItem {
     db_user?: string | null
     db_password?: string | null
     db_name?: string | null
+    deleting?: boolean
 }
 
 interface CloneSnapshotOption {
@@ -272,6 +273,31 @@ export function Clones() {
 
     useEffect(() => {
         loadClones()
+        // eslint-disable-next-line react-hooks-exhaustive-deps
+    }, [])
+
+    // Deletes in flight, whoever started them — this tab, another tab,
+    // another machine. Polled from a cheap in-memory endpoint so every open
+    // screen learns a clone is going away instead of finding out from a
+    // failed action against it. When the set shrinks a delete finished, and
+    // the listing is stale by exactly one row: reload it.
+    const [deletingNames, setDeletingNames] = useState<Set<string>>(new Set())
+    useEffect(() => {
+        let prev = 0
+        const poll = window.setInterval(async () => {
+            try {
+                const r = await fetch(`${base}/clones/deleting`)
+                if (!r.ok) return
+                const d = await r.json()
+                const names = new Set<string>((d?.names as string[]) || [])
+                setDeletingNames(names)
+                if (names.size < prev) loadClones()
+                prev = names.size
+            } catch {
+                /* the badge is decoration; its failure is not the listing's */
+            }
+        }, 2000)
+        return () => window.clearInterval(poll)
         // eslint-disable-next-line react-hooks-exhaustive-deps
     }, [])
 
@@ -461,6 +487,9 @@ export function Clones() {
         const targetName = c.container_name || c.name
         const isFav = favorites.has(c.name)
         const running = c.has_container && c.is_running
+        const isDeleting = !!c.deleting
+            || deletingNames.has(c.name)
+            || (!!c.container_name && deletingNames.has(c.container_name))
         const goDetail = () => navigate(`/clones/${encodeURIComponent(targetName)}`)
         return (
             <li
@@ -477,6 +506,7 @@ export function Clones() {
                 className={cn(
                     'flex cursor-pointer items-center gap-3 rounded-md border bg-secondary px-3.5 py-2.5 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                     isFav ? 'border-warning/35' : 'border-border hover:border-border-strong',
+                    isDeleting && 'opacity-60',
                 )}
             >
                 <button
@@ -499,6 +529,12 @@ export function Clones() {
                         <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
                             {c.display_name?.trim() || c.description?.trim() ? cloneLabel(c) : <span className="text-muted-foreground">{cloneLabel(c)}</span>}
                         </span>
+                        {isDeleting && (
+                            <span className="flex flex-none items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-[11px] font-medium text-destructive">
+                                <Loader2 className="size-3 animate-spin" />
+                                Deleting…
+                            </span>
+                        )}
                     </div>
                     <div className="flex min-w-0 items-center gap-1.5">
                         <code className="min-w-0 truncate font-mono text-[12px] text-muted-foreground">{buildConnUrl(c, true)}</code>
@@ -515,20 +551,20 @@ export function Clones() {
                 <div className="ml-auto flex flex-none gap-2">
                     <Button
                         onClick={(e) => { e.stopPropagation(); openSnapshot(c) }}
-                        disabled={!c.has_container}
-                        title={c.has_container ? 'Create a snapshot from this clone' : 'No container to snapshot.'}
+                        disabled={!c.has_container || isDeleting}
+                        title={isDeleting ? 'This clone is being deleted.' : c.has_container ? 'Create a snapshot from this clone' : 'No container to snapshot.'}
                     >
                         Snapshot
                     </Button>
                     <Button
                         onClick={(e) => { e.stopPropagation(); onRefreshClone(c) }}
-                        disabled={refreshingClone === targetName || !c.has_container}
-                        title={c.has_container ? 'Replace the container data with the latest from main' : 'No container to refresh.'}
+                        disabled={refreshingClone === targetName || !c.has_container || isDeleting}
+                        title={isDeleting ? 'This clone is being deleted.' : c.has_container ? 'Replace the container data with the latest from main' : 'No container to refresh.'}
                     >
                         {refreshingClone === targetName ? 'Refreshing...' : 'Refresh'}
                     </Button>
-                    <Button variant="destructive" onClick={(e) => { e.stopPropagation(); onDelete(c) }} disabled={deletingBusy}>
-                        Delete
+                    <Button variant="destructive" onClick={(e) => { e.stopPropagation(); onDelete(c) }} disabled={deletingBusy || isDeleting}>
+                        {isDeleting ? 'Deleting…' : 'Delete'}
                     </Button>
                 </div>
             </li>
