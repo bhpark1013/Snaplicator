@@ -24,7 +24,7 @@ _ACTION_LABEL = {
 
 
 def render(plan: Dict[str, Any], payload_source: str,
-           required_source: str = "room for snapshots and clones, payload × 1.5") -> str:
+           required_source: str = "recommended: room for snapshots and clones, payload × 2") -> str:
     lines = []
     lines.append("snaplicator init plan (read-only — nothing was changed)")
     lines.append(
@@ -40,8 +40,15 @@ def render(plan: Dict[str, Any], payload_source: str,
     )
     lines.append("")
     lines.append("candidates (ranked):")
+    any_tight = False
     for c in plan["candidates"]:
-        mark = "✓" if c["fits"] else "✗"
+        if c["fits"] and c.get("comfortable", True):
+            mark = "✓"
+        elif c["fits"]:
+            mark = "△"
+            any_tight = True
+        else:
+            mark = "✗"
         fs = c["fstype"] or "no filesystem"
         lines.append(
             f"  {mark} [{c['priority']}] {c['target']:<24} {fs:<8} "
@@ -49,6 +56,11 @@ def render(plan: Dict[str, Any], payload_source: str,
         )
     if not plan["candidates"]:
         lines.append("  (none discovered)")
+    if any_tight:
+        lines.append(
+            "  △ = holds the data but under the recommended ×2 headroom —"
+            " selectable, not recommended"
+        )
     lines.append("")
 
     chosen = plan["chosen"]

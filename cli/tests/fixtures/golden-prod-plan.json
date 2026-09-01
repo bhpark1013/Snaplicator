@@ -1,8 +1,8 @@
 {
   "version": 1,
   "payload_bytes": 83751862272,
-  "required_bytes": 125627793408,
-  "minimum_bytes": 92127048499,
+  "required_bytes": 167503724544,
+  "minimum_bytes": 83751862272,
   "warnings": [],
   "data_dir": null,
   "candidates": [

@@ -1127,10 +1127,10 @@ pay = p["payload_bytes"]
 mini = p.get("minimum_bytes") or req
 hdr = "[snaplicator] pool size needed: " + human(mini)
 if pay:
-    hdr += "  (the data; " + human(req) + " would leave room for snapshots and clones)"
+    hdr += "  (the data itself; " + human(req) + " recommended, for snapshot/clone room)"
 print(hdr, file=sys.stderr)
 if fit:
-    print("[snaplicator] locations with that much room:", file=sys.stderr)
+    print("[snaplicator] locations that can hold the data:", file=sys.stderr)
 for i, c in enumerate(fit, 1):
     target = c["target"]
     if c["priority"] == 3:
@@ -1146,13 +1146,18 @@ for i, c in enumerate(fit, 1):
             how = "loopback file on " + str(c["fstype"]) + " (slight I/O overhead)"
         desc = pool + " (" + str(free) + " GiB free) — " + how
         arg = "datadir:" + pool
+    # Under the ×2 recommendation but above the payload: offered, labelled,
+    # never the default. The pool holds no quota, so this is a forecast the
+    # user may overrule — refusing outright turned a judgement into a gate.
+    if not c.get("comfortable", True):
+        desc += "  — tight: holds the data, little room for snapshots/clones"
     mark = "   [recommended]" if i == rec else ""
     print(str(i) + "|" + arg)
     print("  " + str(i) + ". " + desc + mark, file=sys.stderr)
 for c in p["candidates"]:
     if not c["fits"]:
         print("  ✗  " + c["target"] + " — only " + human(c["avail_bytes"])
-              + " free (< " + human(mini) + " needed)", file=sys.stderr)
+              + " free (< " + human(mini) + " needed for the data)", file=sys.stderr)
 if fit:
     print("REC|" + str(rec))
 ' "$PLAN_JSON")

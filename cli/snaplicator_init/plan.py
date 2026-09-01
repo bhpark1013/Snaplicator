@@ -16,11 +16,11 @@ from typing import Any, Dict, List, Optional
 
 GiB = 1024 ** 3
 FLOOR_BYTES = 10 * GiB
-PAYLOAD_MULTIPLIER = 1.5
-# Enough for the copy itself plus the slack a live postgres wants. Below this
-# the pool cannot hold the data at all; above it, whether there is room to
-# work is a judgement rather than a fact.
-MINIMUM_MULTIPLIER = 1.1
+PAYLOAD_MULTIPLIER = 2.0
+# The copy itself. Below this the pool cannot hold the data at all; above it,
+# whether there is room to work is a judgement rather than a fact — so ×1 is
+# the only refusal, and everything past it is a recommendation.
+MINIMUM_MULTIPLIER = 1.0
 
 # Filesystems whose free space can host a loopback file (priority 2) or,
 # for btrfs, a subvolume (priority 1). Everything else — pseudo filesystems
@@ -33,7 +33,7 @@ EXCLUDED_TARGET_PREFIXES = ("/boot", "/snap")
 
 
 def required_bytes(payload_bytes: int) -> int:
-    """Room to work in: payload × 1.5, floor 10 GiB.
+    """Room to work in: payload × 2, floor 10 GiB — the recommendation mark.
 
     Empirical grounding (prod, 2026-07): a 78 GiB payload grew to ~280 GiB
     of pool usage over months of snapshot/clone retention (~3.6×). No
@@ -47,13 +47,15 @@ def required_bytes(payload_bytes: int) -> int:
     ordinary path it creates a btrfs subvolume, which shares the filesystem's
     free space and holds no quota. Refusing to create it because the disk
     might fill in six months stops an install that would work today, and the
-    thing being predicted is already watched at runtime.
+    thing being predicted is already watched at runtime. So a candidate under
+    this mark is still offered — ranked and labelled as tight — and only one
+    that cannot hold the payload itself is refused.
     """
     return max(int(PAYLOAD_MULTIPLIER * int(payload_bytes)), FLOOR_BYTES)
 
 
 def minimum_bytes(payload_bytes: int) -> int:
-    """Room for the data itself: payload × 1.1, floor 10 GiB.
+    """Room for the data itself: the payload, floor 10 GiB.
 
     Below this the copy cannot land, which is a fact about the disk and the
     only thing worth refusing over.
@@ -179,10 +181,14 @@ def bare_disk_candidates(lsblk_raw: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _rank_key(candidate: Dict[str, Any]):
+    # comfortable candidates (≥ payload × 2) outrank tight ones regardless of
+    # priority — the recommendation should be the pool with working room, and
+    # a tight candidate is an offer, not an endorsement. Within each band:
     # priority ascending; the root filesystem ranks last within its priority
     # (filling the OS filesystem endangers the whole machine); then larger
     # free space first.
     return (
+        0 if candidate.get("comfortable") else 1,
         candidate["priority"],
         1 if candidate["target"] == "/" else 0,
         -candidate["avail_bytes"],

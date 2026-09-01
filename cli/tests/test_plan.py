@@ -75,7 +75,7 @@ EMPTY_LSBLK = {"blockdevices": []}
 # ── requirement formula ───────────────────────────────────────────────
 
 def test_required_is_twice_payload():
-    assert required_bytes(100 * GiB) == 150 * GiB
+    assert required_bytes(100 * GiB) == 200 * GiB
 
 
 def test_required_floor_10gib():
@@ -325,26 +325,41 @@ def test_data_dir_too_small_needs_force():
 
 
 def test_minimum_is_the_data_itself():
-    assert minimum_bytes(100 * GiB) == 110 * GiB
+    assert minimum_bytes(100 * GiB) == 100 * GiB
     assert minimum_bytes(1 * GiB) == 10 * GiB      # floor wins
     assert minimum_bytes(0) == 10 * GiB
 
 
 def test_the_case_that_used_to_refuse():
-    """344 GiB of payload, 594 GiB free — the run this rule was changed for.
+    """458 GiB of payload, 463 GiB free — the run this rule was changed for.
 
     Provisioning reserves nothing: the pool is a subvolume sharing the
     filesystem's free space, with no quota. Refusing here stopped an install
     that works today over a forecast about months from now, which is watched
-    at runtime anyway.
+    at runtime anyway. Holds the data → selectable; under ×2 → said, not
+    enforced.
     """
-    fm = findmnt_of(fs_entry("/", "/dev/sda1", "btrfs", avail=594 * GiB))
-    plan = make_plan(fm, EMPTY_LSBLK, payload_bytes=344 * GiB)
+    fm = findmnt_of(fs_entry("/", "/dev/sda1", "btrfs", avail=463 * GiB))
+    plan = make_plan(fm, EMPTY_LSBLK, payload_bytes=458 * GiB)
 
     assert plan["status"] == "ok"
     assert plan["chosen"]["target"] == "/"
-    assert plan["chosen"]["comfortable"] is True, "594 clears 344 × 1.5"
-    assert plan["warnings"] == []
+    assert plan["chosen"]["comfortable"] is False, "463 is under 458 × 2"
+    assert len(plan["warnings"]) == 1
+
+
+def test_comfortable_outranks_tight_regardless_of_priority():
+    """The recommendation is the pool with working room: a loopback home
+    clearing ×2 beats a btrfs mount that only just holds the data."""
+    fm = findmnt_of(
+        fs_entry("/", "/dev/sda1", "ext4", avail=900 * GiB),
+        fs_entry("/tight-pool", "/dev/sdb1", "btrfs", avail=110 * GiB),
+    )
+    plan = make_plan(fm, EMPTY_LSBLK, payload_bytes=100 * GiB)
+    assert plan["chosen"]["target"] == "/"          # comfortable band first
+    tight = [c for c in plan["candidates"] if c["target"] == "/tight-pool"][0]
+    assert tight["fits"] is True                    # still offered
+    assert tight["comfortable"] is False
 
 
 def test_room_for_the_data_but_not_for_growth_still_installs():
