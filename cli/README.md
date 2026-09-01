@@ -1,3 +1,30 @@
+# snaplicator-install (the whole install, one stage at a time)
+
+`deploy/install.sh` runs the install in one breath and asks its questions at
+a terminal. `snaplicator_install` is the same install with each stage as its
+own command — for driving it from a script or an agent, stopping at every
+human decision. Stages carry the installer's numbering, every command
+re-checks its precondition (nothing runs out of order), and `status` names
+the next command from any state.
+
+```sh
+cd cli
+python3 -m snaplicator_install status            # where am I? what's next?
+python3 -m snaplicator_install prereqs           # 1  tooling check (read-only)
+python3 -m snaplicator_install plan "postgres://…"          # 2  pool survey (read-only)
+sudo python3 -m snaplicator_install provision "postgres://…" --data-dir /data/snaplicator   # 3
+python3 -m snaplicator_install publication "postgres://…" --name my_pub     # 4
+python3 -m snaplicator_install configure --connstr "postgres://…" \
+    --pool /data/snaplicator --publication my_pub --subscription my_sub     # 5
+python3 -m snaplicator_install up                # 6  build + start, wait healthy
+python3 -m snaplicator_install bootstrap         # 7  initial copy (watches to the end)
+```
+
+Flags whose help begins with **DECISION** encode choices a person makes
+(pool location, publication/table set, unique subscription name, ports,
+capacity overrides); everything else defaults safely. `--help` on each
+command states what it changes and what it refuses without.
+
 # snaplicator-init (stages 1–2: plan & provision)
 
 Surveys a Linux host, plans where the Snaplicator btrfs pool should live,
@@ -43,9 +70,17 @@ or a step failed.
 | 2 | free space inside a real local fs (ext4/xfs/btrfs) | loopback file + `mkfs.btrfs` |
 | 3 | bare block device (no partitions, no fs signature, unmounted) | format — **never automatic**; requires explicit `--format-disk DEV` |
 
-Requirement: `max(payload × 2, 10 GiB)` — grounded on prod telemetry
-(78 GiB payload → ~280 GiB pool after months of snapshot/clone retention).
-`--pool-bytes` overrides the formula outright.
+Two marks, not one gate:
+
+- **floor** `max(payload, 10 GiB)` — below this the copy cannot land; the
+  candidate is refused (✗).
+- **recommended** `payload × 2` — grounded on prod telemetry (78 GiB payload
+  → ~280 GiB pool after months of snapshot/clone retention). A candidate
+  between the marks is offered but labelled tight (△): it holds the data,
+  and how much working room to keep is the human's call, not the planner's.
+  Comfortable candidates outrank tight ones in the recommendation.
+
+`--pool-bytes` overrides both marks outright.
 
 ## Execution model
 
