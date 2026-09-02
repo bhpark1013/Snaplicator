@@ -10,7 +10,7 @@
 <h1 align="center">Snaplicator</h1>
 
 <p align="center">
-  <b>Best dev DB for agents</b> — a test database cloned straight from your
+  <b>Best dev DB for agents</b> — a Postgres test DB cloned straight from your
   production. No seeding. No dumps.
 </p>
 

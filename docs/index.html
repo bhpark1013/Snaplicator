@@ -3,13 +3,37 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Snaplicator — a test database your agent is allowed to break</title>
-<meta name="description" content="Snaplicator keeps one Postgres replica following your primary and hands out disposable, copy-on-write clones — a real test database your AI agent is allowed to break and reset in seconds.">
+<title>Snaplicator — Postgres test DB cloned from production for AI agents</title>
+<meta name="description" content="Snaplicator is a Postgres test DB cloned straight from your production: one replica follows your primary in real time and hands out disposable, copy-on-write clones — a test database your AI agent is allowed to break and reset in seconds. No seeding, no dumps.">
+<link rel="canonical" href="https://bhpark1013.github.io/Snaplicator/">
 <meta name="color-scheme" content="light dark">
-<meta property="og:title" content="Snaplicator — a test database your agent is allowed to break">
+<meta property="og:title" content="Snaplicator — Postgres test DB cloned from production for AI agents">
+<meta property="og:url" content="https://bhpark1013.github.io/Snaplicator/">
+<meta property="og:site_name" content="Snaplicator">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Snaplicator — Postgres test DB cloned from production for AI agents">
+<meta name="twitter:description" content="A Postgres test DB cloned from your production. Real-time replication, copy-on-write clones, snapshots. No seeding, no dumps.">
 <meta property="og:description" content="Production-shaped Postgres for AI agents. Clones take seconds and almost no disk; reset to a snapshot when the agent breaks it.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23157f5a'/><g transform='translate(4 4)' fill='none' stroke='%23f6f5f2' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'><ellipse cx='12' cy='5' rx='9' ry='3'/><path d='M3 12a9 3 0 0 0 5 2.69'/><path d='M21 9.3V5'/><path d='M3 5v14a9 3 0 0 0 6.47 2.88'/><path d='M12 12v4h4'/><path d='M13 20a5 5 0 0 0 9-3 4.5 4.5 0 0 0-4.5-4.5c-1.33 0-2.54.54-3.41 1.41L12 16'/></g></svg>">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Snaplicator",
+  "url": "https://bhpark1013.github.io/Snaplicator/",
+  "description": "A Postgres test DB cloned straight from your production. Real-time logical replication of rows and schema, copy-on-write clones and snapshots, built for AI agents and humans. No seeding, no dumps.",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux, macOS",
+  "softwareHelp": "https://bhpark1013.github.io/Snaplicator/#guide",
+  "downloadUrl": "https://github.com/bhpark1013/Snaplicator",
+  "license": "https://opensource.org/licenses/MIT",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "bhpark1013", "url": "https://github.com/bhpark1013" },
+  "keywords": "postgres test db, postgres test database, database branching, copy-on-write clone, logical replication, dev database for AI agents"
+}
+</script>
 <style>
   /* Hallmark · macrostructure: Workbench · nav: N8 terminal-command · footer: Ft2 inline
    * genre: modern-minimal · theme: custom (warm paper 45°, accents 159-168°)
@@ -535,7 +559,7 @@
   <!-- ═══════════════ OVERVIEW ═══════════════ -->
   <section id="overview">
     <p class="kicker" data-i18n="hero.eyebrow">Best dev DB for agents</p>
-    <h1><span data-i18n="hero.title">A test database cloned straight from your production.</span>
+    <h1><span data-i18n="hero.title">A Postgres test DB cloned straight from your production.</span>
       <span data-i18n="hero.title2">No seeding. No dumps.</span></h1>
 
     <div class="tabs">
@@ -712,6 +736,26 @@
       <a href="https://supabase.com/docs/guides/database/postgres/setup-replication-external">Supabase: replicate to another Postgres</a>
     </p>
     </div>
+
+    <h2 id="faq" style="margin-top:var(--gap)" data-i18n="faq.title">Questions people ask</h2>
+    <dl class="alts">
+      <div>
+        <dt data-i18n="faq.q1">How do I get a Postgres test DB with real production data?</dt>
+        <dd data-i18n="faq.a1">Point Snaplicator at your primary. It keeps one logical replica following production, rows and schema alike, and every clone you take from it is a Postgres test DB with today&rsquo;s data in it — not a seed script&rsquo;s idea of it. Columns you must not expose are scrubbed by <code>anonymize.sql</code> before a clone is handed out.</dd>
+      </div>
+      <div>
+        <dt data-i18n="faq.q2">Is this a Postgres test DB for AI agents, or for people?</dt>
+        <dd data-i18n="faq.a2">Both. An agent gets a clone through MCP, breaks it, and resets it to a snapshot; a person gets the same clone through <code>psql</code> or their app&rsquo;s connection string. The clone is a plain Postgres on its own port, so nothing about your tooling changes.</dd>
+      </div>
+      <div>
+        <dt data-i18n="faq.q3">How is a clone different from a test database I seed myself?</dt>
+        <dd data-i18n="faq.a3">A seeded test database is as good as the seed, and drifts the moment production changes. A Snaplicator clone is copy-on-write on top of a replica that is seconds behind production: it takes seconds to create, almost no disk, and a snapshot brings it back to a known state after each run — the same data for every test, every time.</dd>
+      </div>
+      <div>
+        <dt data-i18n="faq.q4">Does it need Neon, Aurora, or a cloud vendor?</dt>
+        <dd data-i18n="faq.a4">No. Snaplicator is self-hosted and runs beside whatever you already have — RDS, Azure Database for PostgreSQL, Cloud SQL, Supabase, or a box of your own. Production stays where it is; only the replica and its clones live on the Snaplicator host.</dd>
+      </div>
+    </dl>
   </section>
 
   <!-- ═══════════════ GUIDE ═══════════════ -->
