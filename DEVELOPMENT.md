@@ -122,7 +122,7 @@ Safety properties (all covered by tests in `backend/tests/`):
 
 - **Capture guards** — `_snaplicator_*` objects are never captured (recursion), DCL and publication/subscription DDL are filtered (publisher-only concepts), one log row per `(txid, query)` (dedupe).
 - **Watermark** — the subscriber skips log rows with `id <=` the install-time watermark, so clone artifacts and re-subscriptions never re-execute history. The mark is taken *after* capture is installed and *before* the schema clone, which is what makes it mean "the clone starts here".
-- **Catch-up for copied rows** — a subscription's first pass over a table is `COPY`, and row triggers do not see `COPY`. The log table is a table like any other, so whatever it held when its copy ran arrives present, above the watermark, and unexecuted. Once every table has finished syncing, the loop runs those rows in id order under the same rules as the trigger. Nothing runs twice: both paths claim the row in `_snaplicator_ddl_applied` first.
+- **Catch-up for unapplied rows** — log rows can already be present when the apply trigger is installed or re-enabled. Once every table has finished syncing, the loop finds rows above the watermark that have not been applied and runs them in id order under the same rules as the trigger. Nothing runs twice: both paths claim the row in `_snaplicator_ddl_applied` first. PostgreSQL's initial `COPY` does fire enabled replica row triggers; copying alone does not bypass them.
 - **One auto-add trigger per publication** — capture is two shared triggers that name no publication (so every install writes them identically) plus `_snaplicator_auto_add_<publication>`, which does the `ALTER PUBLICATION ... ADD TABLE` for new tables and is scoped to what that publication covers. That split is what lets two installs share a primary: a fixed name meant the last one to start owned it, and the other's new tables quietly stopped being added.
 - **Failures are loud, never fatal, never retried** — a DDL that cannot apply (e.g. subscriber-local drift) is recorded in `_snaplicator_ddl_failures` (with `search_path` for manual replay) and the stream keeps flowing; the apply trigger never re-raises, because a re-raise would crash-loop the apply worker. Resolution is a human decision.
 - **`CONCURRENTLY` is deferred** — `CREATE INDEX CONCURRENTLY` cannot run inside the apply transaction, so it is queued in `_snaplicator_ddl_deferred` for one-shot out-of-band execution.
@@ -156,6 +156,63 @@ its own schema — including that the first install still auto-adds after the
 second was installed, which is exactly what used to break.
 
 ---
+
+## Replica INSERT conflicts
+
+By default, a duplicate key stops native logical replication. For a cache
+table where the publisher should overwrite a subscriber-local row, opt in
+by naming the table and its business-key UNIQUE constraint in the manager's
+environment:
+
+```dotenv
+REPLICA_UPSERT_TABLES='{"public.look_insight_snapshot":"look_insight_snapshot_look_id_unique"}'
+```
+
+The sync loop installs a persistent `ENABLE REPLICA BEFORE INSERT` trigger
+on each selected table. When an incoming INSERT matches that key, the trigger
+updates the existing row with **all publisher columns, including the primary
+key**, instead of inserting a duplicate. Later replicated UPDATE and DELETE
+messages can therefore find that row by its publisher identity. Local changes
+to a matching row are overwritten when the publisher's INSERT arrives.
+
+Normal app UPSERTs, including those in clones, retain PostgreSQL's usual
+behavior: the trigger is inactive in normal application sessions. Generated
+columns are recalculated by PostgreSQL. New columns are included immediately,
+without waiting for the sync loop to regenerate a column list.
+The handler also resolves matching rows during PostgreSQL 15's initial table
+copy when installed before that copy starts.
+
+The trigger survives database restarts. The loop reinstalls it if the table
+or trigger is recreated. Removing a table from the setting removes its
+trigger on the next cycle; rows already applied are not reverted. The loop
+requires `DDL_SYNC_INTERVAL > 0`. To apply the configuration immediately with
+the same settings as the manager:
+
+```bash
+cd backend
+.venv/bin/python scripts/replica_upsert.py
+```
+
+For an existing stopped subscription, install the handler before enabling
+the subscription. An enabled, retrying subscription retries automatically;
+do not skip its failed transaction. Validate source/subscriber row equality,
+forward progress of `pg_replication_origin_status.remote_lsn`, and stable
+`pg_stat_subscription_stats.apply_error_count` after recovery.
+
+Limits:
+
+- Only explicitly selected INSERT conflicts are repaired. An UPDATE for an
+  already-missing publisher primary key cannot be repaired by an INSERT trigger.
+- The key must be NOT NULL and non-deferrable. The table must have a primary
+  key and cannot be partitioned, inherited, or referenced by foreign keys:
+  replacing identities in those tables needs a separate consistency policy.
+- A conflict with another unique key still stops replication. No unrelated
+  rows or transactions are discarded, and repairs roll back with the transaction.
+- A local insert racing with replication can cause a transient duplicate;
+  the normal subscription retry resolves it. `disable_on_error=true` still
+  requires manually re-enabling the subscription after such an error.
+- This policy does not make two databases independent writable masters.
+  Avoid local deletes or primary-key changes to rows that the publisher owns.
 
 ## Clones
 

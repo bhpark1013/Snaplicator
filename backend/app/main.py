@@ -25,6 +25,7 @@ from .services import bootstrap as bootstrap_svc
 from .services import policy as policy_svc
 from .services import publication as publication_svc
 from .services import usage as usage_svc
+from .services.replica_upsert import ensure_replica_upserts
 from . import mcp_server
 from .services.replication import (
     auto_sync_new_tables,
@@ -105,6 +106,19 @@ async def ddl_sync_loop():
             db = settings.postgres_db
 
             if connstr and pub_name and sub_name and container and user and db:
+                # Subscriber-only, opt-in conflict policies. Install before
+                # connecting new tables; restore handlers after table recreation.
+                try:
+                    upserts = await asyncio.to_thread(
+                        ensure_replica_upserts, container, user, password, db,
+                        settings.replica_upsert_tables,
+                    )
+                    if any(upserts.values()):
+                        sync_log.record("replica_upsert", upserts)
+                        logger.info("Replica upsert policies: %s", upserts)
+                except Exception:
+                    logger.warning("Replica upsert policy reconciliation failed")
+
                 # Safety net: DDL capture triggers must exist on the publisher —
                 # a gap in capture is an unrecoverable hole in the DDL log.
                 try:
@@ -204,9 +218,8 @@ async def ddl_sync_loop():
                             logger.info(f"DDL apply enabled: {res}")
                             sync_log.record("ddl_apply_enabled", res)
 
-                        # Rows the trigger never saw, because they arrived
-                        # in the table's initial copy rather than one at a
-                        # time. Runs after enable, so the watermark and the
+                        # Rows already present when the trigger was installed
+                        # or re-enabled. Runs after enable, so the watermark and the
                         # dedupe set it seeds are already in place.
                         caught = await asyncio.to_thread(
                             catch_up_unapplied_ddl, container, user, password, db,
