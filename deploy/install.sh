@@ -42,6 +42,43 @@ info() { printf '\033[1;32m[snaplicator]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[snaplicator] WARNING:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[snaplicator] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Canonicalize the opt-in table map before it is written to .env. Single
+# quotes are understood by shell, dotenv and Docker Compose and keep JSON's
+# double quotes intact. Encode an apostrophe as JSON unicode so it cannot end
+# the outer quotes while preserving the decoded table/constraint name.
+env_json_mapping() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+value = sys.argv[1]
+if len(value) >= 2 and value[0] == value[-1] == "'":
+    value = value[1:-1]
+try:
+    parsed = json.loads(value)
+except (TypeError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"REPLICA_UPSERT_TABLES must be a JSON object: {exc}")
+if not isinstance(parsed, dict) or not all(
+        isinstance(key, str) and isinstance(item, str)
+        for key, item in parsed.items()):
+    raise SystemExit(
+        "REPLICA_UPSERT_TABLES must map table names to constraint names")
+print(json.dumps(parsed, separators=(",", ":"), ensure_ascii=True).replace(
+    "'", r"\u0027"))
+PY
+}
+
+configure_replica_upsert_tables() {
+  local env_file=$1 previous
+  if [ -z "$REPLICA_UPSERT_TABLES_SET" ] && [ -f "$env_file" ]; then
+    previous=$(sed -n 's/^REPLICA_UPSERT_TABLES=//p' "$env_file" | tail -1)
+    [ -z "$previous" ] || REPLICA_UPSERT_TABLES=$previous
+  fi
+  [ -n "${REPLICA_UPSERT_TABLES:-}" ] || REPLICA_UPSERT_TABLES='{}'
+  REPLICA_UPSERT_TABLES=$(env_json_mapping "$REPLICA_UPSERT_TABLES") \
+    || die "invalid REPLICA_UPSERT_TABLES"
+}
+
 # Written by the run that does the installing, read by the one that handed off
 # to it. /tmp rather than the install directory: which install directory is
 # precisely what the reader does not know yet.
@@ -552,6 +589,11 @@ for a in "$@"; do
     *) CONNSTR="$a" ;;
   esac
 done
+if [ "${REPLICA_UPSERT_TABLES_EXPLICIT+present}" = "present" ]; then
+  REPLICA_UPSERT_TABLES_SET=$REPLICA_UPSERT_TABLES_EXPLICIT
+else
+  REPLICA_UPSERT_TABLES_SET=${REPLICA_UPSERT_TABLES+x}
+fi
 
 # What the caller pinned, recorded before the defaults below fill the rest
 # in — after that the two are indistinguishable. A second install picks its
@@ -700,7 +742,10 @@ if [ "$(uname -s)" = "Darwin" ]; then
   FWD=""
   if [ "$DEMO" = "1" ]; then FWD="--demo"; fi
   for a in "$@"; do
-    case "$a" in [A-Za-z_]*=*) FWD="$FWD $a" ;; esac
+    case "$a" in
+      REPLICA_UPSERT_TABLES=*) ;;
+      [A-Za-z_]*=*) FWD="$FWD $a" ;;
+    esac
   done
 
   # The terminal has to be handed over explicitly. Under `curl | bash` this
@@ -768,7 +813,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "$TTY_SAVED" ]; then
       trap 'stty "$TTY_SAVED" < /dev/tty 2>/dev/null || true' EXIT INT TERM
     fi
-    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" NEW_INSTALL="$NEW_INSTALL" REPOINT="$REPOINT" bash -c "$FAR_CMD" < /dev/tty || RC=$?
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" NEW_INSTALL="$NEW_INSTALL" REPOINT="$REPOINT" REPLICA_UPSERT_TABLES="${REPLICA_UPSERT_TABLES-}" REPLICA_UPSERT_TABLES_EXPLICIT="$REPLICA_UPSERT_TABLES_SET" bash -c "$FAR_CMD" < /dev/tty || RC=$?
     if [ -n "$TTY_SAVED" ]; then
       stty "$TTY_SAVED" < /dev/tty 2>/dev/null || true
       trap - EXIT INT TERM
@@ -776,7 +821,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
   else
     # No terminal here means orb allocates none there either, so the far side
     # sees no /dev/tty and takes its own recommendation.
-    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" NEW_INSTALL="$NEW_INSTALL" REPOINT="$REPOINT" bash -c "$FAR_CMD" < /dev/null || RC=$?
+    orb -m "$MACHINE" -u root env CONNSTR="$CONNSTR" REUSE_EXISTING="$REUSE_EXISTING" NEW_INSTALL="$NEW_INSTALL" REPOINT="$REPOINT" REPLICA_UPSERT_TABLES="${REPLICA_UPSERT_TABLES-}" REPLICA_UPSERT_TABLES_EXPLICIT="$REPLICA_UPSERT_TABLES_SET" bash -c "$FAR_CMD" < /dev/null || RC=$?
   fi
   if [ "$RC" != "0" ]; then
     echo >&2
@@ -1278,6 +1323,7 @@ fi
 
 # ── 6. management plane ──────────────────────────────────────────────
 ENV_FILE="$SNAP_HOME/deploy/.env"
+configure_replica_upsert_tables "$ENV_FILE"
 # One backup, and only when there is something to back up. A timestamped copy
 # per run left a growing pile inside the checkout — of files nobody reads,
 # holding passwords, in a directory this script also asks git about.
@@ -1308,6 +1354,7 @@ PUBLICATION_NAME=$PUBLICATION_NAME
 SUBSCRIPTION_NAME=$SUBSCRIPTION_NAME
 DDL_SYNC_INTERVAL=$DDL_SYNC_INTERVAL
 DDL_APPLY_ENABLED=$DDL_APPLY_ENABLED
+REPLICA_UPSERT_TABLES='$REPLICA_UPSERT_TABLES'
 EOF
 if [ -f "$ENV_FILE" ] && cmp -s "$ENV_FILE" "$ENV_FILE.new"; then
   rm -f "$ENV_FILE.new"
