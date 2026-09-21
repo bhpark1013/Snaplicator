@@ -978,6 +978,48 @@ def reset_clone_to_snapshot(
     }
 
 
+class ClonePortInUse(RuntimeError):
+    """A stopped clone cannot take its published port back.
+
+    While a clone is down its port is just a free number, so the next clone
+    created can be given it. Starting the old one then fails at the docker
+    daemon, and the only way out is a different port — which is a decision,
+    not a retry, so it is raised as its own type for the API to report.
+    """
+
+    def __init__(self, port: int, suggested_port: int, held_by: Optional[str] = None):
+        held = f" (held by {held_by})" if held_by else ""
+        super().__init__(f"Port {port} is already in use{held}")
+        self.port = port
+        self.suggested_port = suggested_port
+        self.held_by = held_by
+
+
+def _configured_host_port(container_name: str) -> Optional[int]:
+    ins = subprocess.run(
+        ["docker", "inspect", "-f", "{{json .HostConfig.PortBindings}}", container_name],
+        capture_output=True, text=True,
+    )
+    if ins.returncode != 0:
+        return None
+    try:
+        bindings = json.loads(ins.stdout.strip() or "{}") or {}
+        return int(bindings["5432/tcp"][0]["HostPort"])
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
+def _container_publishing_port(port: int) -> Optional[str]:
+    out = subprocess.run(
+        ["docker", "ps", "--filter", f"publish={port}", "--format", "{{.Names}}"],
+        capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        return None
+    names = [n for n in out.stdout.split() if n]
+    return names[0] if names else None
+
+
 def restart_clone_container(
     container_name: str,
     postgres_user: str,
@@ -1002,6 +1044,14 @@ def restart_clone_container(
     proc = subprocess.run(["docker", action, container_name], capture_output=True, text=True)
     if proc.returncode != 0:
         message = (proc.stderr or proc.stdout or "").strip()
+        if "already allocated" in message or "address already in use" in message:
+            port = _configured_host_port(container_name)
+            if port is not None:
+                raise ClonePortInUse(
+                    port,
+                    _find_free_port(port + 1),
+                    _container_publishing_port(port),
+                )
         raise RuntimeError(message or f"docker {action} {container_name} failed")
 
     ready = False
@@ -1021,6 +1071,74 @@ def restart_clone_container(
         "was_running": was_running,
         "running": True,
         "ready": ready,
+    }
+
+
+def start_clone_on_port(
+    container_name: str,
+    opts: CloneOptions,
+    host_port: int,
+    wait_seconds: int = 60,
+) -> Dict:
+    """Publish an existing clone on a different host port.
+
+    Docker cannot rebind a container's published port, so the container is
+    recreated over the same subvolume. The data is already anonymized — this
+    is the same clone, only reachable elsewhere — so masking is not re-run.
+    """
+    if is_port_in_use(host_port):
+        raise ClonePortInUse(host_port, _find_free_port(host_port + 1), _container_publishing_port(host_port))
+
+    ins = subprocess.run(
+        ["docker", "inspect", "-f", "{{json .Mounts}}", container_name],
+        capture_output=True, text=True,
+    )
+    if ins.returncode != 0:
+        raise FileNotFoundError(f"No container named {container_name}")
+    clone_path: Optional[Path] = None
+    try:
+        for m in json.loads(ins.stdout.strip() or "[]"):
+            if str(m.get("Destination", "")).startswith("/var/lib/postgresql/data") and m.get("Source"):
+                clone_path = Path(m["Source"])
+                break
+    except json.JSONDecodeError:
+        clone_path = None
+    if clone_path is None:
+        raise RuntimeError(f"Could not determine clone subvolume path for container {container_name}")
+
+    meta = read_snaplicator_metadata(clone_path) or {}
+    description = meta.get("description") if isinstance(meta, dict) else None
+
+    new_port, container_pgdata, _anon_ran, _anon_out = _launch_clone_container(
+        clone_path,
+        opts,
+        container_name,
+        host_port,
+        description,
+        remove_existing=True,
+        run_anonymize=False,
+    )
+
+    ready = False
+    for _ in range(max(1, wait_seconds)):
+        probe = subprocess.run(
+            ["docker", "exec", container_name, "pg_isready", "-U", opts.postgres_user, "-d", opts.postgres_db],
+            capture_output=True, text=True,
+        )
+        if probe.returncode == 0:
+            ready = True
+            break
+        time.sleep(1)
+
+    return {
+        "container_name": container_name,
+        "action": "rebound",
+        "was_running": False,
+        "running": True,
+        "ready": ready,
+        "host_port": new_port,
+        "pgdata": container_pgdata,
+        "clone_subvolume": str(clone_path),
     }
 
 

@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Check, Copy, Eye, EyeOff, Pencil } from 'lucide-react'
 
 import { cloneLabel } from '@/lib/cloneLabel'
+import { PortConflictDialog } from '@/components/PortConflictDialog'
+import { restartClone, type PortConflict } from '@/lib/restartClone'
 import { Button } from '@/components/ui/button'
 import { Card, CardTitle } from '@/components/ui/card'
 import {
@@ -75,6 +77,7 @@ export function CloneDetail() {
     const [error, setError] = useState<string | null>(null)
     const [message, setMessage] = useState<string | null>(null)
     const [actionBusy, setActionBusy] = useState(false)
+    const [portConflict, setPortConflict] = useState<PortConflict | null>(null)
     const [showPassword, setShowPassword] = useState(false)
     const [copied, setCopied] = useState(false)
     const [refreshOpen, setRefreshOpen] = useState(false)
@@ -220,7 +223,7 @@ export function CloneDetail() {
         }
     }, [base, detail, fetchCloneSnapshots, fetchDetail, toast])
 
-    const onRestart = useCallback(async () => {
+    const onRestart = useCallback(async (port?: number) => {
         if (!detail?.container_name) {
             setError('Cannot restart: the clone has no container.')
             return
@@ -231,13 +234,19 @@ export function CloneDetail() {
         setError(null)
         const tid = toast.loading(`${running ? 'Restarting' : 'Starting'} ${cloneLabel(detail)}…`)
         try {
-            const encoded = encodeURIComponent(detail.container_name)
-            const r = await fetch(`${base}/clones/${encoded}/restart`, { method: 'POST' })
-            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
-            const res = await r.json()
-            toast.update(tid, res?.ready ? 'success' : 'error', res?.ready
-                ? `${res.action === 'restart' ? 'Restarted' : 'Started'} ${cloneLabel(detail)}`
+            const out = await restartClone(base, detail.container_name, port)
+            if (!out.ok) {
+                toast.update(tid, 'error', `Port ${out.conflict.port} is taken${out.conflict.heldBy ? ` by ${out.conflict.heldBy}` : ''}`)
+                setPortConflict(out.conflict)
+                return
+            }
+            const res = out.res
+            toast.update(tid, res.ready ? 'success' : 'error', res.ready
+                ? (res.action === 'rebound'
+                    ? `Started ${cloneLabel(detail)} on port ${res.host_port}`
+                    : `${res.action === 'restart' ? 'Restarted' : 'Started'} ${cloneLabel(detail)}`)
                 : `${cloneLabel(detail)} is up but Postgres did not answer yet`)
+            setPortConflict(null)
             await fetchDetail()
         } catch (e: any) {
             toast.update(tid, 'error', `Restart failed: ${String(e?.message || e)}`)
@@ -614,7 +623,7 @@ export function CloneDetail() {
 
                     <div className="mt-4 flex flex-wrap gap-2">
                         <Button
-                            onClick={onRestart}
+                            onClick={() => { void onRestart() }}
                             disabled={actionBusy || !detail.has_container}
                             title={detail.is_running ? 'Restart this clone container' : 'Start this stopped clone container'}
                         >
@@ -792,6 +801,14 @@ export function CloneDetail() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <PortConflictDialog
+                conflict={portConflict}
+                cloneName={detail ? cloneLabel(detail) : ''}
+                busy={actionBusy}
+                onCancel={() => setPortConflict(null)}
+                onStart={(port) => { void onRestart(port) }}
+            />
 
             <Dialog open={deleteOpen} onOpenChange={(open) => { if (!actionBusy) setDeleteOpen(open) }}>
                 <DialogContent>

@@ -14,7 +14,7 @@ from ...services.btrfs import (
 	read_snaplicator_metadata,
 	write_snaplicator_metadata,
 )
-from ...services.docker_pg import clone_from_main_and_run, CloneOptions, refresh_clone_in_place, reset_clone_to_snapshot, is_port_in_use, restart_clone_container
+from ...services.docker_pg import clone_from_main_and_run, CloneOptions, refresh_clone_in_place, reset_clone_to_snapshot, is_port_in_use, restart_clone_container, start_clone_on_port, ClonePortInUse
 
 router = APIRouter()
 
@@ -35,6 +35,10 @@ class CloneSnapshotBody(BaseModel):
 
 class ResetCloneBody(BaseModel):
 	snapshot_name: str
+
+
+class RestartCloneBody(BaseModel):
+	port: int | None = None
 
 
 class UpdateCloneMetaBody(BaseModel):
@@ -383,13 +387,43 @@ def update_clone_meta(
 		raise HTTPException(status_code=500, detail=f"Failed to update clone: {e}")
 
 @router.post("/{clone_id}/restart")
-def restart_clone(clone_id: str = Path(..., description="Clone identifier (subvolume name or container name)")):
+def restart_clone(
+	clone_id: str = Path(..., description="Clone identifier (subvolume name or container name)"),
+	body: RestartCloneBody | None = None,
+):
 	try:
 		detail = get_clone_detail(settings.root_data_dir, settings.main_data_dir, clone_id)
 		container_name = detail.get("container_name")
 		if not container_name:
 			raise HTTPException(status_code=400, detail="This clone has no container to restart.")
+
+		requested_port = body.port if body else None
+		if requested_port is not None:
+			opts = CloneOptions(
+				root_data_dir=settings.root_data_dir,
+				main_data_dir=settings.main_data_dir,
+				snapshot_name="",
+				container_name=str(settings.container_name),
+				network_name=str(settings.network_name),
+				host_port=int(requested_port),
+				postgres_user=str(settings.postgres_user),
+				postgres_password=str(settings.postgres_password),
+				postgres_db=str(settings.postgres_db),
+				postgres_image=settings.postgres_image,
+			)
+			return start_clone_on_port(container_name, opts, int(requested_port))
+
 		return restart_clone_container(container_name, settings.postgres_user, settings.postgres_db)
+	except ClonePortInUse as e:
+		# 409, with the port a caller can offer instead: the UI asks for a new
+		# one rather than making the user guess which numbers are free.
+		raise HTTPException(status_code=409, detail={
+			"error": "port_in_use",
+			"port": e.port,
+			"suggested_port": e.suggested_port,
+			"held_by": e.held_by,
+			"message": str(e),
+		})
 	except HTTPException:
 		raise
 	except FileNotFoundError as e:

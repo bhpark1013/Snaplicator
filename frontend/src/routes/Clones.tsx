@@ -18,6 +18,8 @@ import { cn, copyText } from '@/lib/utils'
 import { RetentionSelect } from '@/components/RetentionSelect'
 import { LineageGraph, computeInsertParams, type Slot, type SnapshotItem } from '@/components/LineageGraph'
 import { BootstrapGate } from '@/components/BootstrapGate'
+import { PortConflictDialog } from '@/components/PortConflictDialog'
+import { restartClone, type PortConflict } from '@/lib/restartClone'
 
 type CloneStageStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed'
 
@@ -157,6 +159,8 @@ export function Clones() {
     const defaultUser = 'snaplicator'
     const [refreshingClone, setRefreshingClone] = useState<string | null>(null)
     const [restartingClone, setRestartingClone] = useState<string | null>(null)
+    const [portConflict, setPortConflict] = useState<PortConflict | null>(null)
+    const [conflictClone, setConflictClone] = useState<CloneItem | null>(null)
     const [refreshFor, setRefreshFor] = useState<CloneItem | null>(null)
     const [copiedClone, setCopiedClone] = useState<string | null>(null)
 
@@ -446,22 +450,26 @@ export function Clones() {
         setRefreshFor(clone)
     }
 
-    const onRestartClone = async (clone: CloneItem) => {
+    const runRestart = async (clone: CloneItem, port?: number) => {
         const targetName = clone.container_name || clone.name
-        if (!clone.has_container) {
-            setClonesError('This clone has no container to restart.')
-            return
-        }
         const running = clone.is_running
         setRestartingClone(targetName)
         const tid = toast.loading(`${running ? 'Restarting' : 'Starting'} ${cloneLabel(clone)}…`)
         try {
-            const r = await fetch(`${base}/clones/${encodeURIComponent(targetName)}/restart`, { method: 'POST' })
-            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
-            const res = await r.json()
-            toast.update(tid, res?.ready ? 'success' : 'error', res?.ready
-                ? `${res.action === 'restart' ? 'Restarted' : 'Started'} ${cloneLabel(clone)}`
+            const out = await restartClone(base, targetName, port)
+            if (!out.ok) {
+                toast.update(tid, 'error', `Port ${out.conflict.port} is taken${out.conflict.heldBy ? ` by ${out.conflict.heldBy}` : ''}`)
+                setConflictClone(clone)
+                setPortConflict(out.conflict)
+                return
+            }
+            const res = out.res
+            const verb = res.action === 'restart' ? 'Restarted' : res.action === 'rebound' ? `Started ${cloneLabel(clone)} on port ${res.host_port}` : 'Started'
+            toast.update(tid, res.ready ? 'success' : 'error', res.ready
+                ? (res.action === 'rebound' ? verb : `${verb} ${cloneLabel(clone)}`)
                 : `${cloneLabel(clone)} is up but Postgres did not answer yet`)
+            setPortConflict(null)
+            setConflictClone(null)
             loadClones()
         } catch (e: any) {
             toast.update(tid, 'error', `Restart failed: ${String(e?.message || e)}`)
@@ -469,6 +477,14 @@ export function Clones() {
         } finally {
             setRestartingClone(null)
         }
+    }
+
+    const onRestartClone = (clone: CloneItem) => {
+        if (!clone.has_container) {
+            setClonesError('This clone has no container to restart.')
+            return
+        }
+        void runRestart(clone)
     }
 
     const confirmRefreshClone = async () => {
@@ -873,6 +889,14 @@ export function Clones() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <PortConflictDialog
+                conflict={portConflict}
+                cloneName={conflictClone ? cloneLabel(conflictClone) : ''}
+                busy={!!restartingClone}
+                onCancel={() => { setPortConflict(null); setConflictClone(null) }}
+                onStart={(port) => { if (conflictClone) void runRestart(conflictClone, port) }}
+            />
 
             <Dialog open={!!deleting} onOpenChange={(open) => { if (!open && !deletingBusy) setDeleting(null) }}>
                 <DialogContent>
