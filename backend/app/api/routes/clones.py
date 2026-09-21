@@ -14,7 +14,7 @@ from ...services.btrfs import (
 	read_snaplicator_metadata,
 	write_snaplicator_metadata,
 )
-from ...services.docker_pg import clone_from_main_and_run, CloneOptions, refresh_clone_in_place, reset_clone_to_snapshot, is_port_in_use
+from ...services.docker_pg import clone_from_main_and_run, CloneOptions, refresh_clone_in_place, reset_clone_to_snapshot, is_port_in_use, restart_clone_container
 
 router = APIRouter()
 
@@ -381,6 +381,21 @@ def update_clone_meta(
 		raise HTTPException(status_code=404, detail=str(e))
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Failed to update clone: {e}")
+
+@router.post("/{clone_id}/restart")
+def restart_clone(clone_id: str = Path(..., description="Clone identifier (subvolume name or container name)")):
+	try:
+		detail = get_clone_detail(settings.root_data_dir, settings.main_data_dir, clone_id)
+		container_name = detail.get("container_name")
+		if not container_name:
+			raise HTTPException(status_code=400, detail="This clone has no container to restart.")
+		return restart_clone_container(container_name, settings.postgres_user, settings.postgres_db)
+	except HTTPException:
+		raise
+	except FileNotFoundError as e:
+		raise HTTPException(status_code=404, detail=str(e))
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Failed to restart clone: {e}")
 
 @router.delete("/{container_name}")
 def remove_clone(container_name: str = Path(..., description="Docker container name of the clone")):

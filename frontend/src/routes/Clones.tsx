@@ -156,6 +156,7 @@ export function Clones() {
     const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null)
     const defaultUser = 'snaplicator'
     const [refreshingClone, setRefreshingClone] = useState<string | null>(null)
+    const [restartingClone, setRestartingClone] = useState<string | null>(null)
     const [refreshFor, setRefreshFor] = useState<CloneItem | null>(null)
     const [copiedClone, setCopiedClone] = useState<string | null>(null)
 
@@ -445,6 +446,31 @@ export function Clones() {
         setRefreshFor(clone)
     }
 
+    const onRestartClone = async (clone: CloneItem) => {
+        const targetName = clone.container_name || clone.name
+        if (!clone.has_container) {
+            setClonesError('This clone has no container to restart.')
+            return
+        }
+        const running = clone.is_running
+        setRestartingClone(targetName)
+        const tid = toast.loading(`${running ? 'Restarting' : 'Starting'} ${cloneLabel(clone)}…`)
+        try {
+            const r = await fetch(`${base}/clones/${encodeURIComponent(targetName)}/restart`, { method: 'POST' })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            const res = await r.json()
+            toast.update(tid, res?.ready ? 'success' : 'error', res?.ready
+                ? `${res.action === 'restart' ? 'Restarted' : 'Started'} ${cloneLabel(clone)}`
+                : `${cloneLabel(clone)} is up but Postgres did not answer yet`)
+            loadClones()
+        } catch (e: any) {
+            toast.update(tid, 'error', `Restart failed: ${String(e?.message || e)}`)
+            setError(String(e?.message || e))
+        } finally {
+            setRestartingClone(null)
+        }
+    }
+
     const confirmRefreshClone = async () => {
         if (!refreshFor) return
         const targetName = refreshFor.container_name || refreshFor.name
@@ -549,6 +575,13 @@ export function Clones() {
                     </div>
                 </div>
                 <div className="ml-auto flex flex-none gap-2">
+                    <Button
+                        onClick={(e) => { e.stopPropagation(); onRestartClone(c) }}
+                        disabled={restartingClone === targetName || !c.has_container || isDeleting}
+                        title={isDeleting ? 'This clone is being deleted.' : !c.has_container ? 'No container to restart.' : running ? 'Restart this clone container' : 'Start this stopped clone container'}
+                    >
+                        {restartingClone === targetName ? (running ? 'Restarting…' : 'Starting…') : running ? 'Restart' : 'Start'}
+                    </Button>
                     <Button
                         onClick={(e) => { e.stopPropagation(); openSnapshot(c) }}
                         disabled={!c.has_container || isDeleting}

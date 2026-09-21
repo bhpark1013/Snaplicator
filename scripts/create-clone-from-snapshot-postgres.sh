@@ -137,6 +137,7 @@ fi
 echo "Starting container ${CONTAINER_NAME} on network ${NETWORK_NAME}, port ${SELECTED_HOST_PORT} -> 5432"
 docker run -d \
   --name "${CONTAINER_NAME}" \
+  --restart unless-stopped \
   --network "${NETWORK_NAME}" \
   -p "${SELECTED_HOST_PORT}:5432" \
   -e POSTGRES_USER="${POSTGRES_USER}" \

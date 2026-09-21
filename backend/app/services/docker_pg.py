@@ -320,6 +320,9 @@ def _launch_clone_container(
     cmd = [
         "docker", "run", "-d",
         "--name", container_name,
+        # Clones are long-lived dev databases: a host reboot must bring them
+        # back, and nothing else does it (the manager is not a supervisor).
+        "--restart", "unless-stopped",
         "--network", opts.network_name,
         "-p", f"{host_port}:5432",
         *labels,
@@ -819,8 +822,15 @@ def refresh_clone_in_place(
     except (IndexError, json.JSONDecodeError) as e:
         raise RuntimeError(f"Failed to inspect container: {target_container}") from e
 
-    ports = inspect_data.get("NetworkSettings", {}).get("Ports", {})
+    # NetworkSettings.Ports is the *live* mapping: docker empties it while the
+    # container is stopped. HostConfig.PortBindings is the configured one and
+    # survives a stop, so a clone that is merely down can still be refreshed
+    # (the swap below recreates the container anyway).
+    ports = inspect_data.get("NetworkSettings", {}).get("Ports", {}) or {}
     port_binding = ports.get("5432/tcp")
+    if not port_binding:
+        configured = inspect_data.get("HostConfig", {}).get("PortBindings", {}) or {}
+        port_binding = configured.get("5432/tcp")
     if not port_binding:
         raise RuntimeError(f"Container {target_container} does not expose 5432/tcp")
     try:
@@ -965,6 +975,52 @@ def reset_clone_to_snapshot(
         "anonymize_ran": anonymize_ran,
         "anonymize_output": anonymize_output,
         "snapshot_metadata": snapshot_meta,
+    }
+
+
+def restart_clone_container(
+    container_name: str,
+    postgres_user: str,
+    postgres_db: str,
+    wait_seconds: int = 60,
+) -> Dict:
+    """Start a stopped clone container, or restart a running one.
+
+    The container is reused as-is: same data subvolume, same published port.
+    A stopped clone whose port has since been handed to another container
+    cannot start, and docker's own message says so — pass it through.
+    """
+    ins = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+        capture_output=True, text=True,
+    )
+    if ins.returncode != 0:
+        raise FileNotFoundError(f"No container named {container_name}")
+    was_running = ins.stdout.strip() == "true"
+    action = "restart" if was_running else "start"
+
+    proc = subprocess.run(["docker", action, container_name], capture_output=True, text=True)
+    if proc.returncode != 0:
+        message = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError(message or f"docker {action} {container_name} failed")
+
+    ready = False
+    for _ in range(max(1, wait_seconds)):
+        probe = subprocess.run(
+            ["docker", "exec", container_name, "pg_isready", "-U", postgres_user, "-d", postgres_db],
+            capture_output=True, text=True,
+        )
+        if probe.returncode == 0:
+            ready = True
+            break
+        time.sleep(1)
+
+    return {
+        "container_name": container_name,
+        "action": action,
+        "was_running": was_running,
+        "running": True,
+        "ready": ready,
     }
 
 

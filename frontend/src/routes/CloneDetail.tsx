@@ -220,6 +220,33 @@ export function CloneDetail() {
         }
     }, [base, detail, fetchCloneSnapshots, fetchDetail, toast])
 
+    const onRestart = useCallback(async () => {
+        if (!detail?.container_name) {
+            setError('Cannot restart: the clone has no container.')
+            return
+        }
+        const running = detail.is_running
+        setActionBusy(true)
+        setMessage(null)
+        setError(null)
+        const tid = toast.loading(`${running ? 'Restarting' : 'Starting'} ${cloneLabel(detail)}…`)
+        try {
+            const encoded = encodeURIComponent(detail.container_name)
+            const r = await fetch(`${base}/clones/${encoded}/restart`, { method: 'POST' })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            const res = await r.json()
+            toast.update(tid, res?.ready ? 'success' : 'error', res?.ready
+                ? `${res.action === 'restart' ? 'Restarted' : 'Started'} ${cloneLabel(detail)}`
+                : `${cloneLabel(detail)} is up but Postgres did not answer yet`)
+            await fetchDetail()
+        } catch (e: any) {
+            toast.update(tid, 'error', `Restart failed: ${String(e?.message || e)}`)
+            setError(String(e?.message || e))
+        } finally {
+            setActionBusy(false)
+        }
+    }, [base, detail, fetchDetail, toast])
+
     const openEdit = useCallback(() => {
         setEditName(detail?.display_name ?? '')
         setEditDesc(detail?.description ?? '')
@@ -586,6 +613,13 @@ export function CloneDetail() {
                     </div>
 
                     <div className="mt-4 flex flex-wrap gap-2">
+                        <Button
+                            onClick={onRestart}
+                            disabled={actionBusy || !detail.has_container}
+                            title={detail.is_running ? 'Restart this clone container' : 'Start this stopped clone container'}
+                        >
+                            {detail.is_running ? 'Restart' : 'Start'}
+                        </Button>
                         <Button onClick={openRefresh} disabled={actionBusy || !detail.has_container}>Refresh</Button>
                         <Button onClick={openSnapshot} disabled={actionBusy || !detail.has_container}>Create Snapshot</Button>
                         <Button variant="destructive" onClick={() => setDeleteOpen(true)} disabled={actionBusy}>Delete</Button>
