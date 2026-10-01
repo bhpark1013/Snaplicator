@@ -282,6 +282,38 @@ class TestFailureIsolation:
 			"WHERE ddl_text LIKE '%legacy_tmp%';",
 		) == "0"
 
+	def test_unsubscribed_schema_ddl_is_skipped(self, pg_pair):
+		"""Capture is shared and wide; scope is decided on apply. A schema
+		this subscription reads no table from has nothing here to change —
+		the daily `drop table etl.*_old_*` of an unreplicated ETL failed on
+		every run. Skip it, while the subscribed schema still applies."""
+		pub, sub = pg_pair["pub"], pg_pair["sub"]
+		psql_conn(pub, "CREATE SCHEMA outside_s;")
+		psql_conn(pub, "CREATE TABLE outside_s.etl_old (id int);")
+		psql_conn(pub, "DROP TABLE outside_s.etl_old;")
+		psql_conn(pub, "CREATE TABLE in_scope_after (id int);")
+		wait_until(
+			lambda: psql_conn(
+				sub, "SELECT count(*) FROM pg_class WHERE relname = 'in_scope_after';",
+			) == "1",
+			desc="subscribed schema still applies",
+		)
+		assert psql_conn(
+			sub,
+			"SELECT count(*) FROM public._snaplicator_ddl_skipped "
+			"WHERE ddl_text LIKE '%outside_s.etl_old%' "
+			"AND reason = 'schema not subscribed here';",
+		) == "2"
+		assert psql_conn(
+			sub,
+			"SELECT count(*) FROM public._snaplicator_ddl_failures "
+			"WHERE ddl_text LIKE '%outside_s%';",
+		) == "0"
+		# CREATE SCHEMA names no schema of its own — never out of scope
+		assert psql_conn(
+			sub, "SELECT count(*) FROM pg_namespace WHERE nspname = 'outside_s';",
+		) == "1"
+
 	def test_batch_carrying_ownership_is_not_swallowed(self, pg_pair):
 		"""ddl_text is current_query(), and capture dedupes per (txid, query
 		string), so two statements sent in one round trip are ONE log row.

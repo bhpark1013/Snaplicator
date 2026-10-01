@@ -1218,6 +1218,9 @@ def install_ddl_apply(
       * schema_name ~ pg_temp      -> record to _snaplicator_ddl_skipped.
                                      Rows logged before capture stopped
                                      taking temp objects.
+      * schema not subscribed here -> record to _snaplicator_ddl_skipped.
+                                     No subscribed table in that schema
+                                     means nothing here for it to change.
       * OWNER TO / GRANT / REVOKE  -> record to _snaplicator_ddl_skipped and
                                      do not execute. An owner is a reference
                                      to a role in the publisher's cluster;
@@ -1310,6 +1313,28 @@ RETURNS boolean LANGUAGE sql IMMUTABLE AS $localonly$
        -- A batch falls through and fails audibly, as it did before.
        AND btrim(ddl) !~ ';\\s*\\S';
 $localonly$;
+""")
+
+    # Capture is wide and shared by every install on the primary, so scope is
+    # decided here. The scope is the schemas this subscription reads — the
+    # same membership the primary's auto-add follows — so a DDL for a schema
+    # nothing here subscribes to has no table to land on. Replaying it only
+    # fails: the daily `drop table etl.*_old_*` of an ETL nobody replicates.
+    # Read from pg_subscription_rel, not from a stored list, so it cannot
+    # drift from what the subscription actually reads. NULL schema (CREATE
+    # SCHEMA, CREATE EXTENSION, ...) is never out of scope, and neither is
+    # anything while no table is subscribed: no scope is not an empty scope.
+    _sub_sql("""
+CREATE OR REPLACE FUNCTION public._snaplicator_ddl_out_of_scope(schema text)
+RETURNS boolean LANGUAGE sql STABLE AS $outofscope$
+    SELECT schema IS NOT NULL
+       AND schema !~ '^pg_(toast_)?temp'
+       AND EXISTS (SELECT 1 FROM pg_subscription_rel)
+       AND NOT EXISTS (SELECT 1 FROM pg_subscription_rel sr
+                         JOIN pg_class c ON c.oid = sr.srrelid
+                         JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE n.nspname = schema);
+$outofscope$;
 """)
 
     # Deferring is not free, and this decides when it is affordable.
@@ -1418,6 +1443,9 @@ BEGIN
     IF coalesce(NEW.schema_name, '') ~ '^pg_(toast_)?temp' THEN
         INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
         VALUES (NEW.id, NEW.ddl_text, 'temporary objects are session-local', NEW.search_path);
+    ELSIF public._snaplicator_ddl_out_of_scope(NEW.schema_name) THEN
+        INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
+        VALUES (NEW.id, NEW.ddl_text, 'schema not subscribed here', NEW.search_path);
     ELSIF public._snaplicator_ddl_is_local_only(NEW.command_tag, NEW.ddl_text) THEN
         INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
         VALUES (NEW.id, NEW.ddl_text, 'ownership/privileges are not replicated', NEW.search_path);
@@ -1954,6 +1982,12 @@ BEGIN
         IF coalesce(r.schema_name, '') ~ '^pg_(toast_)?temp' THEN
             INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
             VALUES (r.id, r.ddl_text, 'temporary objects are session-local', r.search_path);
+            CONTINUE;
+        END IF;
+
+        IF public._snaplicator_ddl_out_of_scope(r.schema_name) THEN
+            INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
+            VALUES (r.id, r.ddl_text, 'schema not subscribed here', r.search_path);
             CONTINUE;
         END IF;
 
