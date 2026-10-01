@@ -248,6 +248,27 @@ class TestGuards:
 		psql("COMMENT ON TABLE guard_c IS 'noise';")
 		assert log_count("command_tag = 'COMMENT'") == 0
 
+	def test_temp_objects_not_captured(self, clean_log):
+		"""Temp objects are session-local. Replayed, they land in the apply
+		worker's never-ending session and the next CREATE of the same name
+		fails as "already exists" (2026-10-01, 51 failures)."""
+		psql(
+			"CREATE TEMP TABLE guard_tmp AS SELECT 1 AS id; "
+			"CREATE INDEX guard_tmp_idx ON guard_tmp (id); "
+			"ALTER TABLE guard_tmp ADD COLUMN v serial; "
+			"DROP TABLE guard_tmp;"
+		)
+		psql("CREATE TEMP TABLE guard_tmp2 (id int); DROP TABLE guard_tmp2;")
+		assert log_count() == 0
+
+	def test_drop_mixing_temp_and_real_is_captured(self, clean_log):
+		psql("CREATE TABLE guard_real (id int);")
+		psql(f"TRUNCATE {LOG_TABLE};")
+		psql("CREATE TEMP TABLE guard_tmp3 (id int); DROP TABLE guard_tmp3, guard_real;")
+		rows = log_rows()
+		assert len(rows) == 1
+		assert rows[0]["object_identity"] == "public.guard_real"
+
 	def test_truncate_not_captured(self, clean_log):
 		"""TRUNCATE rides native logical replication (pubtruncate=t) —
 		capturing it would double-truncate on replay."""

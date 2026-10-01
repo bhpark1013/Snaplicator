@@ -793,7 +793,7 @@ def install_capture_triggers(
     auto-add away. See auto_add_name().
 
     Capture is intentionally wide — scoping decisions happen at apply time.
-    Only three capture-side guards exist:
+    Only four capture-side guards exist:
       1. recursion — DDL touching _snaplicator_* objects is never logged
       2. noise/DCL — GRANT/REVOKE/SECURITY LABEL/COMMENT are never logged
          (TRUNCATE rides native logical replication; role/password commands
@@ -801,6 +801,8 @@ def install_capture_triggers(
       3. dedupe   — at most one log row per (txid, query string): subcommand
          entries (serial sequences, PK indexes) and double-firing commands
          (ALTER TABLE DROP COLUMN hits both triggers) collapse to one row
+      4. temp     — objects in pg_temp* are session-local; replaying them in
+         the apply worker's long-lived session can only collide
 
     Replaces the legacy _snaplicator_auto_pub_add trigger, which had one fixed
     name for the whole server.
@@ -891,7 +893,11 @@ BEGIN
     SELECT c.command_tag, c.object_identity, c.schema_name
       INTO cmd
       FROM pg_event_trigger_ddl_commands() c
-     WHERE c.object_identity IS NULL OR c.object_identity !~ '_snaplicator_'
+     WHERE (c.object_identity IS NULL OR c.object_identity !~ '_snaplicator_')
+       -- Temp objects live in the issuing session and nowhere else. Replayed,
+       -- they land in the apply worker's session, which never ends, so the
+       -- next CREATE TEMP TABLE of the same name fails as "already exists".
+       AND coalesce(c.schema_name, '') !~ '^pg_(toast_)?temp'
      ORDER BY (c.command_tag = tg_tag) DESC
      LIMIT 1;
 
@@ -992,6 +998,10 @@ BEGIN
       INTO obj
       FROM pg_event_trigger_dropped_objects() d
      WHERE d.object_identity !~ '_snaplicator_'
+       -- a temp drop is not logged (see the ddl_command_end twin); worse,
+       -- replayed where the temp table does not exist, `DROP TABLE fb`
+       -- resolves through search_path and drops a real table of that name
+       AND NOT d.is_temporary
      ORDER BY d.original DESC
      LIMIT 1;
 
@@ -1205,6 +1215,9 @@ def install_ddl_apply(
                                      (cannot run inside the apply worker's
                                      transaction; the sync loop executes it
                                      out-of-band)
+      * schema_name ~ pg_temp      -> record to _snaplicator_ddl_skipped.
+                                     Rows logged before capture stopped
+                                     taking temp objects.
       * OWNER TO / GRANT / REVOKE  -> record to _snaplicator_ddl_skipped and
                                      do not execute. An owner is a reference
                                      to a role in the publisher's cluster;
@@ -1397,7 +1410,15 @@ BEGIN
     -- and it failed loudly, into the table that pages someone, for a statement
     -- whose absence is the intended state. Recorded as skipped instead: still
     -- visible, no longer an incident.
-    IF public._snaplicator_ddl_is_local_only(NEW.command_tag, NEW.ddl_text) THEN
+    -- Temp objects belong to the session that made them. Capture no longer
+    -- logs them, but rows logged before it stopped are still in flight —
+    -- and replaying one runs it in this worker's session, which outlives
+    -- every source session: the next CREATE of the same name fails, and a
+    -- DROP of a name this session lacks falls through to a real table.
+    IF coalesce(NEW.schema_name, '') ~ '^pg_(toast_)?temp' THEN
+        INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
+        VALUES (NEW.id, NEW.ddl_text, 'temporary objects are session-local', NEW.search_path);
+    ELSIF public._snaplicator_ddl_is_local_only(NEW.command_tag, NEW.ddl_text) THEN
         INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
         VALUES (NEW.id, NEW.ddl_text, 'ownership/privileges are not replicated', NEW.search_path);
     ELSIF NEW.ddl_text ~* 'CONCURRENTLY' THEN
@@ -1930,6 +1951,12 @@ BEGIN
         -- apply the same log to the same database, so a statement the
         -- trigger skips and catch-up executes would put ownership DDL back
         -- into the failures table by the other door.
+        IF coalesce(r.schema_name, '') ~ '^pg_(toast_)?temp' THEN
+            INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
+            VALUES (r.id, r.ddl_text, 'temporary objects are session-local', r.search_path);
+            CONTINUE;
+        END IF;
+
         IF public._snaplicator_ddl_is_local_only(r.command_tag, r.ddl_text) THEN
             INSERT INTO public._snaplicator_ddl_skipped (log_id, ddl_text, reason, search_path)
             VALUES (r.id, r.ddl_text, 'ownership/privileges are not replicated', r.search_path);

@@ -255,6 +255,33 @@ class TestFailureIsolation:
 			"WHERE ddl_text ILIKE 'GRANT%';",
 		) == "0"
 
+	def test_temp_ddl_logged_before_capture_filter_is_skipped(self, pg_pair):
+		"""Capture no longer logs temp objects, but rows an older capture
+		logged are still in flight. Replayed, the second CREATE of the same
+		temp name fails in the worker's long-lived session — skip instead."""
+		pub, sub = pg_pair["pub"], pg_pair["sub"]
+		for _ in range(2):
+			psql_conn(
+				pub,
+				f"INSERT INTO {LOG_TABLE} (lsn, txid, command_tag, object_identity, "
+				"schema_name, ddl_text, search_path) VALUES (pg_current_wal_lsn(), "
+				"txid_current(), 'CREATE TABLE AS', 'pg_temp.legacy_tmp', 'pg_temp_3', "
+				"'create temp table legacy_tmp as select 1', 'public');",
+			)
+		wait_until(
+			lambda: psql_conn(
+				sub,
+				"SELECT count(*) FROM public._snaplicator_ddl_skipped "
+				"WHERE ddl_text LIKE '%legacy_tmp%';",
+			) == "2",
+			desc="legacy temp ddl skipped",
+		)
+		assert psql_conn(
+			sub,
+			"SELECT count(*) FROM public._snaplicator_ddl_failures "
+			"WHERE ddl_text LIKE '%legacy_tmp%';",
+		) == "0"
+
 	def test_batch_carrying_ownership_is_not_swallowed(self, pg_pair):
 		"""ddl_text is current_query(), and capture dedupes per (txid, query
 		string), so two statements sent in one round trip are ONE log row.
