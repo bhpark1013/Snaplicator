@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import re
 import subprocess
@@ -14,6 +15,8 @@ import time
 import json
 
 from .btrfs import write_snaplicator_metadata, read_snaplicator_metadata, get_clone_detail
+
+logger = logging.getLogger(__name__)
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -337,7 +340,37 @@ def _launch_clone_container(
 
     clone_progress.stage("container")
     tr0 = time.monotonic()
-    subprocess.run(cmd, check=True)
+    # Capture docker's stderr: without it a failed `docker run` surfaces only
+    # as "Command '[...]' returned non-zero exit status N", and the alert's
+    # 500-char cut drops even that, leaving the cause (port taken, name
+    # conflict, network missing, ...) invisible.
+    run = subprocess.run(cmd, text=True, capture_output=True)
+    if run.returncode != 0:
+        stderr = (run.stderr or "").strip()
+        stdout = (run.stdout or "").strip()
+        logger.error(
+            "docker run failed: container=%s port=%s exit=%s stderr=%r stdout=%r cmd=%r",
+            container_name, host_port, run.returncode, stderr, stdout, cmd,
+        )
+        try:
+            port_holders = subprocess.run(
+                ["docker", "ps", "-a", "--filter", f"publish={host_port}",
+                 "--format", "{{.Names}} {{.Status}} {{.Ports}}"],
+                text=True, capture_output=True,
+            ).stdout.strip()
+            listening = is_port_in_use(host_port)
+            logger.error(
+                "docker run failed: port %s listening=%s containers_publishing_port=%r",
+                host_port, listening, port_holders,
+            )
+        except Exception:
+            port_holders, listening = "", None
+        # Cause first, so it survives any downstream truncation.
+        raise RuntimeError(
+            f"docker run exit {run.returncode}: {stderr or stdout or '(no output)'}"
+            f" [container={container_name} port={host_port} port_listening={listening}"
+            f" port_holders={port_holders or '-'}]"
+        )
     tr1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] docker_run_ms={int((tr1-tr0)*1000)} container={container_name} port={host_port}")
 
