@@ -441,6 +441,9 @@ app.add_middleware(
 @app.exception_handler(StarletteHTTPException)
 async def _alert_http_5xx(request: Request, exc: StarletteHTTPException):
     if exc.status_code >= 500:
+        # Full detail to the log; the alert below keeps only 500 chars.
+        logging.getLogger("snaplicator.api").error(
+            "%s %s -> %s: %s", request.method, request.url.path, exc.status_code, exc.detail)
         sync_log.record("api_error", {
             "method": request.method,
             "path": request.url.path,

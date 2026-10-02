@@ -1,3 +1,6 @@
+import logging
+import subprocess
+
 from fastapi import APIRouter, HTTPException, Path, Body
 from pydantic import BaseModel
 from pathlib import Path as FsPath
@@ -17,6 +20,7 @@ from ...services.btrfs import (
 from ...services.docker_pg import clone_from_main_and_run, CloneOptions, refresh_clone_in_place, reset_clone_to_snapshot, is_port_in_use, restart_clone_container, start_clone_on_port, ClonePortInUse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 class CreateCloneBody(BaseModel):
 	name: str | None = None
@@ -152,7 +156,14 @@ def create_clone_from_main(body: CreateCloneBody | None = None):
 		raise
 	except FileNotFoundError as e:
 		raise HTTPException(status_code=404, detail=str(e))
+	except subprocess.CalledProcessError as e:
+		out = e.stderr or e.stdout or ""
+		out = (out.decode(errors="replace") if isinstance(out, bytes) else str(out)).strip()
+		logger.exception("clone-from-main failed: exit=%s stderr=%r cmd=%r", e.returncode, out, e.cmd)
+		# Exit code and stderr first; the command line is long and the alert cuts at 500 chars.
+		raise HTTPException(status_code=500, detail=f"Failed to clone and run from main: exit {e.returncode}: {out or '(no stderr)'} | cmd={e.cmd}")
 	except Exception as e:
+		logger.exception("clone-from-main failed")
 		raise HTTPException(status_code=500, detail=f"Failed to clone and run from main: {e}")
 
 @router.post("/{container_name}/refresh")

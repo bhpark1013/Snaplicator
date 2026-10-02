@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, HTTPException, Path, Body
 from pydantic import BaseModel
 from ...core.config import settings
@@ -243,4 +244,5 @@ def post_clone_from_main(body: CloneBody | None = None):
 		detail = e.stderr.strip() if e.stderr else str(e)
 		raise HTTPException(status_code=500, detail=detail)
 	except Exception as e:
+		logging.getLogger(__name__).exception("clone-from-main (snapshots route) failed")
 		raise HTTPException(status_code=500, detail=f"Failed to clone and run from main: {e}") 
