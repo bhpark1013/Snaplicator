@@ -269,8 +269,12 @@ def run_replication_check_sql(
         exec_cmd: List[str] = ["docker", "exec", "-i", subscriber_container]
         if subscriber_password:
             exec_cmd += ["env", f"PGPASSWORD={subscriber_password}"]
+        # Unix socket, like every other subscriber call. The hardened main
+        # replica rejects TCP for the management account (only
+        # snaplicator_readonly may connect over TCP), so "-h localhost" fails
+        # with "pg_hba.conf rejects connection".
         exec_cmd += [
-            "psql", "-h", "localhost",
+            "psql",
             "-U", subscriber_user, "-d", subscriber_db,
             "-q", "-v", "ON_ERROR_STOP=1", "-At", "-F", ",", "-f", "-",
         ]

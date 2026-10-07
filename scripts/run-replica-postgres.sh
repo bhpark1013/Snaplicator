@@ -85,6 +85,19 @@ fi
 : "${ROOT_DATA_DIR:?ROOT_DATA_DIR is required}"
 : "${MAIN_DATA_DIR:?MAIN_DATA_DIR is required}"
 
+MAIN_ACCESS_MOUNTS=()
+MAIN_ACCESS_ARGS=()
+if [ -n "${REPLICA_HBA_FILE:-}" ]; then
+  if [ ! -f "$REPLICA_HBA_FILE" ]; then
+    echo "REPLICA_HBA_FILE does not exist: $REPLICA_HBA_FILE" >&2
+    exit 1
+  fi
+  # Keep main-only access rules outside PGDATA so writable clones do not
+  # inherit them when the data directory is snapshotted.
+  MAIN_ACCESS_MOUNTS+=( -v "$REPLICA_HBA_FILE:/etc/postgresql/snaplicator-main-hba.conf:ro" )
+  MAIN_ACCESS_ARGS+=( -c hba_file=/etc/postgresql/snaplicator-main-hba.conf )
+fi
+
 # btrfs 및 서브볼륨 프리플라이트 체크
 ROOT_PATH="${ROOT_DATA_DIR%/}"
 MAIN_PATH="$ROOT_PATH/${MAIN_DATA_DIR}"
@@ -432,13 +445,20 @@ fi
 # tables copy at a time because that is all the pool had left.
 CONTAINER_ID=$(docker run -d \
   --name "${CONTAINER_NAME}" \
+  --restart unless-stopped \
   "${DOCKER_NET_ARGS[@]}" \
   "${DOCKER_PORT_ARGS[@]}" \
   --env-file "${ENV_FILE}" \
   "${DOCKER_ENV_VARS[@]}" \
   "${DATA_MOUNT_ARGS[@]}" \
   "${VOLUME_ARGS[@]}" \
+  "${MAIN_ACCESS_MOUNTS[@]}" \
   "$POSTGRES_IMAGE" \
+  "${MAIN_ACCESS_ARGS[@]}" \
+  -c log_connections=on \
+  -c log_disconnections=on \
+  -c log_statement=mod \
+  -c 'log_line_prefix=%m [%p] user=%u db=%d app=%a client=%r session=%c xid=%x ' \
   -c wal_level=${WAL_LEVEL:-logical} \
   -c max_replication_slots=${MAX_REPLICATION_SLOTS:-10} \
   -c max_wal_senders=${MAX_WAL_SENDERS:-${MAX_REPLICATION_SLOTS:-10}} \
