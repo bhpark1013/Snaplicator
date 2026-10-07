@@ -33,6 +33,24 @@ def _is_btrfs_subvolume(path: Path) -> bool:
         return False
 
 
+def delete_subvolume(target: Path) -> None:
+    """`btrfs subvolume delete` that tells "already gone" apart from real failures.
+
+    Two DELETE requests for the same snapshot/clone can arrive together (client
+    retry, double call). Both pass the existence check, one deletes the subvolume
+    and the other's btrfs call fails with "Could not statfs: No such file or
+    directory". If the path no longer exists after the failure, raise
+    FileNotFoundError (routes map it to 404) instead of a 500 api_error alert.
+    """
+    try:
+        _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(target)])
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or e.stdout or "").strip()
+        if not target.exists():
+            raise FileNotFoundError(f"Subvolume already deleted (concurrent delete?): {target}") from e
+        raise RuntimeError(f"btrfs subvolume delete failed for {target}: {stderr}") from e
+
+
 def _is_readonly_subvolume(path: Path) -> bool:
     try:
         out = _run(["sudo", "-n", "btrfs", "subvolume", "show", str(path)]).stdout
@@ -367,6 +385,8 @@ def delete_snapshot(root_data_dir: str, main_data_dir: str, snapshot_name: str, 
     if not target.exists() or not target.is_dir():
         raise FileNotFoundError(f"Snapshot path not found: {target}")
     if not _is_btrfs_subvolume(target):
+        if not target.exists():
+            raise FileNotFoundError(f"Snapshot path not found: {target}")
         # Include fstype for diagnostics
         try:
             fstype = subprocess.run(["findmnt", "-no", "FSTYPE", "-T", str(target)], text=True, capture_output=True, check=True).stdout.strip()
@@ -399,12 +419,8 @@ def delete_snapshot(root_data_dir: str, main_data_dir: str, snapshot_name: str, 
             m = s.get("metadata") or {}
             if isinstance(m, dict) and m.get("previous_snapshot") == snapshot_name:
                 children.append(s["name"])
-    # Delete subvolume
-    try:
-        _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(target)])
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or e.stdout or "").strip()
-        raise RuntimeError(f"btrfs subvolume delete failed for {target}: {stderr}")
+    # Delete subvolume (FileNotFoundError if a concurrent request already deleted it)
+    delete_subvolume(target)
     # Re-point surviving children to the deleted snapshot's previous so the
     # chain stays connected (display-only; best-effort after a successful delete).
     healed: List[Dict[str, Optional[str]]] = []
