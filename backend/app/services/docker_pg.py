@@ -14,7 +14,7 @@ from . import clone_progress
 import time
 import json
 
-from .btrfs import write_snaplicator_metadata, read_snaplicator_metadata, get_clone_detail
+from .btrfs import write_snaplicator_metadata, read_snaplicator_metadata, get_clone_detail, delete_subvolume
 
 logger = logging.getLogger(__name__)
 
@@ -1269,6 +1269,8 @@ def delete_clone(root_data_dir: str, main_data_dir: Optional[str], container_nam
             raise PermissionError(f"Target subvolume name does not match MAIN_DATA_DIR clone naming. name={host_path.name} expected_prefix={expected_prefix}")
 
     if not _is_btrfs_subvolume(host_path):
+        if not host_path.exists():
+            raise FileNotFoundError(f"Clone subvolume not found (already deleted?): {host_path}")
         # Include filesystem type for diagnostics
         fstype = ""
         try:
@@ -1322,12 +1324,8 @@ def delete_clone(root_data_dir: str, main_data_dir: Optional[str], container_nam
         except subprocess.CalledProcessError:
             continue
 
-    # Delete subvolume with error forwarding
-    try:
-        _run(["sudo", "-n", "btrfs", "subvolume", "delete", str(host_path)])
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or e.stdout or "").strip()
-        raise RuntimeError(f"btrfs subvolume delete failed for {host_path}: {stderr}")
+    # Delete subvolume (FileNotFoundError if a concurrent request already deleted it)
+    delete_subvolume(host_path)
 
     return {
         "containers_removed": removed_containers,
