@@ -4,7 +4,9 @@ import functools
 import logging
 import os
 import re
+import secrets
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -264,6 +266,27 @@ class CloneOptions:
 
 
 
+def _unique_stamp() -> str:
+    """Timestamp for a new subvolume / container name, unique even within one second.
+
+    Names used to be the bare second (`replica-clone-20261102-061437`), so two
+    clones requested in the same second got the same path and the second
+    `btrfs subvolume snapshot` failed with "File exists" -> POST /clones 500
+    (2026-11-02, a prod-exec rehearsal and a QA host 0.1s apart). The random
+    tail keeps names sortable by time while making a collision practically
+    impossible.
+    """
+    return f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
+
+
+# Held from picking a free host port until `docker run` has published it.
+# _find_free_port only asks "is anything listening now", so two clones built
+# concurrently would both pick the same port and the second `docker run`
+# would fail with "port is already allocated". The manager is one uvicorn
+# process whose sync routes run on a thread pool, so a thread lock covers it.
+_PORT_LOCK = threading.Lock()
+
+
 def _tracked(what: str, name_of):
     """Report this operation's stages, and close the record however it ends.
 
@@ -303,7 +326,13 @@ def _launch_clone_container(
 
     _ensure_docker_network(opts.network_name)
 
-    host_port = int(host_port_hint) if host_port_hint is not None else _find_free_port(int(opts.host_port))
+    # Released right after `docker run` below (see _PORT_LOCK).
+    _PORT_LOCK.acquire()
+    try:
+        host_port = int(host_port_hint) if host_port_hint is not None else _find_free_port(int(opts.host_port))
+    except BaseException:
+        _PORT_LOCK.release()
+        raise
 
     labels = [
         "--label", "snaplicator=1",
@@ -344,7 +373,10 @@ def _launch_clone_container(
     # as "Command '[...]' returned non-zero exit status N", and the alert's
     # 500-char cut drops even that, leaving the cause (port taken, name
     # conflict, network missing, ...) invisible.
-    run = subprocess.run(cmd, text=True, capture_output=True)
+    try:
+        run = subprocess.run(cmd, text=True, capture_output=True)
+    finally:
+        _PORT_LOCK.release()
     if run.returncode != 0:
         stderr = (run.stderr or "").strip()
         stdout = (run.stdout or "").strip()
@@ -500,7 +532,7 @@ def clone_from_snapshot_and_run(opts: CloneOptions) -> Dict:
     # already anonymized. Fail safe: anonymize unless provably a clone snapshot.
     run_anonymize = snap_meta.get("type") != "clone_snapshot"
 
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    ts = _unique_stamp()
     clone_name = f"{opts.main_data_dir}-clone-{ts}"
     clone_path = root / clone_name
 
@@ -596,7 +628,7 @@ def clone_from_main_and_run(opts: CloneOptions, host_port_override: Optional[int
     if not src_main.exists() or not _is_btrfs_subvolume(src_main):
         raise FileNotFoundError(f"Main replica not found or not a subvolume: {src_main}")
 
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    ts = _unique_stamp()
     clone_name = f"{opts.main_data_dir}-clone-{ts}"
     clone_path = root / clone_name
 
@@ -713,7 +745,7 @@ def _stage_then_swap_clone_data(
     and still serving. A failure during the swap restores the previous
     subvolume and brings the clone back up on its original port.
     """
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    ts = _unique_stamp()
     temp_path = host_path.parent / f"{host_path.name}-{temp_suffix}-{ts}"
     staging_container = f"{target_container}-staging-{ts}"
 
@@ -731,12 +763,11 @@ def _stage_then_swap_clone_data(
         _run(["sudo", "-n", "chmod", "-R", "u+rwX,go-rwx", str(temp_path)])
         write_snaplicator_metadata(temp_path, meta)
 
-        staging_port = _find_free_port(int(opts.host_port))
         _, _, anonymize_ran, anonymize_output = _launch_clone_container(
             clone_path=temp_path,
             opts=opts,
             container_name=staging_container,
-            host_port_hint=staging_port,
+            host_port_hint=None,  # picked under _PORT_LOCK
             description=description,
             remove_existing=True,
             run_anonymize=run_anonymize,
