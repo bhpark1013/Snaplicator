@@ -331,6 +331,12 @@ async def ddl_sync_loop():
                                 logger.warning(
                                     f"FDW drift sync error: {fdw_res.get('error')}"
                                 )
+                            elif fdw_res.get("transient_error"):
+                                logger.warning(
+                                    "FDW drift sync transient error "
+                                    "(not alerted until it persists): "
+                                    f"{fdw_res.get('transient_error')}"
+                                )
             except Exception as e:
                 logger.warning(f"FDW drift sync failed: {e}")
 
