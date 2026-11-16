@@ -17,6 +17,7 @@ import os
 import shlex
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
@@ -769,6 +770,56 @@ WHERE r.sig IS DISTINCT FROM l.sig;
             "drifted": drifted, "changes": changes, "error": None}
 
 
+# Connection-level failures reaching the remote (pooler restarts, a primary
+# briefly marked down, network blips). The drift check runs every loop cycle,
+# so a single one of these used to page Slack even though the next cycle
+# succeeded. They only count as an error once they have persisted for
+# FDW_DRIFT_TRANSIENT_GRACE_SECONDS; real drift/apply errors still page at once.
+_TRANSIENT_CONN_MARKERS = (
+    "could not get connection from the pool",
+    "allserversdown",
+    "could not connect to server",
+    "connection refused",
+    "connection timed out",
+    "timeout expired",
+    "server closed the connection unexpectedly",
+    "no route to host",
+    "ssl syscall error",
+    "could not translate host name",
+)
+_TRANSIENT_GRACE_SECONDS = float(
+    os.environ.get("FDW_DRIFT_TRANSIENT_GRACE_SECONDS", "300")
+)
+_transient_state: Dict[str, Optional[float]] = {"since": None}
+
+
+def _is_transient_conn_error(err: Optional[str]) -> bool:
+    if not err:
+        return False
+    low = err.lower()
+    return any(m in low for m in _TRANSIENT_CONN_MARKERS)
+
+
+def _gate_transient(err: Optional[str], now: Optional[float] = None) -> Tuple[Optional[str], bool]:
+    """Return (error_to_report, suppressed).
+
+    A transient connection error is suppressed until it has been failing for
+    the grace period; any other outcome (success or a non-transient error)
+    resets the streak.
+    """
+    now = time.monotonic() if now is None else now
+    if not _is_transient_conn_error(err):
+        _transient_state["since"] = None
+        return err, False
+    since = _transient_state["since"]
+    if since is None:
+        _transient_state["since"] = now
+        since = now
+    if now - since >= _TRANSIENT_GRACE_SECONDS:
+        return err, False
+    return None, True
+
+
 def sync_fdw_drift(
     cfg: FdwConfig,
     yaml_path,
@@ -791,9 +842,16 @@ def sync_fdw_drift(
         apply_args["pg_db"],
         apply_args.get("pg_password"),
     )
-    if det.get("error"):
+    err, suppressed = _gate_transient(det.get("error"))
+    if suppressed:
+        # Not recorded (no notable keys) and therefore not paged; the caller
+        # logs it so the blip stays visible in the manager log.
         return {"checked": det["targets"], "drifted": [], "changes": [],
-                "reapplied": False, "error": det["error"]}
+                "reapplied": False, "error": None,
+                "transient_error": det["error"]}
+    if err:
+        return {"checked": det["targets"], "drifted": [], "changes": [],
+                "reapplied": False, "error": err}
 
     server_missing = not det["server_ok"]
     drifted_pairs = det["drifted"]
