@@ -64,6 +64,7 @@ ENV_DEFAULTS = {
     "SUBSCRIPTION_NAME": "snaplicator_subscription",
     "DDL_SYNC_INTERVAL": "30",
     "DDL_APPLY_ENABLED": "1",
+    "REPLICA_UPSERT_TABLES": "{}",
 }
 
 
@@ -96,6 +97,30 @@ def read_env() -> Dict[str, str]:
         k, v = line.split("=", 1)
         out[k] = v
     return out
+
+
+def env_json_mapping(value: str) -> str:
+    """Return a compact JSON object safe to wrap in dotenv single quotes."""
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        value = value[1:-1]
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError) as exc:
+        die(f"REPLICA_UPSERT_TABLES must be a JSON object: {exc}")
+    if not isinstance(parsed, dict) or not all(
+            isinstance(k, str) and isinstance(v, str)
+            for k, v in parsed.items()):
+        die("REPLICA_UPSERT_TABLES must map table names to constraint names")
+    # JSON's unicode escape preserves an apostrophe without ending the shell /
+    # dotenv single-quoted value. json.loads restores it for the backend.
+    return json.dumps(parsed, separators=(",", ":"), ensure_ascii=True).replace(
+        "'", r"\u0027")
+
+
+def env_line(key: str, value: str) -> str:
+    if key == "REPLICA_UPSERT_TABLES":
+        return f"{key}='{env_json_mapping(value)}'\n"
+    return f"{key}={value}\n"
 
 
 def parse_connstr(connstr: str) -> Dict[str, str]:
@@ -260,6 +285,8 @@ def cmd_configure(args) -> None:
     env["POSTGRES_PASSWORD"] = (args.replica_password
                                 or prev.get("POSTGRES_PASSWORD")
                                 or secrets.token_hex(16))
+    env["REPLICA_UPSERT_TABLES"] = prev.get(
+        "REPLICA_UPSERT_TABLES", env["REPLICA_UPSERT_TABLES"])
     extras: List[str] = []
     for pair in args.set or []:
         if "=" not in pair:
@@ -281,8 +308,8 @@ def cmd_configure(args) -> None:
             "POSTGRES_DB", "PRIMARY_HOST", "PRIMARY_PORT", "PRIMARY_DB",
             "PRIMARY_USER", "PRIMARY_PASSWORD", "PGSSLMODE",
             "PUBLICATION_NAME", "SUBSCRIPTION_NAME", "DDL_SYNC_INTERVAL",
-            "DDL_APPLY_ENABLED"]
-    body = "".join(f"{k}={env[k]}\n" for k in keys + extras)
+            "DDL_APPLY_ENABLED", "REPLICA_UPSERT_TABLES"]
+    body = "".join(env_line(k, env[k]) for k in keys + extras)
     if ENV_FILE.exists() and ENV_FILE.read_text() != body:
         ENV_FILE.replace(ENV_FILE.with_suffix(".env.bak"))
     ENV_FILE.write_text(body)

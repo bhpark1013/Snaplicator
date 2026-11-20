@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 from typing import Optional, List
 from dotenv import load_dotenv
 
@@ -43,6 +44,9 @@ class Settings(BaseSettings):
 	# the publication + REFRESH). Off by default so a deploy alone never
 	# changes replication behaviour.
 	ddl_apply_enabled: bool = False
+	# Explicit publisher-wins policy for INSERT conflicts on selected tables.
+	# Map schema.table to its NOT NULL, non-deferrable unique constraint.
+	replica_upsert_tables: dict[str, str] = Field(default_factory=dict)
 	replication_schemas: Optional[str] = None  # comma-separated schemas to monitor, e.g. "public,deprecated,etl"
 
 	# FDW (postgres_fdw) — credentials and (optionally) a different connection target
