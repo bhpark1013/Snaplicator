@@ -33,6 +33,9 @@ export function Layout() {
                     <NavLink to="/snapshots" className={({ isActive }) => navItemClass(isActive)}>
                         Snapshots
                     </NavLink>
+                    <NavLink to="/disk" className={({ isActive }) => navItemClass(isActive)}>
+                        Disk
+                    </NavLink>
                     <NavLink to="/config" className={navItemClass(configActive)}>
                         Config
                     </NavLink>

@@ -8,6 +8,7 @@ import { Snapshots } from './routes/Snapshots'
 import { Config } from './routes/Config'
 import { CloneDetail } from './routes/CloneDetail'
 import { ReplicationTables } from './routes/ReplicationTables'
+import { Disk } from './routes/Disk'
 import './styles.css'
 
 const router = createBrowserRouter([
@@ -19,6 +20,7 @@ const router = createBrowserRouter([
             { path: '/config', element: <Config /> },
             { path: '/clones/:cloneId', element: <CloneDetail /> },
             { path: '/replication', element: <ReplicationTables /> },
+            { path: '/disk', element: <Disk /> },
         ],
     },
 ])
