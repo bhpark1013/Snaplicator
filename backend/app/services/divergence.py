@@ -372,11 +372,34 @@ def describe(name: str, live: str) -> Dict:
 MIN_GROUP_BYTES = 1 << 20
 
 
-def build_response(data: Optional[Dict], live: str, fs_size: Optional[int], fs_used: Optional[int], status: Dict) -> Dict:
+def read_labels(root_data_dir: str, names) -> Dict[str, str]:
+    """The name a person gave each subvolume, from its .snaplicator.json.
+
+    One small file per subvolume, so the Disk page can name rows on its
+    first response instead of waiting on /clones and /snapshots (seconds
+    each: they inspect containers and measure sizes)."""
+    out: Dict[str, str] = {}
+    for name in names:
+        try:
+            with open(os.path.join(root_data_dir, name, ".snaplicator.json")) as fh:
+                meta = json.load(fh)
+        except Exception:
+            continue
+        if not isinstance(meta, dict):
+            continue
+        label = (meta.get("display_name") or "").strip() or (meta.get("description") or "").strip()
+        if label:
+            out[name] = label
+    return out
+
+
+def build_response(data: Optional[Dict], live: str, fs_size: Optional[int], fs_used: Optional[int], status: Dict,
+                   labels: Optional[Dict[str, str]] = None) -> Dict:
     items = []
+    labels = labels or {}
     if data:
         for name, nums in data.get("subvolumes", {}).items():
-            items.append({"name": name, **describe(name, live), **nums})
+            items.append({"name": name, "label": labels.get(name), **describe(name, live), **nums})
         items.sort(key=lambda i: (-i.get("not_in_live_bytes", 0), i["name"]))
     return {
         "measured_at": (data or {}).get("measured_at"),

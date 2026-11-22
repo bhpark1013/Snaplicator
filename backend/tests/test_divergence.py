@@ -133,3 +133,17 @@ def test_build_response_sorts_by_divergence_and_survives_no_cache():
         "replica-clone-20260901-044310", "replica-clone-20261120-180355-a", "replica",
     ]
     assert r["items"][0]["kind"] == "clone"
+
+
+def test_labels_come_from_each_subvolumes_metadata(tmp_path):
+    import json as _json
+    (tmp_path / "replica-clone-a").mkdir()
+    (tmp_path / "replica-clone-a" / ".snaplicator.json").write_text(_json.dumps({"display_name": "brand-split", "description": "x"}))
+    (tmp_path / "replica-clone-b-snapshot-20260101-000000").mkdir()
+    (tmp_path / "replica-clone-b-snapshot-20260101-000000" / ".snaplicator.json").write_text(_json.dumps({"description": " test snap "}))
+    (tmp_path / "replica-clone-c").mkdir()  # no metadata
+    labels = d.read_labels(str(tmp_path), ["replica-clone-a", "replica-clone-b-snapshot-20260101-000000", "replica-clone-c", "gone"])
+    assert labels == {"replica-clone-a": "brand-split", "replica-clone-b-snapshot-20260101-000000": "test snap"}
+    data = {"subvolumes": {"replica-clone-a": {"exclusive_bytes": 1, "not_in_live_bytes": 2, "referenced_bytes": 3}}}
+    r = d.build_response(data, "replica", 10, 5, {"running": False, "error": None}, labels)
+    assert r["items"][0]["label"] == "brand-split"
