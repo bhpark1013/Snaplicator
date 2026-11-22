@@ -12,6 +12,7 @@ interface DiskItem {
     name: string
     kind: 'live' | 'clone' | 'snapshot'
     created_at: string | null
+    label?: string | null
     exclusive_bytes: number
     not_in_live_bytes: number
     referenced_bytes: number
@@ -97,14 +98,17 @@ export function Disk() {
         fetch(`${base}/usage/disk/refresh`, { method: 'POST' }).finally(load)
     }
 
-    const rows = useMemo(
-        () =>
-            (data?.items ?? [])
-                .filter((i) => i.kind !== 'live')
-                // What deleting it alone frees, largest first.
-                .sort((a, b) => b.exclusive_bytes - a.exclusive_bytes || b.not_in_live_bytes - a.not_in_live_bytes || a.name.localeCompare(b.name)),
-        [data],
-    )
+    type SortKey = 'exclusive_bytes' | 'not_in_live_bytes'
+    const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'exclusive_bytes', desc: true })
+    const toggleSort = (key: SortKey) =>
+        setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: true }))
+    const rows = useMemo(() => {
+        const other: SortKey = sort.key === 'exclusive_bytes' ? 'not_in_live_bytes' : 'exclusive_bytes'
+        const dir = sort.desc ? -1 : 1
+        return (data?.items ?? [])
+            .filter((i) => i.kind !== 'live')
+            .sort((a, b) => dir * (a[sort.key] - b[sort.key]) || dir * (a[other] - b[other]) || a.name.localeCompare(b.name))
+    }, [data, sort])
     const maxDiverged = useMemo(() => Math.max(1, ...rows.map((r) => r.not_in_live_bytes)), [rows])
 
     // Deleting a set frees every block held only by members of the set —
@@ -194,14 +198,24 @@ export function Disk() {
                                 <th className="py-2 pr-3 font-semibold">Name</th>
                                 <th className="py-2 pr-3 font-semibold">Created</th>
                                 <th className="w-[34%] py-2 pr-3 font-semibold" />
-                                <th className="py-2 pr-3 text-right font-semibold">Only this</th>
-                                <th className="py-2 pr-4 text-right font-semibold">Not in live</th>
+                                <th className="py-2 pr-3 text-right font-semibold">
+                                    <button type="button" onClick={() => toggleSort('exclusive_bytes')} className={cn('inline-flex items-center gap-1 uppercase hover:text-foreground', sort.key === 'exclusive_bytes' && 'text-foreground')}>
+                                        Only this
+                                        <span className={cn(sort.key !== 'exclusive_bytes' && 'opacity-0')}>{sort.desc ? '↓' : '↑'}</span>
+                                    </button>
+                                </th>
+                                <th className="py-2 pr-4 text-right font-semibold">
+                                    <button type="button" onClick={() => toggleSort('not_in_live_bytes')} className={cn('inline-flex items-center gap-1 uppercase hover:text-foreground', sort.key === 'not_in_live_bytes' && 'text-foreground')}>
+                                        Not in live
+                                        <span className={cn(sort.key !== 'not_in_live_bytes' && 'opacity-0')}>{sort.desc ? '↓' : '↑'}</span>
+                                    </button>
+                                </th>
                             </tr>
                         </thead>
                         <tbody>
                             {rows.map((r) => {
                                 const shared = Math.max(0, r.not_in_live_bytes - r.exclusive_bytes)
-                                const label = labels[r.name]
+                                const label = labels[r.name] || r.label?.trim()
                                 const on = selected.has(r.name)
                                 return (
                                     <tr
