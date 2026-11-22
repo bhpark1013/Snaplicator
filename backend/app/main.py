@@ -202,6 +202,7 @@ async def ddl_sync_loop():
                             enable_ddl_apply,
                             connstr, pub_name, container, user, password, db, sub_name,
                             bootstrap_svc.clone_watermark(),
+                            bootstrap_svc.clone_applied_ids(),
                         )
                         if res.get("created") or res.get("added") or res.get("refreshed"):
                             logger.info(f"DDL apply enabled: {res}")

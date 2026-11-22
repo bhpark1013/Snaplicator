@@ -513,6 +513,19 @@ for i in {1..60}; do
             fi
             n=$((n+1))
           done
+          # 05 left the list of DDL log ids its dump already contains (read
+          # in the dump's own snapshot) in the replica; the manager reads it
+          # from the pool. No list (snapshot not taken) -> no file, and the
+          # manager keeps its numeric watermark.
+          if [ "$s" = "05_clone_schema.sh" ] && [ -n "${DDL_CLONE_IDS_FILE:-}" ]; then
+            rm -f "$DDL_CLONE_IDS_FILE"
+            if docker cp "${CONTAINER_NAME}:/var/lib/postgresql/ddl_clone_applied_ids" "${DDL_CLONE_IDS_FILE}.tmp" >/dev/null 2>&1; then
+              mv "${DDL_CLONE_IDS_FILE}.tmp" "$DDL_CLONE_IDS_FILE"
+              echo "[post-init] DDL id list -> $DDL_CLONE_IDS_FILE"
+            else
+              rm -f "${DDL_CLONE_IDS_FILE}.tmp"
+            fi
+          fi
         done
       fi
       docker logs "${CONTAINER_NAME}" --tail 50 || true

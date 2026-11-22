@@ -1189,6 +1189,7 @@ def install_ddl_apply(
     subscriber_password: str | None,
     subscriber_db: str,
     initial_watermark: int = 0,
+    seed_applied_ids: Optional[Iterable[int]] = None,
 ) -> Dict:
     """Install the subscriber-side DDL apply infrastructure.
 
@@ -1400,6 +1401,26 @@ ALTER TABLE public._snaplicator_ddl_deferred
         f"VALUES (1, {int(initial_watermark)}) ON CONFLICT (id) DO NOTHING;"
     )
 
+    # The log rows the replica's schema already contains, by exact id — read
+    # in the same snapshot pg_dump took the schema from (05_clone_schema.sh,
+    # which seeds them itself before CREATE SUBSCRIPTION; this is the same
+    # list again, from the manager's side). A number cannot say this: ids are assigned at
+    # INSERT and become visible at COMMIT, so the dump can hold id 11 and
+    # lack id 10. Seeded before the trigger below is (re)created and before
+    # the log table can join the subscription, because the log table's
+    # initial COPY fires the ALWAYS trigger too — a row that lands before
+    # its id is here is executed. Repeated every call; ON CONFLICT makes
+    # that a no-op.
+    seed = sorted({int(i) for i in (seed_applied_ids or [])})
+    if seed:
+        _run_subscriber_sql_stdin(
+            subscriber_container, subscriber_user, subscriber_password,
+            subscriber_db,
+            "INSERT INTO public._snaplicator_ddl_applied (id) "
+            f"SELECT unnest('{{{','.join(map(str, seed))}}}'::bigint[]) "
+            "ON CONFLICT (id) DO NOTHING;",
+        )
+
     _sub_sql("""
 CREATE OR REPLACE FUNCTION public._snaplicator_apply_ddl()
 RETURNS trigger
@@ -1538,6 +1559,7 @@ ALTER TABLE public.{CAPTURE_LOG_TABLE}
         "installed": True,
         "log_table": CAPTURE_LOG_TABLE,
         "initial_watermark": int(initial_watermark),
+        "seeded_ids": len(seed),
         "apply_budget": _ddl_timeout(),
     }
 
@@ -1899,6 +1921,20 @@ def _run_subscriber_sql_cmds(
     return (proc.stdout or "").strip()
 
 
+def _run_subscriber_sql_stdin(
+    container_name: str, user: str, password: str | None, db: str, sql: str,
+) -> str:
+    """Like _run_subscriber_sql, but the SQL goes in on stdin: a seed list
+    can be longer than an argv is allowed to be."""
+    cmd: list[str] = ["docker", "exec", "-i"]
+    if password:
+        cmd += ["-e", f"PGPASSWORD={password}"]
+    cmd += [container_name, "psql", "-U", user, "-d", db, "-At",
+            "-v", "ON_ERROR_STOP=1", "-f", "-"]
+    proc = subprocess.run(cmd, input=sql, text=True, capture_output=True, check=True)
+    return (proc.stdout or "").strip()
+
+
 def get_publisher_max_ddl_log_id(publisher_connstr: str) -> int:
     """Watermark seed: log rows at or below this id must never replay."""
     out = _run_publisher_sql(
@@ -2058,8 +2094,16 @@ def enable_ddl_apply(
     subscriber_db: str,
     subscription_name: str,
     watermark: Optional[int] = None,
+    applied_ids: Optional[List[int]] = None,
 ) -> Dict:
     """Connect the DDL stream, idempotently.
+
+    `applied_ids`, when the bootstrap produced them, replaces the numeric
+    line: the exact log ids the replica's schema was dumped with (read in
+    pg_dump's own snapshot by 05_clone_schema.sh, which also seeds them in
+    the replica before the subscription exists). They are seeded as already processed and the
+    numeric watermark is 0, so every other row — before or after, in any
+    commit order — is applied exactly once.
 
     `watermark` is the log id the replica's schema was taken at. The
     bootstrap knows it, because it is the one that took the schema; passing
@@ -2080,10 +2124,13 @@ def enable_ddl_apply(
     current max(id) BEFORE the table joins, so the history the refresh copies
     over lands below the line and is skipped instead of replayed.
     """
-    wm = watermark if watermark is not None else get_publisher_max_ddl_log_id(publisher_connstr)
+    if applied_ids is not None:
+        wm = 0
+    else:
+        wm = watermark if watermark is not None else get_publisher_max_ddl_log_id(publisher_connstr)
     install_ddl_apply(
         subscriber_container, subscriber_user, subscriber_password,
-        subscriber_db, initial_watermark=wm,
+        subscriber_db, initial_watermark=wm, seed_applied_ids=applied_ids,
     )
     added = ensure_ddl_publication(publisher_connstr, publication_name)
     if not added.get("added"):

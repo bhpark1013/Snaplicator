@@ -84,6 +84,34 @@ def clone_watermark() -> Optional[int]:
     return _read_int(_clone_watermark_path())
 
 
+def _clone_ids_path() -> Path:
+    """The exact log ids the replica's schema was dumped with.
+
+    05_clone_schema.sh reads them in the snapshot it hands pg_dump
+    (--snapshot), right before the dump, so it is the dump's own answer to
+    "which captured DDL do I already contain" — which a max(id) read beside
+    the dump cannot be: ids are taken at INSERT and become visible at
+    COMMIT, so a dump can contain id 11 and not id 10. The script copies the
+    list here. When this file exists the numeric watermark is 0 and these
+    ids are seeded as already processed.
+    """
+    return _state_dir() / "ddl_clone_applied_ids"
+
+
+def clone_applied_ids() -> Optional[list[int]]:
+    """The ids the replica's schema already contains, if a bootstrap took
+    its schema through an exported snapshot. None means: no such list, use
+    the numeric watermark as before."""
+    try:
+        text = _clone_ids_path().read_text()
+    except Exception:
+        return None
+    try:
+        return [int(x) for x in text.split()]
+    except ValueError:
+        return None
+
+
 def _started_path() -> Path:
     # Written once, so elapsed time means time since the run began. The log's
     # mtime would answer a different question (when it last said anything),
@@ -204,6 +232,11 @@ def start(force: bool = False, publisher_connstr: Optional[str] = None) -> dict:
     # the replica still owes; rows below are already in the schema it was
     # given. A primary with no log table yet has no history to skip, and 0 is
     # the right answer for that.
+    # A list from an earlier run would describe an earlier schema; the
+    # script writes this run's list once its dump is taken.
+    _clone_ids_path().unlink(missing_ok=True)
+    log = _log_path()
+
     if publisher_connstr:
         pub_for_capture = publication_svc.active(settings.publication_name)
         if pub_for_capture:
@@ -216,6 +249,11 @@ def start(force: bool = False, publisher_connstr: Optional[str] = None) -> dict:
                 # Not fatal: the loop reinstalls, and the mark below is still
                 # the honest answer for whatever is being recorded now.
                 pass
+        # The numeric mark is now only the fallback: when the script dumps
+        # through an exported snapshot it writes the exact id list
+        # (_clone_ids_path) and forces the replica's watermark to 0, and
+        # that list wins. Without one — the snapshot could not be taken —
+        # this is the line, as it always was.
         try:
             _clone_watermark_path().write_text(
                 str(get_publisher_max_ddl_log_id(publisher_connstr))
@@ -223,7 +261,6 @@ def start(force: bool = False, publisher_connstr: Optional[str] = None) -> dict:
         except Exception:
             _clone_watermark_path().write_text("0")
 
-    log = _log_path()
     _exit_path().unlink(missing_ok=True)
     header = f"\n===== bootstrap started {time.strftime('%Y-%m-%dT%H:%M:%S%z')} =====\n"
     with log.open("a") as fh:
@@ -245,6 +282,7 @@ def start(force: bool = False, publisher_connstr: Optional[str] = None) -> dict:
         pub = publication_svc.active(settings.publication_name)
         if pub:
             env["PUBLICATION_NAME"] = pub
+        env["DDL_CLONE_IDS_FILE"] = str(_clone_ids_path())
         proc = subprocess.Popen(
             ["bash", "-c", f'bash "{SCRIPT}"; echo $? > "{_exit_path()}"'],
             cwd=str(APP_DIR),

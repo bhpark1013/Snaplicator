@@ -108,6 +108,57 @@ TMP_ERR="${TMP_BASE}.err"
 : >"$TMP_SQL"; : >"$TMP_ERR"
 log "Running pg_dump (schema-only)"
 PGDUMP_ARGS=( -s --no-owner --no-privileges -h "$PRIMARY_HOST" -p "$PRIMARY_PORT" -U "$PRIMARY_USER" -d "$PRIMARY_DB" )
+# ── Which captured DDL does this schema already contain? ──
+# Answered in the snapshot the schema is dumped from, by exact id: a
+# REPEATABLE READ transaction on the primary exports its snapshot, lists
+# _snaplicator_ddl_log in it, and pg_dump --snapshot reads the schema from
+# that same snapshot. A max(id) read beside the dump cannot say this — ids
+# are taken at INSERT and become visible at COMMIT, so a dump can hold id 11
+# and lack id 10. Taken here, right before pg_dump, so the snapshot is no
+# older than the dump would have been anyway: a DROP in between cannot leave
+# pg_dump chasing an object that is gone, and a CREATE is in the dump.
+# Any failure falls back to a plain dump with no list — the manager then
+# uses its numeric watermark, as before.
+CLONE_IDS_FILE=${CLONE_IDS_FILE:-/var/lib/postgresql/ddl_clone_applied_ids}
+rm -f "$CLONE_IDS_FILE"
+SNAP_NAME=""; SNAP_IDS=""; SNAP_OK=0
+_snap_release() {
+  if [ -n "${SNAP_PID:-}" ]; then
+    { echo "COMMIT;"; echo '\q'; } >&"${SNAP[1]}" 2>/dev/null || true
+    exec {SNAP[1]}>&- 2>/dev/null || true
+    wait "$SNAP_PID" 2>/dev/null || true
+    SNAP_PID=""
+  fi
+}
+OLD_ERR_TRAP0=$(trap -p ERR || true); trap - ERR; OLD_E0=0; case $- in *e*) OLD_E0=1;; esac; set +e
+coproc SNAP { psql -h "$PRIMARY_HOST" -p "$PRIMARY_PORT" -U "$PRIMARY_USER" -d "$PRIMARY_DB" \
+                   -X -q -At -v ON_ERROR_STOP=1 2>&1; }
+SNAP_PID=$SNAP_PID
+{
+  echo "BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY;"
+  echo "SELECT 'SNAP:' || pg_export_snapshot();"
+  echo "SELECT 'HASLOG:' || (to_regclass('public._snaplicator_ddl_log') IS NOT NULL);"
+} >&"${SNAP[1]}"
+read -r -t 60 _l1 <&"${SNAP[0]}"; read -r -t 60 _l2 <&"${SNAP[0]}"
+if [[ "$_l1" == SNAP:* && "$_l2" == HASLOG:* ]]; then
+  SNAP_NAME="${_l1#SNAP:}"
+  if [ "${_l2#HASLOG:}" = "true" ]; then
+    echo "SELECT 'IDS:' || coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM public._snaplicator_ddl_log;" >&"${SNAP[1]}"
+    read -r -t 300 _l3 <&"${SNAP[0]}"
+    if [[ "$_l3" == IDS:* ]]; then SNAP_IDS="${_l3#IDS:}"; SNAP_OK=1; fi
+  else
+    SNAP_OK=1   # no log table yet: nothing captured, nothing to skip
+  fi
+fi
+if [ $SNAP_OK -eq 1 ] && [ -n "$SNAP_NAME" ]; then
+  PGDUMP_ARGS+=( --snapshot="$SNAP_NAME" )
+  log "Dumping from exported snapshot $SNAP_NAME (log ids in it: $(echo -n "$SNAP_IDS" | tr ',' '\n' | grep -c .))"
+else
+  log "WARNING: could not export a snapshot from the primary (${_l1:-no reply} ${_l2:-}); plain dump, no DDL id list"
+  SNAP_OK=0
+  _snap_release
+fi
+if [ $OLD_E0 -eq 1 ]; then set -e; fi; if [ -n "$OLD_ERR_TRAP0" ]; then eval "$OLD_ERR_TRAP0"; fi
 # 선택 스키마 덤프: 환경변수 DUMP_SCHEMAS(콤마 구분) 지정 시 해당 스키마만
 if [ -n "${DUMP_SCHEMAS:-}" ]; then
   IFS=',' read -r -a __SCHEMAS <<< "$DUMP_SCHEMAS"
@@ -125,6 +176,8 @@ fi
 OLD_ERR_TRAP=$(trap -p ERR || true); trap - ERR; OLD_E=0; case $- in *e*) OLD_E=1;; esac; set +e
 pg_dump "${PGDUMP_ARGS[@]}" 1>"$TMP_SQL" 2>"$TMP_ERR"
 PG_DUMP_RC=$?
+# The snapshot only had to live until pg_dump imported it; done either way.
+_snap_release
 if [ $PG_DUMP_RC -ne 0 ]; then
   if [ -s "$TMP_ERR" ] && [ -f "$TMP_ERR" ]; then log "pg_dump stderr (head): $(head -n 20 "$TMP_ERR")"; fi
   log "pg_dump failed (rc=$PG_DUMP_RC). Aborting schema apply step."
@@ -276,6 +329,41 @@ BEGIN
 END;
 $cleanup$;
 SQL
+
+# Hand the list over. Seeded here, in the replica, before 20_create_subscription
+# runs: the log table's initial COPY fires the apply trigger, so an id that is
+# not already marked processed when its row lands is executed — and the sync
+# loop that also seeds it may not have come round yet. Same table shapes as
+# install_ddl_apply (IF NOT EXISTS either way round). The watermark is forced
+# to 0: the exact list is the line now, and a numeric seed the loop may have
+# written earlier would skip a lower id this schema does not contain.
+# The file is what the manager reads (run-replica-postgres.sh copies it out).
+if [ $SNAP_OK -eq 1 ]; then
+  _OLD_ERR_TRAP=$(trap -p ERR || true); trap - ERR; _OLD_E=0; case $- in *e*) _OLD_E=1;; esac; set +e
+  { cat <<'SQL'
+CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_watermark (
+    id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    last_applied_id bigint NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public._snaplicator_ddl_applied (
+    id bigint PRIMARY KEY,
+    applied_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO public._snaplicator_ddl_watermark (id, last_applied_id) VALUES (1, 0)
+    ON CONFLICT (id) DO UPDATE SET last_applied_id = 0, updated_at = now();
+SQL
+    echo "INSERT INTO public._snaplicator_ddl_applied (id) SELECT unnest('{${SNAP_IDS}}'::bigint[]) ON CONFLICT (id) DO NOTHING;"
+  } | psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q >/dev/null 2>>"$TMP_ERR"
+  if [ $? -eq 0 ]; then
+    printf '%s\n' "$SNAP_IDS" | tr ',' '\n' | grep . > "${CLONE_IDS_FILE}.tmp"
+    mv "${CLONE_IDS_FILE}.tmp" "$CLONE_IDS_FILE"
+    log "Seeded DDL ids already in this schema; watermark set to 0"
+  else
+    log "WARNING: could not seed the DDL id list into the replica: $(tail -n 3 "$TMP_ERR")"
+  fi
+  if [ $_OLD_E -eq 1 ]; then set -e; fi; if [ -n "$_OLD_ERR_TRAP" ]; then eval "$_OLD_ERR_TRAP"; fi
+fi
 
 rm -f "$TMP_SQL" "$TMP_ERR" "$TMP_BASE"
 
