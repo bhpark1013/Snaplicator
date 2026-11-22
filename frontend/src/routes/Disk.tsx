@@ -97,7 +97,14 @@ export function Disk() {
         fetch(`${base}/usage/disk/refresh`, { method: 'POST' }).finally(load)
     }
 
-    const rows = useMemo(() => (data?.items ?? []).filter((i) => i.kind !== 'live'), [data])
+    const rows = useMemo(
+        () =>
+            (data?.items ?? [])
+                .filter((i) => i.kind !== 'live')
+                // What deleting it alone frees, largest first.
+                .sort((a, b) => b.exclusive_bytes - a.exclusive_bytes || b.not_in_live_bytes - a.not_in_live_bytes || a.name.localeCompare(b.name)),
+        [data],
+    )
     const maxDiverged = useMemo(() => Math.max(1, ...rows.map((r) => r.not_in_live_bytes)), [rows])
 
     // Deleting a set frees every block held only by members of the set —
