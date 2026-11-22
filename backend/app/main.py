@@ -18,6 +18,7 @@ from .api.routes.clones import router as clones_router
 from .api.routes.replication import router as replication_router
 from .api.routes.notifications import router as notifications_router
 from .api.routes.anonymize import router as anonymize_router
+from .api.routes.usage import router as usage_router
 from .services import fdw as fdw_svc
 from .services import fdw_creds
 from .services import sync_log
@@ -25,6 +26,8 @@ from .services import bootstrap as bootstrap_svc
 from .services import policy as policy_svc
 from .services import publication as publication_svc
 from .services import usage as usage_svc
+from .services import divergence as divergence_svc
+from .services.divergence import live_name
 from . import mcp_server
 from .services.replication import (
     auto_sync_new_tables,
@@ -364,6 +367,13 @@ async def usage_refresh_loop():
                 if paths:
                     await asyncio.to_thread(usage_svc.get_usage, paths, True)
                     await asyncio.to_thread(usage_svc.prune_except, paths)
+                # Block ownership across subvolumes (the disk screen): a full
+                # pass every INTERVAL_SECONDS, in its own thread.
+                if divergence_svc.is_stale(divergence_svc.load_cached()):
+                    divergence_svc.start_refresh(
+                        settings.root_data_dir,
+                        live_name(settings.root_data_dir, settings.main_data_dir),
+                    )
         except Exception as e:
             logger.warning(f"usage warm sweep failed: {e}")
         await asyncio.sleep(3600)
@@ -479,3 +489,4 @@ app.include_router(clones_router, prefix="/clones", tags=["clones"])
 app.include_router(replication_router, prefix="/replication", tags=["replication"])
 app.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
 app.include_router(anonymize_router, prefix="/anonymize", tags=["anonymize"])
+app.include_router(usage_router, prefix="/usage", tags=["usage"])
