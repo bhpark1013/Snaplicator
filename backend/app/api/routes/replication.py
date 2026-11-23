@@ -762,7 +762,21 @@ def get_subscription_logs(tail: int = Query(default=500, le=5000)):
             },
         }
     except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="docker logs command timed out")
+        # A log viewer, polled every 30s: a slow `docker logs` is not an API
+        # failure worth a Slack alert (5xx alerts), so answer empty instead.
+        return {
+            "container_name": settings.container_name,
+            "lines": [],
+            "total_matched": 0,
+            "error_count": 0,
+            "has_errors": False,
+            "error": "docker logs timed out",
+            "filters": {
+                "include": SUBSCRIPTION_LOG_FILTERS,
+                "exclude": SUBSCRIPTION_LOG_EXCLUDES,
+                "tail": tail,
+            },
+        }
     except HTTPException:
         raise
     except Exception as e:
