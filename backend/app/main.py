@@ -28,6 +28,7 @@ from .services import publication as publication_svc
 from .services import usage as usage_svc
 from .services import divergence as divergence_svc
 from .services.divergence import live_name
+from .services.btrfs import cleanup_expired_snapshots
 from . import mcp_server
 from .services.replication import (
     auto_sync_new_tables,
@@ -380,6 +381,29 @@ async def usage_refresh_loop():
         await asyncio.sleep(3600)
 
 
+async def snapshot_expiry_loop():
+    """Delete snapshots whose retention has run out, hourly.
+
+    Retention was recorded on every snapshot but nothing acted on it, so an
+    expired snapshot kept its blocks forever. cleanup_expired_snapshots skips
+    permanent ones (retention_days 0) and ones without expires_at, re-links
+    lineage around what it removes, and deleting a snapshot never takes data
+    a clone still references (btrfs ref-counts the extents)."""
+    await asyncio.sleep(300)
+    while True:
+        try:
+            if settings.root_data_dir:
+                res = await asyncio.to_thread(
+                    cleanup_expired_snapshots,
+                    settings.root_data_dir, settings.main_data_dir, True,
+                )
+                if res.get("expired"):
+                    logger.info(f"expired snapshots: {res.get('deleted')}/{res.get('expired')} deleted")
+        except Exception as e:
+            logger.warning(f"snapshot expiry sweep failed: {e}")
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Best-effort: install the DDL capture triggers (outbox) on the publisher
@@ -400,6 +424,7 @@ async def lifespan(app: FastAPI):
     tasks = [
         asyncio.create_task(ddl_sync_loop()),
         asyncio.create_task(usage_refresh_loop()),
+        asyncio.create_task(snapshot_expiry_loop()),
     ]
     # The MCP server is this API with a second protocol on it, not a second
     # program: same process, same settings, same lifetime. A mounted ASGI app

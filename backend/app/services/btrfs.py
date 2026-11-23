@@ -139,7 +139,8 @@ def _retention_fields(created: datetime, retention_days: Optional[int]) -> Dict[
 
     retention_days <= 0 (or None) means "keep forever" (permanent); we store
     retention_days=0 and expires_at=None. Otherwise expires_at is created + N days.
-    Retention is advisory metadata for the UI today (no auto-deletion)."""
+    Snapshots are deleted once expired (main.snapshot_expiry_loop); a clone's
+    retention is still display-only."""
     days = retention_days if isinstance(retention_days, int) else 14
     if days <= 0:
         return {"retention_days": 0, "expires_at": None}
