@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { SkeletonRows } from '@/components/ui/skeleton'
 import { cloneLabel } from '@/lib/cloneLabel'
 import { cn, formatBytes } from '@/lib/utils'
 
@@ -186,7 +187,9 @@ export function Disk() {
                     <span className="flex items-center gap-1.5"><Swatch style={HATCH} />Shared with other clones/snapshots</span>
                     <span className="ml-auto">bar = not in live replica</span>
                 </div>
-                {rows.length === 0 ? (
+                {!data && !error ? (
+                    <div className="grid gap-2 px-4 py-3"><SkeletonRows count={8} /></div>
+                ) : rows.length === 0 ? (
                     <p className="px-4 py-6 text-[13px] text-muted-foreground">
                         {data?.refreshing ? 'First measurement running…' : 'No measurement yet.'}
                     </p>

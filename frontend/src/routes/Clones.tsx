@@ -5,6 +5,7 @@ import { AlertTriangle, Check, Copy, Loader2, Star, Upload, X } from 'lucide-rea
 import { cloneLabel } from '@/lib/cloneLabel'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { SkeletonRows } from '@/components/ui/skeleton'
 import {
     Dialog,
     DialogContent,
@@ -773,21 +774,7 @@ export function Clones() {
                     </>
                 )}
                 <ul className="mt-2 grid gap-2" aria-busy={clonesLoading && clones.length === 0}>
-                    {clonesLoading && clones.length === 0 &&
-                        Array.from({ length: 6 }, (_, i) => (
-                            <li key={`skeleton-${i}`} aria-hidden className="flex animate-pulse items-center gap-3 rounded-md border border-border bg-secondary px-3.5 py-2.5">
-                                <div className="size-5 flex-none rounded bg-accent" />
-                                <div className="grid min-w-0 flex-1 gap-2">
-                                    <div className="h-3.5 rounded bg-accent" style={{ width: `${[38, 52, 30, 46, 34, 58][i]}%` }} />
-                                    <div className="h-3 w-3/5 rounded bg-accent/70" />
-                                </div>
-                                <div className="ml-auto flex flex-none gap-2">
-                                    <div className="h-8 w-16 rounded-md bg-accent" />
-                                    <div className="h-8 w-16 rounded-md bg-accent" />
-                                    <div className="h-8 w-16 rounded-md bg-accent" />
-                                </div>
-                            </li>
-                        ))}
+                    {clonesLoading && clones.length === 0 && <SkeletonRows as="li" count={6} actions={3} lead />}
                     {!clonesLoading && clones.length === 0 && (
                         <li className="rounded-md border border-border bg-secondary px-3.5 py-2.5 text-muted-foreground">
                             No clones

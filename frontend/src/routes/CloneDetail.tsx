@@ -7,6 +7,7 @@ import { PortConflictDialog } from '@/components/PortConflictDialog'
 import { restartClone, type PortConflict } from '@/lib/restartClone'
 import { Button } from '@/components/ui/button'
 import { Card, CardTitle } from '@/components/ui/card'
+import { Skeleton, SkeletonRows } from '@/components/ui/skeleton'
 import {
     Dialog,
     DialogContent,
@@ -73,6 +74,7 @@ export function CloneDetail() {
     const [detail, setDetail] = useState<CloneDetailResponse | null>(null)
     const [cloneSnapshots, setCloneSnapshots] = useState<CloneSnapshotItem[]>([])
     const [allSnapshots, setAllSnapshots] = useState<SnapshotItem[]>([])
+    const [snapsLoaded, setSnapsLoaded] = useState(false)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [message, setMessage] = useState<string | null>(null)
@@ -138,6 +140,8 @@ export function CloneDetail() {
         } catch (e: any) {
             setAllSnapshots([])
             setError((prev) => prev ?? String(e?.message || e))
+        } finally {
+            setSnapsLoaded(true)
         }
     }, [base])
 
@@ -533,7 +537,16 @@ export function CloneDetail() {
                 </div>
             </div>
 
-            {loading && <p className="mt-4 text-[13px] text-muted-foreground">Loading...</p>}
+            {loading && !detail && (
+                <Card className="mt-4">
+                    <div className="grid gap-3">
+                        <Skeleton className="h-4 w-24" />
+                        <Skeleton className="h-9 w-full" />
+                        <Skeleton className="h-3.5 w-1/2" />
+                        <Skeleton className="h-3.5 w-1/3" />
+                    </div>
+                </Card>
+            )}
             {error && <p className="mt-4 text-[13px] text-destructive">{error}</p>}
             {message && <p className="mt-4 text-[13px] text-success">{message}</p>}
 
@@ -666,6 +679,9 @@ export function CloneDetail() {
                         </div>
                     )}
                 </div>
+                {!snapsLoaded ? (
+                    <div className="grid gap-2"><SkeletonRows count={3} /></div>
+                ) : (
                 <LineageGraph
                     items={mySnapshots}
                     mode="list"
@@ -676,6 +692,7 @@ export function CloneDetail() {
                     onMove={onMoveSnapshot}
                     maxHeight={440}
                 />
+                )}
             </Card>
 
             <Card className="mt-4">
@@ -704,6 +721,9 @@ export function CloneDetail() {
                         </div>
                     )}
                 </div>
+                {!snapsLoaded ? (
+                    <div className="grid gap-2"><SkeletonRows count={3} /></div>
+                ) : (
                 <LineageGraph
                     items={otherSnapshots}
                     mode="list"
@@ -714,6 +734,7 @@ export function CloneDetail() {
                     onMove={onMoveSnapshot}
                     maxHeight={440}
                 />
+                )}
             </Card>
 
             <Dialog open={refreshOpen} onOpenChange={(open) => { if (!actionBusy) setRefreshOpen(open) }}>
