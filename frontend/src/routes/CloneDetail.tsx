@@ -45,6 +45,10 @@ interface CloneDetailResponse {
     db_user?: string | null
     db_password?: string | null
     db_name?: string | null
+    last_accessed_at?: string | null
+    delete_after?: string | null
+    keep_until?: string | null
+    permanent?: boolean
 }
 
 interface CloneSnapshotItem {
@@ -293,6 +297,26 @@ export function CloneDetail() {
             setActionBusy(false)
         }
     }, [base, cloneId, editName, editDesc, fetchDetail, toast])
+
+    const onKeep = useCallback(async (body: { days?: number; permanent?: boolean }) => {
+        if (!cloneId) return
+        setActionBusy(true)
+        const tid = toast.loading('보관 설정 중…')
+        try {
+            const r = await fetch(`${base}/clones/${encodeURIComponent(cloneId)}/keep`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            })
+            if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+            toast.update(tid, 'success', body.permanent ? '계속 보관합니다' : body.permanent === false ? '보관 해제' : `${body.days}일 연장했습니다`)
+            await fetchDetail()
+        } catch (e: any) {
+            toast.update(tid, 'error', `실패: ${String(e?.message || e)}`)
+        } finally {
+            setActionBusy(false)
+        }
+    }, [base, cloneId, fetchDetail, toast])
 
     const confirmDeleteClone = useCallback(async () => {
         if (!detail) return
@@ -632,6 +656,27 @@ export function CloneDetail() {
                                 </div>
                             </div>
                         )}
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-border px-3 py-2.5 text-[13px]">
+                        <span className="text-muted-foreground">
+                            마지막 사용 <span className="text-zinc-200">{detail.last_accessed_at ? new Date(detail.last_accessed_at).toLocaleDateString() : '—'}</span>
+                        </span>
+                        {detail.permanent ? (
+                            <span className="text-success">계속 보관</span>
+                        ) : detail.delete_after ? (
+                            <span className="text-destructive">{new Date(detail.delete_after).toLocaleDateString()} 삭제 예정</span>
+                        ) : detail.keep_until && new Date(detail.keep_until) > new Date() ? (
+                            <span className="text-muted-foreground">{new Date(detail.keep_until).toLocaleDateString()}까지 보관</span>
+                        ) : null}
+                        <div className="ml-auto flex gap-2">
+                            {!detail.permanent && (
+                                <Button onClick={() => { void onKeep({ days: 14 }) }} disabled={actionBusy}>14일 연장</Button>
+                            )}
+                            <Button onClick={() => { void onKeep({ permanent: !detail.permanent }) }} disabled={actionBusy}>
+                                {detail.permanent ? '보관 해제' : '계속 보관'}
+                            </Button>
+                        </div>
                     </div>
 
                     <div className="mt-4 flex flex-wrap gap-2">

@@ -94,6 +94,8 @@ interface CloneItem {
     db_password?: string | null
     db_name?: string | null
     deleting?: boolean
+    delete_after?: string | null
+    permanent?: boolean
 }
 
 interface CloneSnapshotOption {
@@ -574,6 +576,11 @@ export function Clones() {
                         <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
                             {c.display_name?.trim() || c.description?.trim() ? cloneLabel(c) : <span className="text-muted-foreground">{cloneLabel(c)}</span>}
                         </span>
+                        {!isDeleting && c.delete_after && !c.permanent && (
+                            <span className="flex-none rounded-full bg-destructive/15 px-2 py-0.5 text-[11px] font-medium text-destructive" title="오래 접속이 없어 삭제 예정입니다. 상세에서 연장할 수 있습니다.">
+                                삭제 예정 {new Date(c.delete_after).getMonth() + 1}/{new Date(c.delete_after).getDate()}
+                            </span>
+                        )}
                         {isDeleting && (
                             <span className="flex flex-none items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-[11px] font-medium text-destructive">
                                 <Loader2 className="size-3 animate-spin" />

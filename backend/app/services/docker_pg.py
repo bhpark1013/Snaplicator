@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import secrets
+import socket
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -87,25 +88,53 @@ def _pgdata_env_for_clone_path(clone_path: Path) -> str:
         )
 
 
+def _port_listening(port: int) -> bool:
+    """Something LISTENs on the port (any address), per `ss -ltn`."""
+    try:
+        out = subprocess.run(["ss", "-ltn"], text=True, capture_output=True, check=True).stdout
+        return f":{port} " in out
+    except Exception:
+        return False
+
+
+def _port_bindable(port: int) -> bool:
+    """The port can actually be bound on 0.0.0.0 right now.
+
+    A listener check alone misses the port being some outgoing connection's
+    source port (ESTABLISHED / TIME-WAIT): nothing listens, yet `docker run
+    -p` fails with "address already in use". Binding without SO_REUSEADDR
+    is the question docker will ask, so ask it first. The manager runs with
+    network_mode: host, so this is the host's port space.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+        s.bind(("0.0.0.0", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def is_port_in_use(port: int) -> bool:
+    """Check if a port is currently in use: listened on, or not bindable."""
+    return _port_listening(port) or not _port_bindable(port)
+
+
 def _find_free_port(start_port: int, attempts: int = 1000) -> int:
     port = start_port
     for _ in range(attempts):
-        # Check with ss -ltn for any listener on the port (any address)
-        out = subprocess.run(["ss", "-ltn"], text=True, capture_output=True, check=True).stdout
-        if f":{port} " in out:
+        if is_port_in_use(port):
             port += 1
             continue
         return port
     raise RuntimeError(f"Failed to find a free port starting from {start_port}")
 
 
-def is_port_in_use(port: int) -> bool:
-    """Check if a port is currently in use."""
-    try:
-        out = subprocess.run(["ss", "-ltn"], text=True, capture_output=True, check=True).stdout
-        return f":{port} " in out
-    except Exception:
-        return False
+def _is_port_conflict(message: str) -> bool:
+    return "address already in use" in message or "already allocated" in message
+
 
 def _find_container_mounting_path(host_path: Path) -> Optional[str]:
     """Return the name of a running container that mounts host_path at /var/lib/postgresql/data*.
@@ -362,6 +391,12 @@ def _launch_clone_container(
         "-v", f"{str(clone_path)}:/var/lib/postgresql/data",
         opts.postgres_image,
         "-c", "max_logical_replication_workers=0",
+        # A clone is a dev database, not a primary: a small WAL budget keeps
+        # it from holding GBs of segments, and compressed full-page images
+        # mean fewer new blocks written after each checkpoint.
+        "-c", "max_wal_size=256MB",
+        "-c", "min_wal_size=80MB",
+        "-c", "wal_compression=on",
     ]
 
     anonymize_ran = False
@@ -374,7 +409,26 @@ def _launch_clone_container(
     # 500-char cut drops even that, leaving the cause (port taken, name
     # conflict, network missing, ...) invisible.
     try:
-        run = subprocess.run(cmd, text=True, capture_output=True)
+        # A port we picked ourselves can be lost between the check and docker
+        # binding it; try the next free one once. A port the caller asked
+        # for is theirs to change, so that failure goes back to them.
+        for attempt in range(1 if host_port_hint is not None else 2):
+            run = subprocess.run(cmd, text=True, capture_output=True)
+            if run.returncode == 0:
+                break
+            message = f"{run.stderr or ''} {run.stdout or ''}"
+            # `docker run` leaves the container it created behind when the
+            # start fails ("Created", 29 of them on prod). Remove it — unless
+            # the failure is that the name already belongs to another
+            # container, which is not ours to delete.
+            if "already in use by container" not in message:
+                subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+            if attempt == 0 and host_port_hint is None and _is_port_conflict(message):
+                logger.warning("docker run: port %s taken at bind time, retrying on the next free port", host_port)
+                host_port = _find_free_port(host_port + 1)
+                cmd[cmd.index("-p") + 1] = f"{host_port}:5432"
+                continue
+            break
     finally:
         _PORT_LOCK.release()
     if run.returncode != 0:
@@ -390,18 +444,19 @@ def _launch_clone_container(
                  "--format", "{{.Names}} {{.Status}} {{.Ports}}"],
                 text=True, capture_output=True,
             ).stdout.strip()
-            listening = is_port_in_use(host_port)
+            listening = _port_listening(host_port)
+            bindable = _port_bindable(host_port)
             logger.error(
-                "docker run failed: port %s listening=%s containers_publishing_port=%r",
-                host_port, listening, port_holders,
+                "docker run failed: port %s listening=%s bindable=%s containers_publishing_port=%r",
+                host_port, listening, bindable, port_holders,
             )
         except Exception:
-            port_holders, listening = "", None
+            port_holders, listening, bindable = "", None, None
         # Cause first, so it survives any downstream truncation.
         raise RuntimeError(
             f"docker run exit {run.returncode}: {stderr or stdout or '(no output)'}"
             f" [container={container_name} port={host_port} port_listening={listening}"
-            f" port_holders={port_holders or '-'}]"
+            f" port_bindable={bindable} port_holders={port_holders or '-'}]"
         )
     tr1 = time.monotonic()
     _timing_log(f"[CLONE_TIMING] docker_run_ms={int((tr1-tr0)*1000)} container={container_name} port={host_port}")
@@ -1108,7 +1163,7 @@ def restart_clone_container(
     proc = subprocess.run(["docker", action, container_name], capture_output=True, text=True)
     if proc.returncode != 0:
         message = (proc.stderr or proc.stdout or "").strip()
-        if "already allocated" in message or "address already in use" in message:
+        if _is_port_conflict(message):
             port = _configured_host_port(container_name)
             if port is not None:
                 raise ClonePortInUse(

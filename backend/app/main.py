@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -27,6 +28,7 @@ from .services import policy as policy_svc
 from .services import publication as publication_svc
 from .services import usage as usage_svc
 from .services import divergence as divergence_svc
+from .services import clone_retention
 from .services.divergence import live_name
 from .services.btrfs import cleanup_expired_snapshots
 from . import mcp_server
@@ -42,6 +44,7 @@ from .services.replication import (
     check_subscription_health,
     get_recent_ddl_failures,
     get_recent_replication_errors,
+    _run_subscriber_sql,
 )
 
 logger = logging.getLogger("snaplicator.ddl_sync")
@@ -404,6 +407,64 @@ async def snapshot_expiry_loop():
         await asyncio.sleep(3600)
 
 
+async def clone_retention_loop():
+    """Track when each clone was last connected to, and once a day announce
+    and delete the ones idle past CLONE_IDLE_DAYS (services/clone_retention)."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            if settings.root_data_dir:
+                res = await asyncio.to_thread(clone_retention.tick)
+                if res.get("marked") or res.get("deleted") or res.get("failed"):
+                    logger.info(f"clone retention: {res}")
+        except Exception as e:
+            logger.warning(f"clone retention tick failed: {e}")
+        await asyncio.sleep(clone_retention.TICK_SECONDS)
+
+
+async def replica_vacuum_loop():
+    """VACUUM (ANALYZE) the live replica on a schedule (weekly by default,
+    at 19:00 UTC). Replicated rows arrive without hint bits or visibility-map
+    bits; until something sets them, the first read in every new clone does
+    it, dirtying pages that were shared with the replica and copying them.
+    Doing it once on the replica means clones inherit pages already set."""
+    interval = int(settings.replica_vacuum_interval_hours or 0)
+    if interval <= 0:
+        logger.info("replica VACUUM disabled (REPLICA_VACUUM_INTERVAL_HOURS <= 0)")
+        return
+    await asyncio.sleep(600)
+    while True:
+        try:
+            if settings.container_name and settings.postgres_user and settings.postgres_db:
+                st = await asyncio.to_thread(clone_retention.load_state)
+                now = datetime.now(timezone.utc)
+                if clone_retention.vacuum_due(st, now, interval):
+                    t0 = time.monotonic()
+                    try:
+                        await asyncio.to_thread(
+                            _run_subscriber_sql,
+                            settings.container_name, settings.postgres_user,
+                            settings.postgres_password, settings.postgres_db,
+                            "VACUUM (ANALYZE);",
+                        )
+                        secs = round(time.monotonic() - t0)
+                        logger.info(f"replica VACUUM (ANALYZE) done in {secs}s")
+                        sync_log.record("replica_vacuum", {"seconds": secs}, dedupe=False)
+                    except Exception as e:
+                        err = getattr(e, "stderr", None) or str(e)
+                        # key carries "error" so it reaches Slack via notify_event
+                        sync_log.record("replica_vacuum", {
+                            "error": f"VACUUM (ANALYZE) on the replica failed after "
+                                     f"{round(time.monotonic() - t0)}s: {str(err).strip()[:500]}",
+                        }, dedupe=False)
+                    # Failed or not, wait a full interval: a VACUUM that fails
+                    # should page once, not every hour.
+                    await asyncio.to_thread(clone_retention.mark_vacuum_run, now)
+        except Exception as e:
+            logger.warning(f"replica VACUUM loop error: {e}")
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Best-effort: install the DDL capture triggers (outbox) on the publisher
@@ -425,6 +486,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(ddl_sync_loop()),
         asyncio.create_task(usage_refresh_loop()),
         asyncio.create_task(snapshot_expiry_loop()),
+        asyncio.create_task(clone_retention_loop()),
+        asyncio.create_task(replica_vacuum_loop()),
     ]
     # The MCP server is this API with a second protocol on it, not a second
     # program: same process, same settings, same lifetime. A mounted ASGI app
