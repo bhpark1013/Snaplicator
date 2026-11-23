@@ -104,7 +104,9 @@ export function Clones() {
     const navigate = useNavigate()
     const toast = useToast()
     const [clones, setClones] = useState<CloneItem[]>([])
-    const [clonesLoading, setClonesLoading] = useState(false)
+    // true from the first render: the list takes seconds on prod, and an
+    // empty list before it answers is not "No clones".
+    const [clonesLoading, setClonesLoading] = useState(true)
     const [clonesError, setClonesError] = useState<string | null>(null)
     const [message, setMessage] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
@@ -770,8 +772,23 @@ export function Clones() {
                         </div>
                     </>
                 )}
-                <ul className="mt-2 grid gap-2">
-                    {clones.length === 0 && (
+                <ul className="mt-2 grid gap-2" aria-busy={clonesLoading && clones.length === 0}>
+                    {clonesLoading && clones.length === 0 &&
+                        Array.from({ length: 6 }, (_, i) => (
+                            <li key={`skeleton-${i}`} aria-hidden className="flex animate-pulse items-center gap-3 rounded-md border border-border bg-secondary px-3.5 py-2.5">
+                                <div className="size-5 flex-none rounded bg-accent" />
+                                <div className="grid min-w-0 flex-1 gap-2">
+                                    <div className="h-3.5 rounded bg-accent" style={{ width: `${[38, 52, 30, 46, 34, 58][i]}%` }} />
+                                    <div className="h-3 w-3/5 rounded bg-accent/70" />
+                                </div>
+                                <div className="ml-auto flex flex-none gap-2">
+                                    <div className="h-8 w-16 rounded-md bg-accent" />
+                                    <div className="h-8 w-16 rounded-md bg-accent" />
+                                    <div className="h-8 w-16 rounded-md bg-accent" />
+                                </div>
+                            </li>
+                        ))}
+                    {!clonesLoading && clones.length === 0 && (
                         <li className="rounded-md border border-border bg-secondary px-3.5 py-2.5 text-muted-foreground">
                             No clones
                         </li>
