@@ -45,6 +45,17 @@ class Settings(BaseSettings):
 	ddl_apply_enabled: bool = False
 	replication_schemas: Optional[str] = None  # comma-separated schemas to monitor, e.g. "public,deprecated,etl"
 
+	# Idle clone cleanup (services/clone_retention.py). A clone nobody has
+	# connected to for CLONE_IDLE_DAYS is announced for deletion, then
+	# deleted CLONE_DELETE_GRACE_DAYS later. CLONE_AUTO_DELETE=false keeps
+	# the announcement and drops the deletion.
+	clone_idle_days: int = 14
+	clone_delete_grace_days: int = 3
+	clone_auto_delete: bool = True
+	# VACUUM (ANALYZE) on the live replica, so a new clone reads pages whose
+	# hint bits are already set instead of rewriting them. 0 disables.
+	replica_vacuum_interval_hours: int = 168
+
 	# FDW (postgres_fdw) — credentials and (optionally) a different connection target
 	# than logical replication. Often FDW goes through a bastion/pgbouncer with a
 	# read-only role, while replication connects directly to the primary cluster

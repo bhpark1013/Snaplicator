@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from pathlib import Path as FsPath
 from ...core.config import settings
 from ...services import clone_progress
+from ...services import clone_retention
 from ...services.docker_pg import delete_clone
 from ...services.btrfs import (
 	list_clone_subvolumes_with_containers,
@@ -50,6 +51,13 @@ class UpdateCloneMetaBody(BaseModel):
 	description: str | None = None
 
 
+class KeepCloneBody(BaseModel):
+	# days: protect from idle deletion for N days. permanent: never delete
+	# (false lifts it). Neither: count as used now.
+	days: int | None = None
+	permanent: bool | None = None
+
+
 @router.get("")
 def get_clones():
 	try:
@@ -64,6 +72,7 @@ def get_clones():
 					c["deleting"] = bool(deleting) and (
 						c.get("name") in deleting or c.get("container_name") in deleting
 					)
+			clone_retention.annotate(clones)
 		return clones
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Failed to list clones: {e}")
@@ -366,11 +375,29 @@ def get_clone_detail_api(clone_id: str = Path(..., description="Clone identifier
 		detail["db_user"] = settings.postgres_user
 		detail["db_password"] = settings.postgres_password
 		detail["db_name"] = settings.postgres_db
+		clone_retention.annotate([detail])
 		return detail
 	except FileNotFoundError as e:
 		raise HTTPException(status_code=404, detail=str(e))
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=f"Failed to fetch clone detail: {e}")
+
+
+@router.post("/{clone_id}/keep")
+def keep_clone(
+	clone_id: str = Path(..., description="Clone identifier (subvolume name or container name)"),
+	body: KeepCloneBody = Body(...),
+):
+	"""Hold a clone back from idle deletion: extend by days, or keep for good."""
+	if body.days is not None and body.days <= 0:
+		raise HTTPException(status_code=400, detail="days must be positive")
+	try:
+		detail = get_clone_detail(settings.root_data_dir, settings.main_data_dir, clone_id)
+		return clone_retention.set_keep(detail["name"], days=body.days, permanent=body.permanent)
+	except FileNotFoundError as e:
+		raise HTTPException(status_code=404, detail=str(e))
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Failed to update clone retention: {e}")
 
 
 @router.post("/{clone_id}/description")
