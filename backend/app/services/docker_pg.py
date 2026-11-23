@@ -384,6 +384,9 @@ def _launch_clone_container(
         # Clones are long-lived dev databases: a host reboot must bring them
         # back, and nothing else does it (the manager is not a supervisor).
         "--restart", "unless-stopped",
+        # json-file logs never rotate by default; the main replica's reached
+        # 1.3G and `docker logs --tail` on it timed out.
+        "--log-opt", "max-size=50m", "--log-opt", "max-file=3",
         "--network", opts.network_name,
         "-p", f"{host_port}:5432",
         *labels,

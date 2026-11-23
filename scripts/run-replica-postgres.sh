@@ -446,6 +446,7 @@ fi
 CONTAINER_ID=$(docker run -d \
   --name "${CONTAINER_NAME}" \
   --restart unless-stopped \
+  --log-opt max-size=50m --log-opt max-file=3 \
   "${DOCKER_NET_ARGS[@]}" \
   "${DOCKER_PORT_ARGS[@]}" \
   --env-file "${ENV_FILE}" \
