@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Eye, EyeOff, Radio, Search, X } from 'lucide
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { SkeletonRows } from '@/components/ui/skeleton'
 import {
     Dialog,
     DialogContent,
@@ -918,7 +919,7 @@ export function ReplicationTables() {
     const [tables, setTables] = useState<TableInfo[]>([])
     const [info, setInfo] = useState<ConnInfo | null>(null)
     const [fdw, setFdw] = useState<FdwState | null>(null)
-    const [loading, setLoading] = useState(false)
+    const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [message, setMessage] = useState<string | null>(null)
 
@@ -1599,7 +1600,7 @@ export function ReplicationTables() {
                 schema. Indentation and a single guide line say that; twelve
                 horizontal rules say nothing and cost the eye a stop each. */}
             <div className="mt-3">
-                {loading && groups.length === 0 && <div className="py-10 text-center text-[13px] text-muted-foreground">Loading…</div>}
+                {loading && groups.length === 0 && <div className="grid gap-2"><SkeletonRows count={8} /></div>}
                 {!loading && groups.length === 0 && (
                     <div className="py-10 text-center text-[13px] text-muted-foreground">
                         {tables.length === 0 ? 'No tables on the publisher.' : 'Nothing matches this filter.'}

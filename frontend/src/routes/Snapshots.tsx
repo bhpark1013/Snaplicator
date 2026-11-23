@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { SkeletonRows } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import {
     Dialog,
@@ -24,7 +25,7 @@ import {
 export function Snapshots() {
     const toast = useToast()
     const [items, setItems] = useState<SnapshotItem[]>([])
-    const [loading, setLoading] = useState(false)
+    const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
     const [createOpen, setCreateOpen] = useState(false)
@@ -278,6 +279,9 @@ export function Snapshots() {
                     </div>
                 </div>
 
+                {loading && items.length === 0 ? (
+                    <div className="mt-2 grid gap-2"><SkeletonRows count={6} /></div>
+                ) : (
                 <LineageGraph
                     items={items}
                     mode="list"
@@ -289,6 +293,7 @@ export function Snapshots() {
                     onMove={onMove}
                     maxHeight={560}
                 />
+                )}
             </Card>
 
             {/* create snapshot from main modal */}
